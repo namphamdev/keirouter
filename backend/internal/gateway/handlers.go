@@ -62,7 +62,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 		ProjectID:     key.ProjectID,
 	}
 
-	targets, err := resolveTargets(r.Context(), s.chains, tenantID, req.Model)
+	targets, err := resolveTargets(r.Context(), s.chains, s.aliases, tenantID, req.Model)
 	if err != nil {
 		var bad badModelError
 		if errors.As(err, &bad) {

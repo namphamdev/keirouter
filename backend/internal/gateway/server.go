@@ -33,6 +33,7 @@ type Server struct {
 	auth     *auth.Service
 	pipeline *pipeline.Pipeline
 	chains   *store.ChainRepo
+	aliases  *store.AliasRepo
 	accounts *store.AccountRepo
 	budgets  *store.BudgetRepo
 	usage    *store.UsageRepo
@@ -52,6 +53,7 @@ type Deps struct {
 	Auth     *auth.Service
 	Pipeline *pipeline.Pipeline
 	Chains   *store.ChainRepo
+	Aliases  *store.AliasRepo
 	Accounts *store.AccountRepo
 	Budgets  *store.BudgetRepo
 	Usage    *store.UsageRepo
@@ -74,6 +76,7 @@ func New(d Deps) *Server {
 		auth:     d.Auth,
 		pipeline: d.Pipeline,
 		chains:   d.Chains,
+		aliases:  d.Aliases,
 		accounts: d.Accounts,
 		budgets:  d.Budgets,
 		usage:    d.Usage,

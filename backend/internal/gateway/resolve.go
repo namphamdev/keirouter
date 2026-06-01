@@ -13,17 +13,22 @@ type ChainSource interface {
 	ListByTenant(ctx context.Context, tenantID string) ([]store.Chain, error)
 }
 
+// AliasSource resolves a model alias to a provider/model target.
+type AliasSource interface {
+	Get(ctx context.Context, alias string) (store.ModelAlias, error)
+}
+
 // resolveTargets turns an inbound model string into an ordered fallback chain.
 //
-// Three forms are supported, in priority order:
+// Four forms are supported, in priority order:
 //   - "provider/model"  -> a single explicit target (e.g. "openai/gpt-4o").
 //     Slashes beyond the first are kept in the model id so vendor-namespaced
 //     ids like "anthropic/claude-3.5" via openrouter still work.
 //   - "chain:name"       -> the named routing chain's steps.
-//   - bare "name"        -> resolved as a chain named "name" if one exists.
-//     A bare name is never assumed to be a provider model; routing stays
-//     explicit and predictable, so an unknown bare name is an error.
-func resolveTargets(ctx context.Context, chains ChainSource, tenantID, model string) ([]dispatch.Target, error) {
+//   - bare "name"        -> resolved as a chain named "name" if one exists,
+//     then as a model alias. A bare name is never assumed to be a provider
+//     model; routing stays explicit and predictable.
+func resolveTargets(ctx context.Context, chains ChainSource, aliases AliasSource, tenantID, model string) ([]dispatch.Target, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return nil, errBadModel("model is required")
@@ -39,12 +44,23 @@ func resolveTargets(ctx context.Context, chains ChainSource, tenantID, model str
 		return []dispatch.Target{{Provider: provider, Model: rest}}, nil
 	}
 
-	// bare name -> try a chain
+	// bare name -> try a chain first
 	targets, err := chainTargets(ctx, chains, tenantID, model)
 	if err == nil {
 		return targets, nil
 	}
-	return nil, errBadModel("model must be 'provider/model' or a chain name: " + model)
+
+	// bare name -> try an alias
+	if aliases != nil {
+		alias, aerr := aliases.Get(ctx, model)
+		if aerr == nil && alias.Target != "" {
+			if provider, rest, ok := strings.Cut(alias.Target, "/"); ok && provider != "" && rest != "" {
+				return []dispatch.Target{{Provider: provider, Model: rest}}, nil
+			}
+		}
+	}
+
+	return nil, errBadModel("model must be 'provider/model', a chain name, or an alias: " + model)
 }
 
 func chainTargets(ctx context.Context, chains ChainSource, tenantID, name string) ([]dispatch.Target, error) {

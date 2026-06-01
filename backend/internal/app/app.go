@@ -123,6 +123,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, erro
 		Auth:     authSvc,
 		Pipeline: pipe,
 		Chains:   db.Chains(),
+		Aliases:  db.Aliases(),
 		Accounts: db.Accounts(),
 		Budgets:  db.Budgets(),
 		Usage:    db.Usage(),

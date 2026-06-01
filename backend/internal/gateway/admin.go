@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -49,6 +50,10 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Post("/skills", s.adminCreateSkill)
 	r.Post("/skills/{id}", s.adminUpdateSkill)
 	r.Delete("/skills/{id}", s.adminDeleteSkill)
+
+	r.Get("/models/alias", s.adminListAliases)
+	r.Put("/models/alias", s.adminSetAlias)
+	r.Delete("/models/alias", s.adminDeleteAlias)
 
 	r.Get("/settings/endpoint", s.adminGetEndpointSettings)
 	r.Post("/settings/endpoint", s.adminUpdateEndpointSettings)
@@ -411,6 +416,57 @@ func (s *Server) adminUsageSummary(w http.ResponseWriter, r *http.Request) {
 		"cache_hits":        sum.CacheHits,
 		"since":             since,
 	})
+}
+
+// ---- model aliases ----------------------------------------------------------
+
+func (s *Server) adminListAliases(w http.ResponseWriter, r *http.Request) {
+	aliases, err := s.aliases.List(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make(map[string]string, len(aliases))
+	for _, a := range aliases {
+		out[a.Alias] = a.Target
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"aliases": out})
+}
+
+func (s *Server) adminSetAlias(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Alias  string `json:"alias"`
+		Target string `json:"target"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.Alias == "" || body.Target == "" {
+		writeError(w, http.StatusBadRequest, "alias and target are required")
+		return
+	}
+	if !strings.Contains(body.Target, "/") {
+		writeError(w, http.StatusBadRequest, "target must be in 'provider/model' format")
+		return
+	}
+	if err := s.aliases.Set(r.Context(), body.Alias, body.Target); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) adminDeleteAlias(w http.ResponseWriter, r *http.Request) {
+	alias := r.URL.Query().Get("alias")
+	if alias == "" {
+		writeError(w, http.StatusBadRequest, "alias query param is required")
+		return
+	}
+	if err := s.aliases.Delete(r.Context(), alias); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---- helpers ----------------------------------------------------------------
