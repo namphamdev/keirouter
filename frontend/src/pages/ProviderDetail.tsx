@@ -30,6 +30,12 @@ export function ProviderDetailPage() {
   const providers = useQuery({ queryKey: ["providers"], queryFn: () => api.providers() });
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: () => api.listAccounts() });
   const oauthProviders = useQuery({ queryKey: ["oauth-providers"], queryFn: () => api.oauthProviders() });
+  const models = useQuery({
+    queryKey: ["provider-models", id],
+    queryFn: () => api.providerModels(id!),
+    enabled: !!id,
+    staleTime: 60_000,
+  });
 
   const provider = providers.data?.providers.find((p) => p.id === id);
   const oauthProvider = oauthProviders.data?.providers.find((p) => p.provider === id);
@@ -244,6 +250,21 @@ export function ProviderDetailPage() {
                 </Button>
               </div>
             </form>
+          </Card>
+        )}
+
+        {/* Available Models */}
+        {models.data && models.data.models.length > 0 && (
+          <Card>
+            <CardHeader
+              title="Available Models"
+              description={`${models.data.models.length} model${models.data.models.length === 1 ? "" : "s"} configured for this provider.`}
+            />
+            <div className="flex flex-wrap gap-2 border-t border-[var(--border)] px-6 py-5">
+              {models.data.models.map((m) => (
+                <ModelChip key={m.id} model={m} provider={provider} />
+              ))}
+            </div>
           </Card>
         )}
       </div>
@@ -533,6 +554,52 @@ function QuotaBar({ quota: q }: { quota: UpstreamQuota }) {
       <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--bg-subtle)]">
         <div className={`h-full rounded-full ${tone}`} style={{ width: `${Math.max(2, pct)}%` }} />
       </div>
+    </div>
+  );
+}
+
+// ModelChip renders a single model as a compact chip showing the model ID and
+// display name (matching 9router's ModelRow pattern).
+function ModelChip({
+  model,
+  provider,
+}: {
+  model: { id: string; name: string; kind: string };
+  provider: Provider;
+}) {
+  const [copied, setCopied] = useState(false);
+  const fullModel = `${provider.alias || provider.id}/${model.id}`;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(fullModel);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div className="group flex min-w-0 max-w-full items-start gap-2 rounded-lg border border-[var(--border)] px-3 py-2 transition-colors hover:bg-ink-50">
+      <span className="mt-0.5 text-[var(--text-muted)]">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 8V4H8" /><rect width="16" height="12" x="4" y="8" rx="2" /><path d="M2 14h2" /><path d="M20 14h2" /><path d="M15 13v2" /><path d="M9 13v2" />
+        </svg>
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <code className="truncate font-mono text-xs text-[var(--text)]">{fullModel}</code>
+        {model.name && model.name !== model.id && (
+          <span className="truncate text-[10px] italic text-[var(--text-muted)]">{model.name}</span>
+        )}
+      </div>
+      <button
+        onClick={handleCopy}
+        className="shrink-0 rounded p-0.5 text-[var(--text-muted)] opacity-100 transition-opacity hover:bg-ink-100 hover:text-[var(--text)] sm:opacity-0 sm:group-hover:opacity-100"
+        title="Copy model path"
+      >
+        {copied ? (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+        ) : (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></svg>
+        )}
+      </button>
     </div>
   );
 }

@@ -21,6 +21,7 @@ import (
 // manage API keys, provider accounts, routing chains, budgets, and usage.
 func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/providers", s.adminListProviders)
+	r.Get("/providers/{id}/models", s.adminProviderModels)
 
 	r.Get("/keys", s.adminListKeys)
 	r.Post("/keys", s.adminCreateKey)
@@ -134,6 +135,64 @@ func webProvider(id string) bool {
 	default:
 		return false
 	}
+}
+
+// adminProviderModels returns the model list for a specific provider. It
+// includes static catalog models and, when a connected account exists, live
+// models from the upstream (e.g. Kiro's ListAvailableModels).
+func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
+	providerID := chi.URLParam(r, "id")
+	if _, ok := connectors.SpecByID(providerID); !ok {
+		writeError(w, http.StatusNotFound, "unknown provider: "+providerID)
+		return
+	}
+
+	type modelInfo struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Kind string `json:"kind"`
+	}
+
+	// Static catalog models.
+	static := connectors.ModelsForProvider(providerID)
+	seen := map[string]bool{}
+	var out []modelInfo
+	for _, m := range static {
+		out = append(out, modelInfo{ID: m.ID, Name: m.Name, Kind: string(m.Kind)})
+		seen[m.ID] = true
+	}
+
+	// Live model discovery (best-effort, requires a connected account).
+	if src := connectors.GetLiveModelSource(providerID); src != nil && s.accounts != nil && s.vault != nil {
+		accs, err := s.accounts.ListByProvider(r.Context(), adminTenant, providerID)
+		if err == nil {
+			for _, acc := range accs {
+				if acc.Disabled {
+					continue
+				}
+				creds, err := s.vault.Open(acc)
+				if err != nil {
+					continue
+				}
+				ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+				models, merr := src.ListModels(ctx, creds)
+				cancel()
+				if merr != nil || len(models) == 0 {
+					continue
+				}
+				for _, lm := range models {
+					if seen[lm.ID] {
+						continue
+					}
+					out = append(out, modelInfo{ID: lm.ID, Name: lm.Name, Kind: string(lm.Kind)})
+					seen[lm.ID] = true
+				}
+				break // only use first valid account
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"models": out})
 }
 
 // ---- API keys ---------------------------------------------------------------

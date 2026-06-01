@@ -294,6 +294,8 @@ export const api = {
   completeOnboarding: () => request<{ ok: boolean }>("POST", "/auth/onboarding/complete"),
 
   providers: () => request<{ providers: Provider[] }>("GET", "/providers"),
+  providerModels: (id: string) =>
+    request<{ models: { id: string; name: string; kind: string }[] }>("GET", `/providers/${id}/models`),
 
   listKeys: () => request<{ keys: APIKey[] }>("GET", "/keys"),
   createKey: (name: string) => request<CreatedKey>("POST", "/keys", { name }),
