@@ -83,23 +83,24 @@ export function OverviewPage() {
         title="Overview"
         icon={Activity}
         description="Usage and performance across all providers."
-        action={
-          <div className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2">
-            <Calendar className="h-4 w-4 text-[var(--text-muted)]" />
-            <select
-              value={period}
-              onChange={(e) => setPeriod(e.target.value)}
-              className="bg-transparent text-sm font-medium focus:outline-none"
-            >
-              {periods.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        }
       />
+
+      <div className="mb-6 flex justify-end">
+        <div className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2">
+          <Calendar className="h-4 w-4 text-[var(--text-muted)]" />
+          <select
+            value={period}
+            onChange={(e) => setPeriod(e.target.value)}
+            className="bg-transparent text-sm font-medium focus:outline-none"
+          >
+            {periods.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
 
       {insights.isLoading ? (
         <Spinner />
@@ -118,7 +119,7 @@ function InsightsDashboard({ data }: { data: UsageInsights }) {
   return (
     <div className="space-y-6">
       {/* ── Key metrics ──────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           icon={Activity}
           iconTone="accent"
@@ -140,8 +141,8 @@ function InsightsDashboard({ data }: { data: UsageInsights }) {
         <StatCard
           icon={Timer}
           iconTone="accent"
-          label="Avg latency"
-          value={`${Math.round(summary.avg_latency_ms)}ms`}
+          label="Avg TTFT"
+          value={`${Math.round(summary.avg_ttft_ms)}ms`}
         />
       </div>
 

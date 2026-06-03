@@ -18,13 +18,17 @@ func (r *UsageRepo) Record(ctx context.Context, u UsageRecord) error {
 		INSERT INTO usage_records
 			(id, tenant_id, project_id, api_key_id, provider, model, account_id,
 			 prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
-			 cost_micros, cache_hit, latency_ms, ttft_ms, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			 cost_micros, cache_hit, latency_ms, ttft_ms,
+			 slim_bytes_saved, slim_tokens_saved, slim_rules, caveman_active, terse_active,
+			 created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err := r.db.sql.ExecContext(ctx, q,
 		u.ID, u.TenantID, nullString(u.ProjectID), nullString(u.APIKeyID),
 		u.Provider, u.Model, nullString(u.AccountID),
 		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.CacheWriteTokens,
-		u.CostMicros, boolToInt(u.CacheHit), u.LatencyMS, u.TTFTMS, formatTime(u.CreatedAt))
+		u.CostMicros, boolToInt(u.CacheHit), u.LatencyMS, u.TTFTMS,
+		u.SlimBytesSaved, u.SlimTokensSaved, u.SlimRules, boolToInt(u.CavemanActive), boolToInt(u.TerseActive),
+		formatTime(u.CreatedAt))
 	if err != nil {
 		return fmt.Errorf("store: record usage: %w", err)
 	}
@@ -66,6 +70,12 @@ type Summary struct {
 	CostMicros       int64
 	CacheHits        int64
 	AvgTTFTMS        int64 // average time-to-first-token for streaming requests
+	AvgLatencyMS     int64 // average latency for non-cache requests
+	SuccessCount     int64 // requests that succeeded (latency > 0 or cache hit)
+	SlimBytesSaved   int64 // total bytes saved by RTK slimmer
+	SlimTokensSaved  int64 // total estimated tokens saved by RTK
+	CavemanRequests  int64 // requests where caveman was active
+	TerseRequests    int64 // requests where terse was active
 }
 
 // Summarize returns aggregate usage for a tenant since the given time.
@@ -79,13 +89,21 @@ func (r *UsageRepo) Summarize(ctx context.Context, tenantID string, since time.T
 			COALESCE(SUM(cache_write_tokens), 0),
 			COALESCE(SUM(cost_micros), 0),
 			COALESCE(SUM(cache_hit), 0),
-			COALESCE(AVG(CASE WHEN ttft_ms > 0 THEN ttft_ms END), 0)
+			COALESCE(CAST(AVG(CASE WHEN ttft_ms > 0 THEN ttft_ms END) AS INTEGER), 0),
+			COALESCE(CAST(AVG(CASE WHEN latency_ms > 0 THEN latency_ms END) AS INTEGER), 0),
+			COUNT(CASE WHEN latency_ms > 0 OR cache_hit = 1 THEN 1 END),
+			COALESCE(SUM(slim_bytes_saved), 0),
+			COALESCE(SUM(slim_tokens_saved), 0),
+			COALESCE(SUM(caveman_active), 0),
+			COALESCE(SUM(terse_active), 0)
 		FROM usage_records
 		WHERE tenant_id = ? AND created_at >= ?`)
 	var s Summary
 	err := r.db.sql.QueryRowContext(ctx, q, tenantID, formatTime(since)).Scan(
 		&s.TotalRequests, &s.PromptTokens, &s.CompletionTokens,
-		&s.CachedTokens, &s.CacheWriteTokens, &s.CostMicros, &s.CacheHits, &s.AvgTTFTMS)
+		&s.CachedTokens, &s.CacheWriteTokens, &s.CostMicros, &s.CacheHits, &s.AvgTTFTMS,
+		&s.AvgLatencyMS, &s.SuccessCount,
+		&s.SlimBytesSaved, &s.SlimTokensSaved, &s.CavemanRequests, &s.TerseRequests)
 	if err != nil {
 		return Summary{}, fmt.Errorf("store: summarize usage: %w", err)
 	}
@@ -145,7 +163,12 @@ type RecentRecord struct {
 	CostMicros       int64
 	CacheHit         bool
 	LatencyMS        int
-	TTFTMS           int // time-to-first-token in ms (0 for non-streaming)
+	TTFTMS           int    // time-to-first-token in ms (0 for non-streaming)
+	SlimBytesSaved   int    // bytes saved by RTK slimmer
+	SlimTokensSaved  int    // estimated tokens saved by RTK
+	SlimRules        string // comma-separated rule names that fired
+	CavemanActive    bool
+	TerseActive      bool
 	CreatedAt        time.Time
 }
 
@@ -156,7 +179,9 @@ func (r *UsageRepo) Recent(ctx context.Context, tenantID string, limit int) ([]R
 	}
 	q := r.db.rebind(`
 		SELECT id, provider, model, prompt_tokens, completion_tokens, cached_tokens,
-		       cache_write_tokens, cost_micros, cache_hit, latency_ms, ttft_ms, created_at
+		       cache_write_tokens, cost_micros, cache_hit, latency_ms, ttft_ms,
+		       slim_bytes_saved, slim_tokens_saved, slim_rules, caveman_active, terse_active,
+		       created_at
 		FROM usage_records
 		WHERE tenant_id = ?
 		ORDER BY created_at DESC
@@ -170,16 +195,20 @@ func (r *UsageRepo) Recent(ctx context.Context, tenantID string, limit int) ([]R
 	var out []RecentRecord
 	for rows.Next() {
 		var (
-			rec       RecentRecord
-			cacheHit  int
-			createdAt string
+			rec                   RecentRecord
+			cacheHit, caveman, terse int
+			createdAt             string
 		)
 		if err := rows.Scan(&rec.ID, &rec.Provider, &rec.Model, &rec.PromptTokens,
 			&rec.CompletionTokens, &rec.CachedTokens, &rec.CacheWriteTokens,
-			&rec.CostMicros, &cacheHit, &rec.LatencyMS, &rec.TTFTMS, &createdAt); err != nil {
+			&rec.CostMicros, &cacheHit, &rec.LatencyMS, &rec.TTFTMS,
+			&rec.SlimBytesSaved, &rec.SlimTokensSaved, &rec.SlimRules, &caveman, &terse,
+			&createdAt); err != nil {
 			return nil, err
 		}
 		rec.CacheHit = cacheHit != 0
+		rec.CavemanActive = caveman != 0
+		rec.TerseActive = terse != 0
 		rec.CreatedAt = parseTime(createdAt)
 		out = append(out, rec)
 	}
@@ -310,4 +339,91 @@ func (r *UsageRepo) Timeline(ctx context.Context, tenantID string, since time.Ti
 		out = append(out, tp)
 	}
 	return out, rows.Err()
+}
+
+// RuleSavings aggregates savings per RTK slimmer rule.
+type RuleSavings struct {
+	Rule       string
+	Count      int64 // number of requests where this rule fired
+	BytesSaved int64 // total bytes saved by this rule
+}
+
+// SavingsByRule returns per-rule RTK savings aggregated from the slim_rules
+// column. Since rules are stored as comma-separated strings, we parse them in
+// Go rather than in SQL for engine portability.
+func (r *UsageRepo) SavingsByRule(ctx context.Context, tenantID string, since time.Time) ([]RuleSavings, error) {
+	q := r.db.rebind(`
+		SELECT slim_rules, slim_bytes_saved
+		FROM usage_records
+		WHERE tenant_id = ? AND created_at >= ? AND slim_rules != ''`)
+	rows, err := r.db.sql.QueryContext(ctx, q, tenantID, formatTime(since))
+	if err != nil {
+		return nil, fmt.Errorf("store: savings by rule: %w", err)
+	}
+	defer rows.Close()
+
+	totals := map[string]*RuleSavings{}
+	for rows.Next() {
+		var rules string
+		var bytesSaved int64
+		if err := rows.Scan(&rules, &bytesSaved); err != nil {
+			return nil, err
+		}
+		parts := splitRules(rules)
+		if len(parts) == 0 {
+			continue
+		}
+		perRule := bytesSaved / int64(len(parts))
+		for _, name := range parts {
+			if _, ok := totals[name]; !ok {
+				totals[name] = &RuleSavings{Rule: name}
+			}
+			totals[name].Count++
+			totals[name].BytesSaved += perRule
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]RuleSavings, 0, len(totals))
+	for _, rs := range totals {
+		out = append(out, *rs)
+	}
+	// Sort by bytes saved descending.
+	for i := range out {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].BytesSaved > out[i].BytesSaved {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out, nil
+}
+
+// splitRules splits a comma-separated rule string into individual names,
+// trimming whitespace and skipping empties.
+func splitRules(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	start := 0
+	for i := 0; i <= len(s); i++ {
+		if i == len(s) || s[i] == ',' {
+			part := s[start:i]
+			// trim inline
+			for len(part) > 0 && part[0] == ' ' {
+				part = part[1:]
+			}
+			for len(part) > 0 && part[len(part)-1] == ' ' {
+				part = part[:len(part)-1]
+			}
+			if part != "" {
+				out = append(out, part)
+			}
+			start = i + 1
+		}
+	}
+	return out
 }

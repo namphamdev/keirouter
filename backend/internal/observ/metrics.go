@@ -26,6 +26,11 @@ type Metrics struct {
 	CacheLatency    *prometheus.HistogramVec
 	CacheSize       prometheus.Gauge
 	UpstreamErrors  *prometheus.CounterVec
+
+	// Token-saving analytics.
+	SlimBytesSaved  *prometheus.CounterVec // by rule
+	CavemanRequests prometheus.Counter     // requests with caveman active
+	TerseRequests   prometheus.Counter     // requests with terse active
 }
 
 // New builds a Metrics instance backed by a dedicated registry. Using a private
@@ -84,6 +89,18 @@ func New() *Metrics {
 			Name: "keirouter_upstream_errors_total",
 			Help: "Upstream errors, labeled by provider and error kind.",
 		}, []string{"provider", "kind"}),
+		SlimBytesSaved: factory.NewCounterVec(prometheus.CounterOpts{
+			Name: "keirouter_slim_bytes_saved_total",
+			Help: "Total bytes saved by RTK slimmer, labeled by rule.",
+		}, []string{"rule"}),
+		CavemanRequests: factory.NewCounter(prometheus.CounterOpts{
+			Name: "keirouter_caveman_requests_total",
+			Help: "Total requests with caveman output compression active.",
+		}),
+		TerseRequests: factory.NewCounter(prometheus.CounterOpts{
+			Name: "keirouter_terse_requests_total",
+			Help: "Total requests with terse output compression active.",
+		}),
 	}
 	return m
 }
@@ -142,4 +159,21 @@ func (m *Metrics) RecordCacheLookup(backend string, seconds float64) {
 // SetCacheSize updates the current cache entry count gauge.
 func (m *Metrics) SetCacheSize(n int) {
 	m.CacheSize.Set(float64(n))
+}
+
+// RecordSlimSavings records bytes saved by a specific RTK rule.
+func (m *Metrics) RecordSlimSavings(rule string, bytesSaved int) {
+	if bytesSaved > 0 {
+		m.SlimBytesSaved.WithLabelValues(rule).Add(float64(bytesSaved))
+	}
+}
+
+// RecordCavemanActivation notes a request where caveman was active.
+func (m *Metrics) RecordCavemanActivation() {
+	m.CavemanRequests.Inc()
+}
+
+// RecordTerseActivation notes a request where terse was active.
+func (m *Metrics) RecordTerseActivation() {
+	m.TerseRequests.Inc()
 }

@@ -26,20 +26,31 @@ interface ParsedLine {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const LEVEL_COLORS: Record<LogLevel, string> = {
-  DEBUG: "text-purple-400",
-  INFO: "text-sky-400",
-  WARN: "text-amber-400",
-  ERROR: "text-red-400",
-  LOG: "text-emerald-400",
+// Badge text — high contrast on tinted backgrounds
+const LEVEL_TEXT: Record<LogLevel, string> = {
+  DEBUG: "text-purple-700 dark:text-purple-300",
+  INFO: "text-blue-700 dark:text-blue-300",
+  WARN: "text-amber-700 dark:text-amber-300",
+  ERROR: "text-red-700 dark:text-red-300",
+  LOG: "text-emerald-700 dark:text-emerald-300",
 };
 
+// Badge background — visible but not loud
 const LEVEL_BG: Record<LogLevel, string> = {
-  DEBUG: "bg-purple-500/10",
-  INFO: "bg-sky-500/10",
-  WARN: "bg-amber-500/10",
-  ERROR: "bg-red-500/10",
-  LOG: "bg-emerald-500/10",
+  DEBUG: "bg-purple-100 dark:bg-purple-500/20",
+  INFO: "bg-blue-100 dark:bg-blue-500/20",
+  WARN: "bg-amber-100 dark:bg-amber-500/20",
+  ERROR: "bg-red-100 dark:bg-red-500/20",
+  LOG: "bg-emerald-100 dark:bg-emerald-500/20",
+};
+
+// Left border accent for each row — quick visual scan of severity
+const LEVEL_BORDER: Record<LogLevel, string> = {
+  DEBUG: "border-l-purple-400 dark:border-l-purple-500",
+  INFO: "border-l-blue-400 dark:border-l-blue-500",
+  WARN: "border-l-amber-400 dark:border-l-amber-500",
+  ERROR: "border-l-red-400 dark:border-l-red-500",
+  LOG: "border-l-transparent",
 };
 
 const LEVELS: LogLevel[] = ["DEBUG", "INFO", "WARN", "ERROR"];
@@ -258,7 +269,7 @@ export function ConsoleLogPage() {
                   onClick={() => toggleLevel(level)}
                   className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
                     active
-                      ? `${LEVEL_BG[level]} ${LEVEL_COLORS[level]} ring-1 ring-current/20`
+                      ? `${LEVEL_BG[level]} ${LEVEL_TEXT[level]} ring-1 ring-current/20`
                       : "text-[var(--text-muted)] opacity-50 hover:opacity-75"
                   }`}
                 >
@@ -361,28 +372,28 @@ export function ConsoleLogPage() {
 function LogRow({ line, index }: { line: ParsedLine; index: number }) {
   return (
     <tr
-      className="group border-b border-[var(--border)]/50 transition-colors hover:bg-[var(--bg-subtle)]"
+      className={`group border-b border-l-2 border-[var(--border)]/40 transition-colors hover:bg-[var(--bg-subtle)] ${LEVEL_BORDER[line.level]}`}
     >
       {/* Line number */}
       <td className="select-none px-3 py-[3px] text-right text-[11px] text-[var(--text-muted)]/50 align-top">
         {index + 1}
       </td>
       {/* Timestamp */}
-      <td className="px-2 py-[3px] text-[var(--text-muted)]/70 align-top whitespace-nowrap">
+      <td className="px-2 py-[3px] text-[var(--text-muted)] align-top whitespace-nowrap">
         {line.time || " "}
       </td>
       {/* Level badge */}
       <td className="px-1 py-[3px] align-top">
         {line.level !== "LOG" && (
           <span
-            className={`inline-block rounded px-1 text-[11px] font-semibold leading-normal ${LEVEL_COLORS[line.level]} ${LEVEL_BG[line.level]}`}
+            className={`inline-block rounded px-1.5 text-[11px] font-bold leading-normal ${LEVEL_TEXT[line.level]} ${LEVEL_BG[line.level]}`}
           >
             {line.level}
           </span>
         )}
       </td>
       {/* Message */}
-      <td className={`px-2 py-[3px] align-top break-all ${LEVEL_COLORS[line.level]}`}>
+      <td className="px-2 py-[3px] align-top break-all text-[var(--text)]">
         <HighlightMessage message={line.message} />
       </td>
     </tr>
@@ -399,19 +410,21 @@ function HighlightMessage({ message }: { message: string }) {
     <>
       {parts.map((part, i) => {
         if (part.includes("=") && /^\w+=\S+$/.test(part)) {
-          const [key, val] = part.split("=", 2);
+          const eqIdx = part.indexOf("=");
+          const key = part.slice(0, eqIdx);
+          const val = part.slice(eqIdx + 1);
           return (
             <span key={i}>
               <span className="text-[var(--text-muted)]">{key}</span>
-              <span className="text-[var(--text-muted)]">=</span>
-              <span className="text-[var(--text)]">{val}</span>
+              <span className="text-[var(--text-muted)]/60">=</span>
+              <span className="font-medium text-[var(--text)]">{val}</span>
             </span>
           );
         }
-        // Highlight arrows and symbols
-        if (/^[→✔✖▶]$/.test(part.trim())) {
+        // Dim arrows and decorative symbols
+        if (/^[→✔✖▶└─\s]+$/.test(part)) {
           return (
-            <span key={i} className="text-[var(--text-muted)]">
+            <span key={i} className="text-[var(--text-muted)]/60">
               {part}
             </span>
           );

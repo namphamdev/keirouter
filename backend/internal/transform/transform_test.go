@@ -255,3 +255,258 @@ func TestRegistry_ResolvesCodecs(t *testing.T) {
 	_, err = reg.Codec(core.DialectCursor)
 	require.Error(t, err, "unregistered dialect must error")
 }
+
+// ---- Multimodal image tests --------------------------------------------------
+
+// OpenAI image_url (data URI) → parse → canonical → render back to OpenAI.
+func TestOpenAI_ImageDataURL_RoundTrip(t *testing.T) {
+	body := []byte(`{
+		"model": "gpt-4o",
+		"messages": [
+			{"role": "user", "content": [
+				{"type": "text", "text": "describe this"},
+				{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
+			]}
+		]
+	}`)
+
+	req, err := OpenAICodec{}.ParseRequest(body)
+	require.NoError(t, err)
+	require.Len(t, req.Messages, 1)
+	require.Len(t, req.Messages[0].Content, 2)
+
+	img := req.Messages[0].Content[1]
+	require.Equal(t, core.PartImage, img.Type)
+	require.NotNil(t, img.Media)
+	require.Equal(t, "image/png", img.Media.MIMEType)
+	require.Equal(t, "iVBORw0KGgo=", img.Media.Data)
+	require.Empty(t, img.Media.URL, "data URI should decompose into MIMEType+Data")
+
+	// Render back to OpenAI format.
+	rendered, err := OpenAICodec{}.RenderRequest(req)
+	require.NoError(t, err)
+
+	var oaiReq map[string]any
+	require.NoError(t, json.Unmarshal(rendered, &oaiReq))
+	msgs := oaiReq["messages"].([]any)
+	msg := msgs[0].(map[string]any)
+	content := msg["content"].([]any)
+	require.Len(t, content, 2)
+	require.Equal(t, "text", content[0].(map[string]any)["type"])
+	imgPart := content[1].(map[string]any)
+	require.Equal(t, "image_url", imgPart["type"])
+	url := imgPart["image_url"].(map[string]any)["url"].(string)
+	require.Contains(t, url, "data:image/png;base64,")
+}
+
+// OpenAI image_url (remote URL) → parse → canonical preserves URL.
+func TestOpenAI_ImageURL_Remote(t *testing.T) {
+	body := []byte(`{
+		"model": "gpt-4o",
+		"messages": [
+			{"role": "user", "content": [
+				{"type": "text", "text": "what is this?"},
+				{"type": "image_url", "image_url": {"url": "https://example.com/cat.jpg"}}
+			]}
+		]
+	}`)
+
+	req, err := OpenAICodec{}.ParseRequest(body)
+	require.NoError(t, err)
+	img := req.Messages[0].Content[1]
+	require.Equal(t, core.PartImage, img.Type)
+	require.Equal(t, "https://example.com/cat.jpg", img.Media.URL)
+	require.Empty(t, img.Media.Data)
+	require.Empty(t, img.Media.MIMEType)
+}
+
+// OpenAI image (data URI) → render to Anthropic → base64 image block.
+func TestCrossDialect_OpenAIImageToAnthropic(t *testing.T) {
+	body := []byte(`{
+		"model": "gpt-4o",
+		"messages": [
+			{"role": "user", "content": [
+				{"type": "text", "text": "describe this"},
+				{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
+			]}
+		]
+	}`)
+
+	canonical, err := OpenAICodec{}.ParseRequest(body)
+	require.NoError(t, err)
+
+	antBody, err := AnthropicCodec{}.RenderRequest(canonical)
+	require.NoError(t, err)
+
+	var antReq map[string]any
+	require.NoError(t, json.Unmarshal(antBody, &antReq))
+	msgs := antReq["messages"].([]any)
+	msg := msgs[0].(map[string]any)
+	blocks := msg["content"].([]any)
+	require.Len(t, blocks, 2)
+
+	imgBlock := blocks[1].(map[string]any)
+	require.Equal(t, "image", imgBlock["type"])
+	source := imgBlock["source"].(map[string]any)
+	require.Equal(t, "base64", source["type"])
+	require.Equal(t, "image/png", source["media_type"])
+	require.Equal(t, "iVBORw0KGgo=", source["data"])
+}
+
+// OpenAI image (remote URL) → render to Anthropic → url image block.
+func TestCrossDialect_OpenAIImageURLToAnthropic(t *testing.T) {
+	body := []byte(`{
+		"model": "gpt-4o",
+		"messages": [
+			{"role": "user", "content": [
+				{"type": "text", "text": "what is this?"},
+				{"type": "image_url", "image_url": {"url": "https://example.com/cat.jpg"}}
+			]}
+		]
+	}`)
+
+	canonical, err := OpenAICodec{}.ParseRequest(body)
+	require.NoError(t, err)
+
+	antBody, err := AnthropicCodec{}.RenderRequest(canonical)
+	require.NoError(t, err)
+
+	var antReq map[string]any
+	require.NoError(t, json.Unmarshal(antBody, &antReq))
+	msgs := antReq["messages"].([]any)
+	msg := msgs[0].(map[string]any)
+	blocks := msg["content"].([]any)
+	require.Len(t, blocks, 2)
+
+	imgBlock := blocks[1].(map[string]any)
+	require.Equal(t, "image", imgBlock["type"])
+	source := imgBlock["source"].(map[string]any)
+	require.Equal(t, "url", source["type"])
+	require.Equal(t, "https://example.com/cat.jpg", source["url"])
+}
+
+// Anthropic base64 image → parse → render to OpenAI → data URI.
+func TestCrossDialect_AnthropicImageToOpenAI(t *testing.T) {
+	body := []byte(`{
+		"model": "claude-sonnet-4.5",
+		"max_tokens": 1024,
+		"messages": [
+			{"role": "user", "content": [
+				{"type": "text", "text": "describe"},
+				{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "/9j/4AAQ"}}
+			]}
+		]
+	}`)
+
+	canonical, err := AnthropicCodec{}.ParseRequest(body)
+	require.NoError(t, err)
+	require.Len(t, canonical.Messages, 1)
+	require.Len(t, canonical.Messages[0].Content, 2)
+
+	img := canonical.Messages[0].Content[1]
+	require.Equal(t, core.PartImage, img.Type)
+	require.Equal(t, "image/jpeg", img.Media.MIMEType)
+	require.Equal(t, "/9j/4AAQ", img.Media.Data)
+
+	// Render to OpenAI.
+	oaiBody, err := OpenAICodec{}.RenderRequest(canonical)
+	require.NoError(t, err)
+
+	var oaiReq map[string]any
+	require.NoError(t, json.Unmarshal(oaiBody, &oaiReq))
+	msgs := oaiReq["messages"].([]any)
+	msg := msgs[0].(map[string]any)
+	content := msg["content"].([]any)
+	require.Len(t, content, 2)
+	imgPart := content[1].(map[string]any)
+	require.Equal(t, "image_url", imgPart["type"])
+	url := imgPart["image_url"].(map[string]any)["url"].(string)
+	require.Contains(t, url, "data:image/jpeg;base64,/9j/4AAQ")
+}
+
+// Anthropic base64 image → parse → render to Gemini → inlineData.
+func TestCrossDialect_AnthropicImageToGemini(t *testing.T) {
+	body := []byte(`{
+		"model": "claude-sonnet-4.5",
+		"max_tokens": 1024,
+		"messages": [
+			{"role": "user", "content": [
+				{"type": "text", "text": "describe"},
+				{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "abc123"}}
+			]}
+		]
+	}`)
+
+	canonical, err := AnthropicCodec{}.ParseRequest(body)
+	require.NoError(t, err)
+
+	gemBody, err := GeminiCodec{}.RenderRequest(canonical)
+	require.NoError(t, err)
+
+	var gemReq map[string]any
+	require.NoError(t, json.Unmarshal(gemBody, &gemReq))
+	contents := gemReq["contents"].([]any)
+	parts := contents[0].(map[string]any)["parts"].([]any)
+	require.Len(t, parts, 2)
+	inlineData := parts[1].(map[string]any)["inlineData"].(map[string]any)
+	require.Equal(t, "image/png", inlineData["mimeType"])
+	require.Equal(t, "abc123", inlineData["data"])
+}
+
+// Anthropic URL image → parse → render to OpenAI → image_url with URL.
+func TestCrossDialect_AnthropicImageURLToOpenAI(t *testing.T) {
+	body := []byte(`{
+		"model": "claude-sonnet-4.5",
+		"max_tokens": 1024,
+		"messages": [
+			{"role": "user", "content": [
+				{"type": "text", "text": "what is this?"},
+				{"type": "image", "source": {"type": "url", "url": "https://example.com/photo.jpg"}}
+			]}
+		]
+	}`)
+
+	canonical, err := AnthropicCodec{}.ParseRequest(body)
+	require.NoError(t, err)
+	img := canonical.Messages[0].Content[1]
+	require.Equal(t, core.PartImage, img.Type)
+	require.Equal(t, "https://example.com/photo.jpg", img.Media.URL)
+
+	oaiBody, err := OpenAICodec{}.RenderRequest(canonical)
+	require.NoError(t, err)
+
+	var oaiReq map[string]any
+	require.NoError(t, json.Unmarshal(oaiBody, &oaiReq))
+	msgs := oaiReq["messages"].([]any)
+	content := msgs[0].(map[string]any)["content"].([]any)
+	imgPart := content[1].(map[string]any)
+	url := imgPart["image_url"].(map[string]any)["url"].(string)
+	require.Equal(t, "https://example.com/photo.jpg", url)
+}
+
+// OpenAI image → render to Ollama → images array with base64.
+func TestCrossDialect_OpenAIImageToOllama(t *testing.T) {
+	body := []byte(`{
+		"model": "gpt-4o",
+		"messages": [
+			{"role": "user", "content": [
+				{"type": "text", "text": "describe"},
+				{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc123"}}
+			]}
+		]
+	}`)
+
+	canonical, err := OpenAICodec{}.ParseRequest(body)
+	require.NoError(t, err)
+
+	ollBody, err := OllamaCodec{}.RenderRequest(canonical)
+	require.NoError(t, err)
+
+	var ollReq map[string]any
+	require.NoError(t, json.Unmarshal(ollBody, &ollReq))
+	msgs := ollReq["messages"].([]any)
+	msg := msgs[0].(map[string]any)
+	images := msg["images"].([]any)
+	require.Len(t, images, 1)
+	require.Equal(t, "abc123", images[0])
+}

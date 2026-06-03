@@ -149,7 +149,7 @@ export function QuotaPage() {
   // Mutations
   const toggleAccount = useMutation({
     mutationFn: ({ id, disabled }: { id: string; disabled: boolean }) => api.updateAccount(id, { disabled }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["quota", "accounts"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["quota"] }),
   });
 
   const deleteAccount = useMutation({
@@ -427,13 +427,22 @@ function QuotaRow({
               {(() => {
                 const q = account.upstream_quotas?.[0];
                 if (!q) return null;
+                const remainingPct = q.limit > 0 ? Math.round((q.remaining / q.limit) * 100) : null;
                 return (
-                  <span>
-                    <span className="font-medium text-[var(--text)]">{q.used.toLocaleString()}</span>
-                    <span className="mx-0.5">/</span>
-                    <span>{q.limit > 0 ? q.limit.toLocaleString() : "∞"}</span>
-                    <span className="ml-0.5">credits</span>
-                  </span>
+                  <>
+                    <span>
+                      <span className="font-medium text-[var(--text)]">{q.used.toLocaleString()}</span>
+                      <span className="mx-0.5">/</span>
+                      <span>{q.limit > 0 ? q.limit.toLocaleString() : "∞"}</span>
+                      <span className="ml-0.5">used</span>
+                    </span>
+                    <span>
+                      <span className={`font-medium ${remainingPct !== null && remainingPct < 30 ? "text-red-500" : remainingPct !== null && remainingPct < 70 ? "text-amber-500" : "text-emerald-500"}`}>
+                        {q.remaining.toLocaleString()}
+                      </span>
+                      <span className="ml-0.5">left</span>
+                    </span>
+                  </>
                 );
               })()}
             </>
@@ -483,9 +492,14 @@ function QuotaRow({
                 {(() => {
                   const q = account.upstream_quotas?.[0];
                   if (!q) return null;
+                  const remainingPct = q.limit > 0 ? Math.round((q.remaining / q.limit) * 100) : null;
                   return (
                     <span>
-                      {q.used.toLocaleString()} / {q.limit > 0 ? q.limit.toLocaleString() : "∞"} credits
+                      {q.used.toLocaleString()} / {q.limit > 0 ? q.limit.toLocaleString() : "∞"} used
+                      {" · "}
+                      <span className={remainingPct !== null && remainingPct < 30 ? "text-red-500" : remainingPct !== null && remainingPct < 70 ? "text-amber-500" : "text-emerald-500"}>
+                        {q.remaining.toLocaleString()} left
+                      </span>
                     </span>
                   );
                 })()}

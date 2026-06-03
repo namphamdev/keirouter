@@ -209,10 +209,12 @@ func apiKeyProviders() []ProviderSpec {
 			Color: "#FF6A00", Website: "https://modelstudio.console.alibabacloud.com"},
 		{ID: "xiaomi-mimo", DisplayName: "Xiaomi MiMo", Alias: "mimo", Dialect: core.DialectOpenAI,
 			BaseURL: "https://api.xiaomimimo.com/v1", AuthKind: "api_key", ServiceKinds: llm(),
-			Color: "#FF6900", Website: "https://xiaomimimo.com"},
+			Color: "#FF6900", Website: "https://xiaomimimo.com",
+			InputPerM: 0.2, OutputPerM: 0.6},
 		{ID: "xiaomi-tokenplan", DisplayName: "Xiaomi MiMo Token Plan", Alias: "mmtp", Dialect: core.DialectOpenAI,
 			BaseURL: "https://token-plan-sgp.xiaomimimo.com/v1", AuthKind: "api_key", ServiceKinds: llm(),
 			Color: "#FF6900", Website: "https://xiaomimimo.com",
+			InputPerM: 0.2, OutputPerM: 0.6,
 			Notice: "Xiaomi MiMo Token Plan subscription (API key starts with tp-). Token Plan keys are cluster-specific — select the region matching your subscription.",
 			Regions: []RegionOption{
 				{ID: "sgp", Label: "Singapore", BaseURL: "https://token-plan-sgp.xiaomimimo.com/v1"},

@@ -1,20 +1,26 @@
-# KeiRouter
+<p align="center">
+  <img src="keirouter-logo.png" alt="KeiRouter Logo" width="160">
+</p>
 
-[![CI](https://github.com/mydisha/keirouter/actions/workflows/ci.yml/badge.svg)](https://github.com/mydisha/keirouter/actions/workflows/ci.yml)
-[![Go 1.24+](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+<h1 align="center">KeiRouter</h1>
 
-A fast, self-hostable AI gateway. Point your coding tools (Claude Code, Cursor,
-Codex, Cline, OpenClaw, and any OpenAI/Anthropic-compatible client) at one local
-endpoint, and KeiRouter routes requests across many providers with automatic
-fallback, token-saving compression, encrypted credential storage, and spend
-controls.
+<p align="center">
+  A fast, self-hostable AI gateway.
+</p>
 
-Written in Go for a small footprint (single static binary, ~20–30MB RAM idle,
-instant startup) with a React + Tailwind dashboard.
+<p align="center">
+  <a href="https://github.com/mydisha/keirouter/actions/workflows/ci.yml"><img src="https://github.com/mydisha/keirouter/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white" alt="Go 1.24+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+</p>
 
-> **Status:** Active development. See the [Architecture](#architecture) section
-> for what's implemented.
+---
+
+Point your coding tools (Claude Code, Cursor, Codex, Cline, OpenClaw, and any OpenAI/Anthropic-compatible client) at one local endpoint. KeiRouter routes requests across many providers with automatic fallback, token-saving compression, encrypted credential storage, and spend controls.
+
+Written in Go for a small footprint (single static binary, ~20–30MB RAM idle, instant startup) with a React + Tailwind dashboard.
+
+> **Status:** Active development. See the [Architecture](#architecture) section for what's implemented.
 
 ## Why KeiRouter
 

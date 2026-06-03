@@ -51,6 +51,7 @@ func ModelPricingTable() []ModelPrice {
 	out = append(out, openrouterModelPrices()...)
 	out = append(out, minimaxModelPrices()...)
 	out = append(out, glmModelPrices()...)
+	out = append(out, mimoModelPrices()...)
 	return out
 }
 
@@ -242,4 +243,26 @@ func glmModelPrices() []ModelPrice {
 		{Provider: "glm", Model: "glm-4-flash", InputPerM: 0, OutputPerM: 0},
 		{Provider: "glm", Model: "codegeex-4", InputPerM: 0.6, OutputPerM: 0.6},
 	}
+}
+
+func mimoModelPrices() []ModelPrice {
+	// Xiaomi MiMo pricing. Both xiaomi-mimo and xiaomi-tokenplan share models.
+	// Flash pricing from genai-prices; Pro/standard tiers estimated from
+	// comparable Chinese AI provider pricing (DeepSeek, Alibaba, GLM).
+	var out []ModelPrice
+	for _, provider := range []string{"xiaomi-mimo", "xiaomi-tokenplan"} {
+		out = append(out, []ModelPrice{
+			// Top-tier reasoning model
+			{Provider: provider, Model: "mimo-v2.5-pro", InputPerM: 1.0, OutputPerM: 3.0},
+			// Mid-tier general model
+			{Provider: provider, Model: "mimo-v2.5", InputPerM: 0.2, OutputPerM: 0.6},
+			// Previous-gen pro
+			{Provider: provider, Model: "mimo-v2-pro", InputPerM: 0.5, OutputPerM: 1.5},
+			// Multimodal (omni)
+			{Provider: provider, Model: "mimo-v2-omni", InputPerM: 0.2, OutputPerM: 0.6},
+			// Fast/cheap model (from genai-prices: $0.10/$0.30)
+			{Provider: provider, Model: "mimo-v2-flash", InputPerM: 0.1, OutputPerM: 0.3},
+		}...)
+	}
+	return out
 }

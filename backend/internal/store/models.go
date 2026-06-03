@@ -112,6 +112,11 @@ type UsageRecord struct {
 	CacheHit         bool
 	LatencyMS        int
 	TTFTMS           int // time-to-first-token in ms (0 for non-streaming or cache hits)
+	SlimBytesSaved   int    // bytes removed by RTK slimmer (input-side compression)
+	SlimTokensSaved  int    // estimated tokens saved by RTK (bytes/4)
+	SlimRules        string // comma-separated rule names that fired (e.g. "git-diff,grep")
+	CavemanActive    bool   // caveman output compression was active
+	TerseActive      bool   // terse output compression was active
 	CreatedAt        time.Time
 }
 

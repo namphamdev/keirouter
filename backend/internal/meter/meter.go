@@ -55,6 +55,18 @@ type Event struct {
 	CacheHit  bool
 	Latency   time.Duration
 	TTFT      time.Duration // time-to-first-token (0 if not measured)
+
+	// Token-saving analytics.
+	SlimStats    *SlimSnapshot // nil when RTK did not fire
+	CavemanActive bool         // caveman output compression was active
+	TerseActive   bool         // terse output compression was active
+}
+
+// SlimSnapshot captures the RTK slimmer's per-request compression results.
+type SlimSnapshot struct {
+	BytesSaved  int
+	TokensSaved int
+	Rules       string // comma-separated rule names that fired
 }
 
 // resolvePrice looks up the price for a provider/model pair. It tries
@@ -133,7 +145,14 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 		CacheHit:         ev.CacheHit,
 		LatencyMS:        int(ev.Latency.Milliseconds()),
 		TTFTMS:           int(ev.TTFT.Milliseconds()),
+		CavemanActive:    ev.CavemanActive,
+		TerseActive:      ev.TerseActive,
 		CreatedAt:        time.Now(),
+	}
+	if ev.SlimStats != nil {
+		rec.SlimBytesSaved = ev.SlimStats.BytesSaved
+		rec.SlimTokensSaved = ev.SlimStats.TokensSaved
+		rec.SlimRules = ev.SlimStats.Rules
 	}
 	if err := m.usage.Record(ctx, rec); err != nil {
 		return cost, err

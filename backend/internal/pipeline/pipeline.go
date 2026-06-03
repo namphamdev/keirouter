@@ -117,6 +117,17 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	vec := p.embedPrompt(ctx, req)
 	if hit, ok := p.cacheLookup(ctx, vec); ok {
 		p.log.Debug("cache hit, skipping upstream")
+		// Record cache hit for usage visibility.
+		if p.meter != nil {
+			p.meter.Record(ctx, meter.Event{
+				TenantID:  req.Metadata.TenantID,
+				ProjectID: req.Metadata.ProjectID,
+				APIKeyID:  req.Metadata.APIKeyID,
+				Provider:  "cache",
+				Model:     hit.Model,
+				CacheHit:  true,
+			})
+		}
 		if p.metrics != nil {
 			p.metrics.RecordCache(true)
 		}
@@ -130,6 +141,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	if slimStats != nil {
 		p.log.Debug("slimmer stats", "saved", slimStats.Saved(), "hits", len(slimStats.Hits))
 	}
+	save := buildSaveState(slimStats, opts)
 
 	required := capability.Required(req)
 	attempts, err := p.dispatcher.Plan(ctx, req.Metadata.TenantID, opts.Targets, required)
@@ -176,7 +188,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 			continue
 		}
 
-		cost := p.record(ctx, req.Metadata, attempt, resp.Usage, false, latency)
+		cost := p.record(ctx, req.Metadata, attempt, resp.Usage, false, latency, save)
 		p.cacheStore(ctx, vec, resp)
 		p.log.Debug("attempt success", "provider", attempt.Target.Provider,
 			"model", attempt.Target.Model, "latency_ms", latency.Milliseconds(),
@@ -216,7 +228,8 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 		p.log.Debug("stream preflight rejected", "err", err)
 		return nil, err
 	}
-	p.applyTokenSaving(req, opts)
+	slimStats := p.applyTokenSaving(req, opts)
+	save := buildSaveState(slimStats, opts)
 
 	required := capability.Required(req)
 	attempts, err := p.dispatcher.Plan(ctx, req.Metadata.TenantID, opts.Targets, required)
@@ -270,7 +283,7 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 		out := make(chan core.StreamChunk, 16)
 		meta := req.Metadata
 		acc := attempt
-		go p.pumpStream(ctx, upstream, out, meta, acc, started, ttft)
+		go p.pumpStream(ctx, upstream, out, meta, acc, started, &ttft, save)
 
 		return &StreamResult{
 			Chunks:    out,
@@ -294,7 +307,7 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 // When StreamStallTimeout is configured, a timer resets on every chunk. If no
 // chunk arrives within the timeout, the stream is cancelled with ErrTimeout.
 func (p *Pipeline) pumpStream(ctx context.Context, in <-chan core.StreamChunk, out chan<- core.StreamChunk,
-	meta core.RequestMetadata, attempt dispatch.Attempt, started time.Time, ttft time.Duration) {
+	meta core.RequestMetadata, attempt dispatch.Attempt, started time.Time, ttft *time.Duration, save *saveState) {
 	defer close(out)
 
 	// Set up stall detection. The timer resets every time a chunk arrives.
@@ -341,7 +354,7 @@ func (p *Pipeline) pumpStream(ctx context.Context, in <-chan core.StreamChunk, o
 		case chunk, ok := <-in:
 			if !ok {
 				// Upstream closed — stream complete.
-				p.recordWithTTFT(ctx, meta, attempt, usage, false, time.Since(started), ttft)
+				p.recordWithTTFT(ctx, meta, attempt, usage, false, time.Since(started), *ttft, save)
 				return
 			}
 			resetStall()
@@ -372,7 +385,7 @@ func (p *Pipeline) pumpStream(ctx context.Context, in <-chan core.StreamChunk, o
 			// Drain upstream.
 			for range in {
 			}
-			p.recordWithTTFT(ctx, meta, attempt, usage, false, time.Since(started), ttft)
+			p.recordWithTTFT(ctx, meta, attempt, usage, false, time.Since(started), *ttft, save)
 			return
 		}
 	}
@@ -444,19 +457,77 @@ func (p *Pipeline) applyTokenSaving(req *core.ChatRequest, opts Options) *slimme
 	return stats
 }
 
+// saveState captures which token-saving features were active and their results
+// for a single request, so the meter can persist them.
+type saveState struct {
+	slimSnap *meter.SlimSnapshot
+	caveman  bool
+	terse    bool
+}
+
+// splitRuleNames splits a comma-separated rule string into individual names.
+func splitRuleNames(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	start := 0
+	for i := 0; i <= len(s); i++ {
+		if i == len(s) || s[i] == ',' {
+			if part := s[start:i]; part != "" {
+				out = append(out, part)
+			}
+			start = i + 1
+		}
+	}
+	return out
+}
+
+// buildSaveState converts pipeline-level token-saving results into a snapshot
+// suitable for the meter. Returns nil when no features were active.
+func buildSaveState(stats *slimmer.Stats, opts Options) *saveState {
+	save := &saveState{
+		caveman: opts.Caveman.Enabled,
+		terse:   opts.Terse.Enabled,
+	}
+	if stats != nil && stats.Saved() > 0 {
+		// Build comma-separated rule names from hits.
+		rules := make(map[string]struct{})
+		for _, h := range stats.Hits {
+			rules[h.Rule] = struct{}{}
+		}
+		var ruleNames string
+		for name := range rules {
+			if ruleNames != "" {
+				ruleNames += ","
+			}
+			ruleNames += name
+		}
+		save.slimSnap = &meter.SlimSnapshot{
+			BytesSaved:  stats.Saved(),
+			TokensSaved: stats.Saved() / 4, // rough char-to-token estimate
+			Rules:       ruleNames,
+		}
+	}
+	if save.slimSnap == nil && !save.caveman && !save.terse {
+		return nil
+	}
+	return save
+}
+
 // record meters a completed attempt; failures to record are logged, not fatal.
 func (p *Pipeline) record(ctx context.Context, meta core.RequestMetadata, attempt dispatch.Attempt,
-	usage core.Usage, cacheHit bool, latency time.Duration) int64 {
-	return p.recordWithTTFT(ctx, meta, attempt, usage, cacheHit, latency, 0)
+	usage core.Usage, cacheHit bool, latency time.Duration, save *saveState) int64 {
+	return p.recordWithTTFT(ctx, meta, attempt, usage, cacheHit, latency, 0, save)
 }
 
 // recordWithTTFT is like record but also records time-to-first-token.
 func (p *Pipeline) recordWithTTFT(ctx context.Context, meta core.RequestMetadata, attempt dispatch.Attempt,
-	usage core.Usage, cacheHit bool, latency, ttft time.Duration) int64 {
+	usage core.Usage, cacheHit bool, latency, ttft time.Duration, save *saveState) int64 {
 	if p.meter == nil {
 		return 0
 	}
-	cost, err := p.meter.Record(ctx, meter.Event{
+	ev := meter.Event{
 		TenantID:  meta.TenantID,
 		ProjectID: meta.ProjectID,
 		APIKeyID:  meta.APIKeyID,
@@ -467,7 +538,13 @@ func (p *Pipeline) recordWithTTFT(ctx context.Context, meta core.RequestMetadata
 		CacheHit:  cacheHit,
 		Latency:   latency,
 		TTFT:      ttft,
-	})
+	}
+	if save != nil {
+		ev.SlimStats = save.slimSnap
+		ev.CavemanActive = save.caveman
+		ev.TerseActive = save.terse
+	}
+	cost, err := p.meter.Record(ctx, ev)
 	if err != nil {
 		p.log.Error("failed to record usage", "err", err)
 	}
@@ -481,6 +558,20 @@ func (p *Pipeline) recordWithTTFT(ctx context.Context, meta core.RequestMetadata
 		)
 		if cacheHit {
 			p.metrics.RecordCache(true)
+		}
+		// Record token-saving metrics.
+		if save != nil {
+			if save.slimSnap != nil {
+				for _, rule := range splitRuleNames(save.slimSnap.Rules) {
+					p.metrics.RecordSlimSavings(rule, save.slimSnap.BytesSaved)
+				}
+			}
+			if save.caveman {
+				p.metrics.RecordCavemanActivation()
+			}
+			if save.terse {
+				p.metrics.RecordTerseActivation()
+			}
 		}
 	}
 	return cost

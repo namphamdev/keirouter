@@ -123,7 +123,7 @@ export function Layout() {
             onClick={closeSidebar}
           />
           <div
-            className="fixed inset-y-0 left-0 z-50 w-64 shadow-[var(--shadow-float)]"
+            className="fixed inset-y-0 left-0 z-50 w-60 shadow-[var(--shadow-float)]"
             style={{ animation: "drawer-in 0.2s ease-out" }}
           >
             <SidebarContent onNavigate={closeSidebar} />
@@ -222,13 +222,18 @@ function TopBar({ onMenuToggle, onSearchOpen }: { onMenuToggle: () => void; onSe
         className="relative max-w-md flex-1 text-left"
         aria-label="Open search (⌘K)"
       >
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
-        <span className="block w-full rounded-xl border border-[var(--border)] bg-[var(--bg)] py-2 pl-9 pr-12 text-sm text-[var(--text-muted)]">
-          Search KeiRouter…
-        </span>
-        <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-muted)]">
-          ⌘K
-        </kbd>
+        <div className="hidden sm:block">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+          <span className="block w-full rounded-xl border border-[var(--border)] bg-[var(--bg)] py-2 pl-9 pr-12 text-sm text-[var(--text-muted)]">
+            Search KeiRouter…
+          </span>
+          <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-muted)]">
+            ⌘K
+          </kbd>
+        </div>
+        <div className="flex sm:hidden h-11 w-11 items-center justify-center rounded-xl text-[var(--text-muted)] transition-colors hover:bg-ink-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/60 dark:hover:bg-ink-800">
+          <Search className="h-5 w-5" />
+        </div>
       </button>
 
       <div className="ml-auto flex items-center">

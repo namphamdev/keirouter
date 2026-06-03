@@ -8,11 +8,12 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   Activity, DollarSign, Zap, RefreshCw, TrendingUp, Clock, Search, ArrowUpDown, ArrowUp, ArrowDown,
+  Scissors, ShieldCheck, Leaf,
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
-import { api, type ProviderUsage, type RecentActivity, type SeriesPoint, type ModelUsage } from "../lib/api";
+import { api, type ProviderUsage, type RecentActivity, type SeriesPoint, type ModelUsage, type TokenSavings } from "../lib/api";
 import { PageHeader } from "../components/Layout";
 import { Card, Spinner, ErrorCard } from "../components/ui";
 import { useToast } from "../components/Toast";
@@ -51,23 +52,24 @@ export function UsagePage() {
         title="Usage"
         icon={Activity}
         description="Monitor request flow and provider distribution."
-        action={
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] p-1">
-              {periods.map((p) => (
-                <button key={p.value} onClick={() => setPeriod(p.value)}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${period === p.value ? "bg-accent-600 text-white shadow-sm" : "text-[var(--text-muted)] hover:text-[var(--text)]"}`}>
-                  {p.label}
-                </button>
-              ))}
-            </div>
-            <button onClick={handleRefresh}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text)]">
-              <RefreshCw className="h-4 w-4" />
-            </button>
-          </div>
-        }
       />
+
+      <div className="mb-6 flex justify-end">
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] p-1">
+            {periods.map((p) => (
+              <button key={p.value} onClick={() => setPeriod(p.value)}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${period === p.value ? "bg-accent-600 text-white shadow-sm" : "text-[var(--text-muted)] hover:text-[var(--text)]"}`}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <button onClick={handleRefresh}
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text)]">
+            <RefreshCw className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
 
       {insights.isLoading ? <Spinner />
         : insights.isError ? <ErrorCard message="Failed to load usage. Is the backend running?" />
@@ -77,18 +79,28 @@ export function UsagePage() {
 }
 
 function UsageContent({ data, models }: { data: any; models: ModelUsage[] }) {
-  const { summary, providers, recent, series } = data;
+  const { summary, savings, providers, recent, series } = data;
   const activeProviders = providers.filter((p: ProviderUsage) => p.share_pct > 0);
 
   return (
     <div className="space-y-5">
       {/* Overview cards */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Requests" value={fmtNum(summary.total_requests)} icon={Activity} color="accent" />
         <StatCard label="Input Tokens" value={fmtNum(summary.prompt_tokens)} icon={Zap} color="blue" />
         <StatCard label="Output Tokens" value={fmtNum(summary.completion_tokens)} icon={Zap} color="green" />
         <StatCard label="Est. Cost" value={`$${summary.cost_usd.toFixed(2)}`} icon={DollarSign} color="amber" />
       </div>
+
+      {/* Token Savings cards */}
+      {savings && (savings.slim_bytes_saved > 0 || savings.caveman_requests > 0 || savings.terse_requests > 0) && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard label="RTK Bytes Saved" value={fmtBytes(savings.slim_bytes_saved)} icon={Scissors} color="teal" />
+          <StatCard label="RTK Tokens Saved" value={fmtNum(savings.slim_tokens_saved)} icon={Leaf} color="teal" />
+          <StatCard label="Caveman Requests" value={fmtNum(savings.caveman_requests)} icon={ShieldCheck} color="purple" />
+          <StatCard label="Terse Requests" value={fmtNum(savings.terse_requests)} icon={ShieldCheck} color="indigo" />
+        </div>
+      )}
 
       {/* Topology + Recent side by side */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(300px,1fr)]">
@@ -159,6 +171,11 @@ function UsageContent({ data, models }: { data: any; models: ModelUsage[] }) {
         </div>
       </Card>
 
+      {/* Token Savings breakdown */}
+      {savings && savings.rules && savings.rules.length > 0 && (
+        <TokenSavingsBreakdown savings={savings} totalRequests={summary.total_requests} />
+      )}
+
       {/* Model usage breakdown */}
       <ModelUsageTable models={models} />
 
@@ -170,7 +187,8 @@ function UsageContent({ data, models }: { data: any; models: ModelUsage[] }) {
         {providers.filter((p: ProviderUsage) => p.total_requests > 0).length === 0 ? (
           <div className="py-8 text-center text-xs text-[var(--text-muted)]">No provider data for this period</div>
         ) : (
-          <table className="w-full text-xs">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-[var(--border)]">
                 <th className="px-4 py-2 text-left font-medium text-[var(--text-muted)]">Provider</th>
@@ -206,6 +224,7 @@ function UsageContent({ data, models }: { data: any; models: ModelUsage[] }) {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </Card>
     </div>
@@ -220,6 +239,9 @@ function StatCard({ label, value, icon: Icon, color }: { label: string; value: s
     blue: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
     green: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300",
     amber: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+    teal: "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300",
+    purple: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300",
+    indigo: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
   };
   return (
     <Card className="flex items-center gap-3 px-4 py-3">
@@ -474,16 +496,38 @@ function ProviderTopology({ providers }: { providers: ProviderUsage[] }) {
 
 function RecentRow({ row }: { row: RecentActivity }) {
   const success = row.latency_ms > 0;
+  const hasSavings = (row.slim_bytes_saved ?? 0) > 0 || row.caveman_active || row.terse_active;
   return (
     <tr className="transition-colors hover:bg-[var(--bg-subtle)]">
       <td className="w-6 px-3 py-1.5">
         <span className={`block h-1.5 w-1.5 rounded-full ${success ? "bg-emerald-500" : "bg-red-500"}`} />
       </td>
       <td className="px-3 py-1.5">
-        <span className="font-mono text-[var(--text)]">{row.model || "—"}</span>
-        {row.provider && (
-          <span className="ml-1.5 text-[10px] text-[var(--text-muted)]">{row.provider}</span>
-        )}
+        <div className="flex items-center gap-1.5">
+          <span className="font-mono text-[var(--text)]">{row.model || "—"}</span>
+          {row.provider && (
+            <span className="text-[10px] text-[var(--text-muted)]">{row.provider}</span>
+          )}
+          {hasSavings && (
+            <span className="flex items-center gap-0.5">
+              {(row.slim_bytes_saved ?? 0) > 0 && (
+                <span className="rounded bg-teal-100 px-1 py-0.5 text-[9px] font-bold text-teal-700 dark:bg-teal-900/30 dark:text-teal-300" title={`RTK saved ${fmtBytes(row.slim_bytes_saved ?? 0)} (${row.slim_rules ?? ""})`}>
+                  RTK -{fmtBytes(row.slim_bytes_saved ?? 0)}
+                </span>
+              )}
+              {row.caveman_active && (
+                <span className="rounded bg-purple-100 px-1 py-0.5 text-[9px] font-bold text-purple-700 dark:bg-purple-900/30 dark:text-purple-300" title="Caveman output compression active">
+                  🦍
+                </span>
+              )}
+              {row.terse_active && (
+                <span className="rounded bg-indigo-100 px-1 py-0.5 text-[9px] font-bold text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300" title="Terse output compression active">
+                  ✂️
+                </span>
+              )}
+            </span>
+          )}
+        </div>
       </td>
       <td className="px-3 py-1.5 text-right tabular-nums text-[var(--text-muted)]">
         <span className="text-blue-500 dark:text-blue-400">{fmtNum(Math.round(row.tokens * 0.6))}↑</span>{" "}
@@ -504,6 +548,72 @@ function ProviderIcon({ provider, color }: { provider: string; color: string }) 
     );
   }
   return <img src={`/providers/${provider}.png`} alt={provider} onError={() => setErrored(true)} className="h-5 w-5 shrink-0 rounded object-contain" />;
+}
+
+// ─── Token Savings Breakdown ────────────────────────────────────────────────
+
+function TokenSavingsBreakdown({ savings, totalRequests }: { savings: TokenSavings; totalRequests: number }) {
+  const maxBytes = Math.max(...savings.rules.map((r) => r.bytes_saved), 1);
+  const totalCavemanPct = totalRequests > 0 ? ((savings.caveman_requests / totalRequests) * 100).toFixed(1) : "0";
+  const totalTersePct = totalRequests > 0 ? ((savings.terse_requests / totalRequests) * 100).toFixed(0) : "0";
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2.5">
+        <div className="flex items-center gap-2">
+          <Scissors className="h-4 w-4 text-[var(--text-muted)]" />
+          <h3 className="text-sm font-semibold">Token Savings Breakdown</h3>
+        </div>
+        <div className="flex items-center gap-3 text-[10px] text-[var(--text-muted)]">
+          {savings.caveman_requests > 0 && (
+            <span className="flex items-center gap-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-purple-500" />
+              Caveman {totalCavemanPct}%
+            </span>
+          )}
+          {savings.terse_requests > 0 && (
+            <span className="flex items-center gap-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
+              Terse {totalTersePct}%
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="p-4">
+        <div className="space-y-2.5">
+          {savings.rules.map((r) => (
+            <div key={r.rule} className="flex items-center gap-3">
+              <div className="w-24 shrink-0 text-xs font-mono font-medium text-[var(--text)]">{r.rule}</div>
+              <div className="flex-1">
+                <div className="h-5 overflow-hidden rounded bg-[var(--bg-subtle)]">
+                  <div
+                    className="flex h-full items-center rounded bg-gradient-to-r from-teal-500 to-emerald-500 px-2 text-[10px] font-bold text-white transition-all"
+                    style={{ width: `${Math.max(4, (r.bytes_saved / maxBytes) * 100)}%` }}
+                  >
+                    {fmtBytes(r.bytes_saved)}
+                  </div>
+                </div>
+              </div>
+              <div className="w-20 text-right text-xs tabular-nums text-[var(--text-muted)]">
+                {fmtNum(r.tokens_saved)} tok
+              </div>
+              <div className="w-14 text-right text-xs tabular-nums text-[var(--text-muted)]">
+                {r.count}×
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3 flex items-center justify-between border-t border-[var(--border)] pt-3 text-xs">
+          <span className="text-[var(--text-muted)]">
+            Total RTK savings: <span className="font-bold text-teal-600 dark:text-teal-400">{fmtBytes(savings.slim_bytes_saved)}</span> ({fmtNum(savings.slim_tokens_saved)} tokens)
+          </span>
+          <span className="text-[var(--text-muted)]">
+            Est. cost saved: <span className="font-bold text-emerald-600 dark:text-emerald-400">${((savings.slim_tokens_saved / 1_000_000) * 3).toFixed(4)}</span>
+          </span>
+        </div>
+      </div>
+    </Card>
+  );
 }
 
 // ─── Model Usage Table ──────────────────────────────────────────────────────
@@ -633,6 +743,12 @@ function fmtNum(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return n.toLocaleString();
+}
+
+function fmtBytes(n: number): string {
+  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${n} B`;
 }
 
 function relTime(iso: string): string {

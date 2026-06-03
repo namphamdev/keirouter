@@ -39,7 +39,7 @@ const PING_MAX_MS = 300000;
 const REACHABLE_MISS_THRESHOLD = 5;
 
 // ---------------------------------------------------------------------------
-// Brand SVG logos — inline to avoid external dependencies.
+// Brand SVG logos
 // ---------------------------------------------------------------------------
 
 function CloudflareLogo({ className = "" }: { className?: string }) {
@@ -69,7 +69,7 @@ export function EndpointsPage() {
         title="Endpoints"
         description="How your applications connect to KeiRouter."
       />
-      <div className="space-y-6">
+      <div className="space-y-5 sm:space-y-6">
         <PrimaryEndpoint />
         <TunnelSection />
         <APIKeys />
@@ -99,34 +99,35 @@ function PrimaryEndpoint() {
 
   return (
     <Card>
-      <div className="px-6 py-5 sm:px-8 sm:py-6">
-        <p className="text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]">
+      <div className="px-4 py-4 sm:px-8 sm:py-6">
+        <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
           Primary endpoint
         </p>
-        <div className="mt-3 flex items-stretch gap-2">
-          <div className="flex min-w-0 flex-1 items-center rounded-xl border border-[var(--border)] bg-[var(--bg)] px-4 py-3">
-            <span className="truncate font-mono text-sm text-[var(--text)]">
+        {/* Mobile: stack vertically. Desktop: side-by-side. */}
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-stretch">
+          <div className="flex min-w-0 flex-1 items-center rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 sm:px-4 sm:py-3">
+            <span className="truncate font-mono text-[13px] text-[var(--text)]">
               {url || "Loading…"}
             </span>
           </div>
           <button
             onClick={copy}
-            className="flex shrink-0 items-center gap-2 rounded-xl bg-accent-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-accent-700 dark:bg-accent-500 dark:hover:bg-accent-400"
+            className="flex shrink-0 items-center justify-center gap-2 rounded-xl bg-accent-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-700 dark:bg-accent-500 dark:hover:bg-accent-400 sm:py-3"
           >
             {copied ? (
               <>
                 <Check className="h-4 w-4" />
-                <span className="hidden sm:inline">Copied</span>
+                <span>Copied</span>
               </>
             ) : (
               <>
                 <Copy className="h-4 w-4" />
-                <span className="hidden sm:inline">Copy</span>
+                <span>Copy</span>
               </>
             )}
           </button>
         </div>
-        <p className="mt-3 text-xs text-[var(--text-muted)]">
+        <p className="mt-2.5 text-xs text-[var(--text-muted)] sm:mt-3">
           Point your applications at this URL. All providers are accessible through this single endpoint.
         </p>
       </div>
@@ -141,7 +142,8 @@ function PrimaryEndpoint() {
 function TunnelSection() {
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between">
+      {/* Mobile: stack. Desktop: side-by-side. */}
+      <div className="mb-3 flex flex-col gap-0.5 sm:flex-row sm:items-center sm:justify-between">
         <h2 className="text-sm font-semibold tracking-tight">Tunnels</h2>
         <p className="text-xs text-[var(--text-muted)]">Expose KeiRouter to external networks</p>
       </div>
@@ -423,7 +425,7 @@ function TailscaleTunnel() {
   if (!isInstalled) {
     return (
       <Card className="flex flex-col">
-        <div className="flex items-center gap-3 px-5 pt-5 pb-3">
+        <div className="flex items-center gap-3 px-4 pt-4 pb-3 sm:px-5 sm:pt-5">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#2255CC]/10 text-[#2255CC] dark:bg-[#5990FF]/15 dark:text-[#5990FF]">
             <TailscaleLogo className="h-5 w-5" />
           </div>
@@ -432,7 +434,7 @@ function TailscaleTunnel() {
             <p className="text-xs text-[var(--text-muted)]">Private network with HTTPS</p>
           </div>
         </div>
-        <div className="flex flex-1 flex-col justify-between border-t border-[var(--border)] px-5 py-4">
+        <div className="flex flex-1 flex-col justify-between border-t border-[var(--border)] px-4 py-4 sm:px-5">
           <div className="flex items-center gap-2.5 text-sm text-[var(--text-muted)]">
             <WifiOff className="h-4 w-4 shrink-0" />
             <span>Not installed on this machine</span>
@@ -484,7 +486,7 @@ function TailscaleTunnel() {
 
   return (
     <Card className="flex flex-col">
-      <div className="flex items-center gap-3 px-5 pt-5 pb-3">
+      <div className="flex items-center gap-3 px-4 pt-4 pb-3 sm:px-5 sm:pt-5">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#2255CC]/10 text-[#2255CC] dark:bg-[#5990FF]/15 dark:text-[#5990FF]">
           <TailscaleLogo className="h-5 w-5" />
         </div>
@@ -494,12 +496,12 @@ function TailscaleTunnel() {
         </div>
       </div>
 
-      <div className="flex flex-1 flex-col gap-4 border-t border-[var(--border)] px-5 py-4">
+      <div className="flex flex-1 flex-col gap-3 border-t border-[var(--border)] px-4 py-4 sm:px-5 sm:gap-4">
         {/* Status */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
             <TunnelDot running={isRunning} reachable={reachable} loading={loading} />
-            <span className="text-sm font-medium">{statusText}</span>
+            <span className="text-sm font-medium truncate">{statusText}</span>
           </div>
           {isRunning && (
             <TunnelBadge reachable={reachable} />
@@ -512,9 +514,9 @@ function TailscaleTunnel() {
             href={tunnelUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1.5 font-mono text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
+            className="flex items-center gap-1.5 font-mono text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text)] min-w-0"
           >
-            {tunnelUrl}
+            <span className="truncate">{tunnelUrl}</span>
             <ArrowUpRight className="h-3 w-3 shrink-0" />
           </a>
         )}
@@ -550,7 +552,7 @@ function TailscaleTunnel() {
         )}
 
         {/* Actions — pushed to bottom */}
-        <div className="mt-auto pt-2">
+        <div className="mt-auto pt-1 sm:pt-2">
           {isRunning ? (
             <Button variant="danger" onClick={() => disable.mutate()} disabled={disable.isPending} className="w-full">
               {disable.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Disable"}
@@ -567,7 +569,7 @@ function TailscaleTunnel() {
 }
 
 // ---------------------------------------------------------------------------
-// Shared tunnel card (Cloudflare uses this, Tailscale has custom layout)
+// Shared tunnel card (Cloudflare)
 // ---------------------------------------------------------------------------
 
 function TunnelCard({
@@ -603,7 +605,7 @@ function TunnelCard({
 }) {
   return (
     <Card className="flex flex-col">
-      <div className="flex items-center gap-3 px-5 pt-5 pb-3">
+      <div className="flex items-center gap-3 px-4 pt-4 pb-3 sm:px-5 sm:pt-5">
         <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${brandColor}`}>
           {logo}
         </div>
@@ -613,12 +615,12 @@ function TunnelCard({
         </div>
       </div>
 
-      <div className="flex flex-1 flex-col gap-4 border-t border-[var(--border)] px-5 py-4">
+      <div className="flex flex-1 flex-col gap-3 border-t border-[var(--border)] px-4 py-4 sm:px-5 sm:gap-4">
         {/* Status */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
             <TunnelDot running={isRunning} reachable={reachable} loading={loading} />
-            <span className="text-sm font-medium">{statusText}</span>
+            <span className="text-sm font-medium truncate">{statusText}</span>
           </div>
           {isRunning && (
             <TunnelBadge reachable={reachable} />
@@ -631,9 +633,9 @@ function TunnelCard({
             href={displayUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1.5 font-mono text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
+            className="flex items-center gap-1.5 font-mono text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text)] min-w-0"
           >
-            {displayUrl}
+            <span className="truncate">{displayUrl}</span>
             <ArrowUpRight className="h-3 w-3 shrink-0" />
           </a>
         )}
@@ -644,7 +646,7 @@ function TunnelCard({
         )}
 
         {/* Actions — pushed to bottom */}
-        <div className="mt-auto pt-2">
+        <div className="mt-auto pt-1 sm:pt-2">
           {isRunning ? (
             <Button variant="danger" onClick={onDisable} disabled={disablePending} className="w-full">
               {disablePending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Disable"}
@@ -723,39 +725,39 @@ function APIKeys() {
 
   return (
     <Card>
+      {/* Mobile: header + form stack vertically. Desktop: form inline in header. */}
       <CardHeader
         title="API keys"
         description="Authenticate your applications"
-        action={
-          <div className="flex items-center gap-2">
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Key name"
-              className="w-40 text-sm"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && name.trim()) create.mutate();
-              }}
-            />
-            <Button onClick={() => create.mutate()} disabled={!name.trim() || create.isPending}>
-              <Plus className="h-4 w-4" />
-              {create.isPending ? "Creating…" : "Create"}
-            </Button>
-          </div>
-        }
       />
+      <div className="border-b border-[var(--border)] px-4 py-3 sm:px-5">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Key name"
+            className="text-sm sm:max-w-48"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && name.trim()) create.mutate();
+            }}
+          />
+          <Button onClick={() => create.mutate()} disabled={!name.trim() || create.isPending} className="sm:w-auto">
+            <Plus className="h-4 w-4" />
+            {create.isPending ? "Creating…" : "Create key"}
+          </Button>
+        </div>
+        {error && (
+          <p className="mt-2 text-xs text-[color:var(--color-danger)]">{error}</p>
+        )}
+      </div>
 
       {created && (
-        <div className="mx-5 mt-4 rounded-lg border border-accent-200 bg-accent-50 px-4 py-3 dark:border-accent-800/50 dark:bg-accent-800/20">
+        <div className="mx-4 mt-4 rounded-lg border border-accent-200 bg-accent-50 px-3 py-3 dark:border-accent-800/50 dark:bg-accent-800/20 sm:mx-5 sm:px-4">
           <p className="text-xs font-medium text-accent-700 dark:text-accent-200">
             Copy this key now — it won't be shown again.
           </p>
-          <code className="mt-1.5 block break-all font-mono text-sm">{created.key}</code>
+          <code className="mt-1.5 block break-all font-mono text-[13px]">{created.key}</code>
         </div>
-      )}
-
-      {error && (
-        <p className="mx-5 mt-3 text-xs text-[color:var(--color-danger)]">{error}</p>
       )}
 
       {keys.isLoading ? (
@@ -763,7 +765,7 @@ function APIKeys() {
       ) : !keys.data?.keys?.length ? (
         <EmptyState title="No API keys yet" hint="Create a key to authenticate your app." />
       ) : (
-        <div className="mt-3 divide-y divide-[var(--border)] border-t border-[var(--border)]">
+        <div className="divide-y divide-[var(--border)]">
           {keys.data.keys.map((k) => (
             <KeyRow
               key={k.id}
@@ -780,19 +782,20 @@ function APIKeys() {
 
 function KeyRow({ k, onDelete, onToggle }: { k: APIKey; onDelete: () => void; onToggle: () => void }) {
   return (
-    <div className="flex items-center justify-between gap-4 px-5 py-3.5">
-      <div className="flex items-center gap-3 min-w-0">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-ink-100 text-ink-500 dark:bg-ink-800 dark:text-ink-400">
-          <KeyRound className="h-4 w-4" />
-        </span>
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium">{k.name}</p>
-          <p className="mt-0.5 font-mono text-xs text-[var(--text-muted)]">{k.display}</p>
-        </div>
+    <div className="flex items-center gap-3 px-4 py-3 sm:px-5 sm:py-3.5">
+      {/* Key info — takes available space, truncates. */}
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-ink-100 text-ink-500 dark:bg-ink-800 dark:text-ink-400">
+        <KeyRound className="h-4 w-4" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{k.name}</p>
+        <p className="mt-0.5 font-mono text-xs text-[var(--text-muted)]">{k.display}</p>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
+
+      {/* Actions — compact, no wrap. */}
+      <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
         <Badge tone={k.disabled ? "neutral" : "success"}>
-          {k.disabled ? "Disabled" : "Active"}
+          {k.disabled ? "Off" : "On"}
         </Badge>
         <button
           onClick={onToggle}

@@ -45,8 +45,9 @@ type antBlock struct {
 
 type antImageSource struct {
 	Type      string `json:"type"`
-	MediaType string `json:"media_type"`
-	Data      string `json:"data"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
 }
 
 type antTool struct {
@@ -147,10 +148,17 @@ func parseAntMessage(m antMessage) core.Message {
 			})
 		case "image":
 			if b.Source != nil {
-				msg.Content = append(msg.Content, core.ContentPart{
-					Type:  core.PartImage,
-					Media: &core.MediaPayload{MIMEType: b.Source.MediaType, Data: b.Source.Data},
-				})
+				if b.Source.Type == "url" && b.Source.URL != "" {
+					msg.Content = append(msg.Content, core.ContentPart{
+						Type:  core.PartImage,
+						Media: &core.MediaPayload{URL: b.Source.URL},
+					})
+				} else {
+					msg.Content = append(msg.Content, core.ContentPart{
+						Type:  core.PartImage,
+						Media: &core.MediaPayload{MIMEType: b.Source.MediaType, Data: b.Source.Data},
+					})
+				}
 			}
 		}
 	}
@@ -256,10 +264,17 @@ func renderAntBlocks(m core.Message) []antBlock {
 			})
 		case core.PartImage:
 			if p.Media != nil {
-				blocks = append(blocks, antBlock{
-					Type:   "image",
-					Source: &antImageSource{Type: "base64", MediaType: p.Media.MIMEType, Data: p.Media.Data},
-				})
+				if p.Media.Data != "" {
+					blocks = append(blocks, antBlock{
+						Type:   "image",
+						Source: &antImageSource{Type: "base64", MediaType: p.Media.MIMEType, Data: p.Media.Data},
+					})
+				} else if p.Media.URL != "" {
+					blocks = append(blocks, antBlock{
+						Type:   "image",
+						Source: &antImageSource{Type: "url", URL: p.Media.URL},
+					})
+				}
 			}
 		}
 	}

@@ -90,7 +90,7 @@ function SearchableSelect({
   useEffect(() => {
     if (!open) return;
     const handleClick = (e: MouseEvent) => {
-      const target = e.target as Node;
+      const target = e.target as globalThis.Node;
       if (triggerRef.current?.contains(target)) return;
       if (dropdownRef.current?.contains(target)) return;
       setOpen(false);
@@ -764,47 +764,51 @@ function StepRow({
           </span>
         </div>
       )}
-      <div className="flex items-center gap-2">
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-600 text-[10px] font-bold text-white">
-          {index + 1}
-        </span>
-        <SearchableSelect
-          options={providerOptions}
-          value={step.provider}
-          onChange={(v) => onUpdate({ provider: v, model: "" })}
-          placeholder="Provider…"
-          searchPlaceholder="Search providers…"
-          className="w-48"
-        />
-        <SearchableSelect
-          options={modelOptions}
-          value={step.model}
-          onChange={(v) => onUpdate({ model: v })}
-          placeholder={step.provider ? "Model…" : "Select provider first"}
-          searchPlaceholder="Search models…"
-          disabled={!step.provider}
-          loading={modelsQuery.isLoading}
-          className="flex-1 min-w-0"
-        />
-        <div className="flex items-center gap-0.5">
-          {onMoveUp && (
-            <button onClick={onMoveUp}
-              className="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-subtle)]">
-              <ArrowUp className="h-3.5 w-3.5" />
-            </button>
-          )}
-          {onMoveDown && (
-            <button onClick={onMoveDown}
-              className="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-subtle)]">
-              <ArrowDown className="h-3.5 w-3.5" />
-            </button>
-          )}
-          {total > 1 && (
-            <button onClick={onRemove}
-              className="rounded p-1 text-[var(--text-muted)] hover:bg-red-500/10 hover:text-red-500">
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="flex flex-1 items-center gap-2">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-600 text-[10px] font-bold text-white">
+            {index + 1}
+          </span>
+          <SearchableSelect
+            options={providerOptions}
+            value={step.provider}
+            onChange={(v) => onUpdate({ provider: v, model: "" })}
+            placeholder="Provider…"
+            searchPlaceholder="Search providers…"
+            className="w-full sm:w-48"
+          />
+        </div>
+        <div className="flex flex-1 items-center gap-2 pl-8 sm:pl-0">
+          <SearchableSelect
+            options={modelOptions}
+            value={step.model}
+            onChange={(v) => onUpdate({ model: v })}
+            placeholder={step.provider ? "Model…" : "Select provider first"}
+            searchPlaceholder="Search models…"
+            disabled={!step.provider}
+            loading={modelsQuery.isLoading}
+            className="flex-1 min-w-0"
+          />
+          <div className="flex items-center gap-0.5">
+            {onMoveUp && (
+              <button onClick={onMoveUp}
+                className="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-subtle)]">
+                <ArrowUp className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {onMoveDown && (
+              <button onClick={onMoveDown}
+                className="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-subtle)]">
+                <ArrowDown className="h-3.5 w-3.5" />
+              </button>
+            )}
+            {total > 1 && (
+              <button onClick={onRemove}
+                className="rounded p-1 text-[var(--text-muted)] hover:bg-red-500/10 hover:text-red-500">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

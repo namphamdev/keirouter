@@ -207,13 +207,44 @@ func decodeOAIContentParts(raw json.RawMessage) []core.ContentPart {
 		case "text":
 			parts = append(parts, core.ContentPart{Type: core.PartText, Text: p.Text})
 		case "image_url":
-			parts = append(parts, core.ContentPart{
-				Type:  core.PartImage,
-				Media: &core.MediaPayload{URL: p.ImageURL.URL},
-			})
+			media := parseOAIImageURL(p.ImageURL.URL)
+			parts = append(parts, core.ContentPart{Type: core.PartImage, Media: media})
 		}
 	}
 	return parts
+}
+
+// parseOAIImageURL decomposes an OpenAI image_url value into a MediaPayload.
+// If the URL is a data URI (data:<mime>;base64,<data>), MIMEType and Data are
+// populated; otherwise the URL is kept as-is for cross-dialect forwarding.
+func parseOAIImageURL(rawURL string) *core.MediaPayload {
+	if strings.HasPrefix(rawURL, "data:") {
+		// Format: data:<mediatype>;base64,<data>
+		rest, ok := strings.CutPrefix(rawURL, "data:")
+		if ok {
+			if idx := strings.Index(rest, ";base64,"); idx > 0 {
+				return &core.MediaPayload{
+					MIMEType: rest[:idx],
+					Data:     rest[idx+8:],
+				}
+			}
+		}
+	}
+	return &core.MediaPayload{URL: rawURL}
+}
+
+// mediaToDataURL converts a MediaPayload into a URL suitable for the OpenAI
+// image_url format. If the media has inline base64 data, it is wrapped in a
+// data URI. If it already has a URL, that URL is returned as-is.
+func mediaToDataURL(m *core.MediaPayload) string {
+	if m.Data != "" {
+		mime := m.MIMEType
+		if mime == "" {
+			mime = "image/png"
+		}
+		return "data:" + mime + ";base64," + m.Data
+	}
+	return m.URL
 }
 
 // ---- request rendering ------------------------------------------------------
@@ -257,10 +288,22 @@ func renderOAIMessage(m core.Message) oaiMessage {
 	out := oaiMessage{Role: string(m.Role), Name: m.Name}
 
 	var textParts []string
+	var hasMedia bool
+	var contentParts []map[string]any
+
 	for _, p := range m.Content {
 		switch p.Type {
 		case core.PartText:
 			textParts = append(textParts, p.Text)
+		case core.PartImage:
+			hasMedia = true
+			if p.Media != nil {
+				url := mediaToDataURL(p.Media)
+				contentParts = append(contentParts, map[string]any{
+					"type":      "image_url",
+					"image_url": map[string]any{"url": url},
+				})
+			}
 		case core.PartToolCall:
 			var tc oaiToolCall
 			tc.ID = p.ToolCall.ID
@@ -277,7 +320,20 @@ func renderOAIMessage(m core.Message) oaiMessage {
 		}
 	}
 
-	if len(textParts) > 0 {
+	// When images are present, use the array-of-parts content format (OpenAI
+	// requires this for multimodal messages). Text-only messages use a plain
+	// string for backward compatibility.
+	if hasMedia {
+		// Prepend any accumulated text as a text part.
+		if len(textParts) > 0 {
+			contentParts = append([]map[string]any{{
+				"type": "text",
+				"text": strings.Join(textParts, ""),
+			}}, contentParts...)
+		}
+		b, _ := json.Marshal(contentParts)
+		out.Content = b
+	} else if len(textParts) > 0 {
 		content, _ := json.Marshal(strings.Join(textParts, ""))
 		out.Content = content
 	}
