@@ -210,17 +210,18 @@ export function QuotaPage() {
         title="Quota Tracker"
         icon={Clock}
         description="Monitor upstream quota limits and consumption per connected account."
-        action={
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-2">
-              <Calendar className="h-3.5 w-3.5 text-[var(--text-muted)]" />
-              <select value={period} onChange={(e) => setPeriod(e.target.value)} className="bg-transparent text-xs font-medium focus:outline-none">
-                {periods.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-              </select>
-            </div>
-          </div>
-        }
       />
+
+      <div className="mb-6 flex justify-end">
+        <div className="flex items-center gap-2">
+          <div className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-2">
+            <Calendar className="h-3.5 w-3.5 text-[var(--text-muted)]" />
+            <select value={period} onChange={(e) => setPeriod(e.target.value)} className="bg-transparent text-xs font-medium focus:outline-none">
+              {periods.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
 
       <Card>
         {/* ── Toolbar ──────────────────────────────────────────── */}
@@ -418,11 +419,31 @@ function QuotaRow({
           </div>
         )}
 
-        {/* Stats */}
+        {/* Stats — adapt per usage_type */}
         <div className="hidden items-center gap-3 text-[11px] text-[var(--text-muted)] lg:flex">
-          <span>{account.total_requests.toLocaleString()} req</span>
-          <span>{(account.prompt_tokens + account.completion_tokens).toLocaleString()} tok</span>
-          <span className="font-medium tabular-nums text-[var(--text)]">${account.cost_usd.toFixed(4)}</span>
+          {account.usage_type === "credit" ? (
+            <>
+              <span>{account.total_requests.toLocaleString()} req</span>
+              {(() => {
+                const q = account.upstream_quotas?.[0];
+                if (!q) return null;
+                return (
+                  <span>
+                    <span className="font-medium text-[var(--text)]">{q.used.toLocaleString()}</span>
+                    <span className="mx-0.5">/</span>
+                    <span>{q.limit > 0 ? q.limit.toLocaleString() : "∞"}</span>
+                    <span className="ml-0.5">credits</span>
+                  </span>
+                );
+              })()}
+            </>
+          ) : (
+            <>
+              <span>{account.total_requests.toLocaleString()} req</span>
+              <span>{(account.prompt_tokens + account.completion_tokens).toLocaleString()} tok</span>
+              <span className="font-medium tabular-nums text-[var(--text)]">${account.cost_usd.toFixed(4)}</span>
+            </>
+          )}
         </div>
 
         {/* Actions */}
@@ -454,11 +475,28 @@ function QuotaRow({
       {expanded && hasQuota && (
         <div className="border-t border-[var(--border)] bg-[var(--bg-subtle)]/30 px-4 py-2">
           <QuotaTable quotas={quotas} />
-          {/* Mobile stats (hidden on lg+) */}
+          {/* Mobile stats (hidden on lg+) — adapt per usage_type */}
           <div className="mt-2 flex items-center justify-between text-[11px] text-[var(--text-muted)] lg:hidden">
-            <span>{account.total_requests.toLocaleString()} requests</span>
-            <span>{(account.prompt_tokens + account.completion_tokens).toLocaleString()} tokens</span>
-            <span className="font-medium tabular-nums">${account.cost_usd.toFixed(4)}</span>
+            {account.usage_type === "credit" ? (
+              <>
+                <span>{account.total_requests.toLocaleString()} requests</span>
+                {(() => {
+                  const q = account.upstream_quotas?.[0];
+                  if (!q) return null;
+                  return (
+                    <span>
+                      {q.used.toLocaleString()} / {q.limit > 0 ? q.limit.toLocaleString() : "∞"} credits
+                    </span>
+                  );
+                })()}
+              </>
+            ) : (
+              <>
+                <span>{account.total_requests.toLocaleString()} requests</span>
+                <span>{(account.prompt_tokens + account.completion_tokens).toLocaleString()} tokens</span>
+                <span className="font-medium tabular-nums">${account.cost_usd.toFixed(4)}</span>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -163,6 +163,27 @@ export interface RecentActivity {
   cache_hit: boolean;
   latency_ms: number;
   created_at: string;
+  ttft_ms?: number;
+  slim_bytes_saved?: number;
+  slim_tokens_saved?: number;
+  slim_rules?: string;
+  caveman_active?: boolean;
+  terse_active?: boolean;
+}
+
+export interface RuleSaving {
+  rule: string;
+  count: number;
+  bytes_saved: number;
+  tokens_saved: number;
+}
+
+export interface TokenSavings {
+  slim_bytes_saved: number;
+  slim_tokens_saved: number;
+  caveman_requests: number;
+  terse_requests: number;
+  rules: RuleSaving[];
 }
 
 export interface ModelUsage {
@@ -193,8 +214,10 @@ export interface UsageInsights {
     cache_hits: number;
     success_rate: number;
     avg_latency_ms: number;
+    avg_ttft_ms: number;
     since: string;
   };
+  savings: TokenSavings;
   providers: ProviderUsage[];
   recent: RecentActivity[];
   series: SeriesPoint[];
@@ -217,6 +240,7 @@ export interface QuotaAccount {
   auth_kind: string;
   priority: number;
   status: string; // active | paused | needs_attention
+  usage_type: string; // token | credit
   total_requests: number;
   prompt_tokens: number;
   completion_tokens: number;

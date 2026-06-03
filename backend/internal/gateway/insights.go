@@ -104,6 +104,19 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 		if rec.TTFTMS > 0 {
 			entry["ttft_ms"] = rec.TTFTMS
 		}
+		if rec.SlimBytesSaved > 0 {
+			entry["slim_bytes_saved"] = rec.SlimBytesSaved
+			entry["slim_tokens_saved"] = rec.SlimTokensSaved
+		}
+		if rec.SlimRules != "" {
+			entry["slim_rules"] = rec.SlimRules
+		}
+		if rec.CavemanActive {
+			entry["caveman_active"] = true
+		}
+		if rec.TerseActive {
+			entry["terse_active"] = true
+		}
 		recentRows = append(recentRows, entry)
 	}
 
@@ -120,36 +133,33 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 		series = append(series, map[string]any{"label": b.label, "count": b.count})
 	}
 
-	// Success rate + average latency, derived from the recent window.
-	// Cache hits are served from the semantic cache (no upstream call);
-	// they are successful but have 0 latency and 0 TTFT.
-	var withLatency, latencySum, ttftCount, ttftSum int64
-	for _, rec := range recent {
-		if rec.LatencyMS > 0 {
-			withLatency++
-			latencySum += int64(rec.LatencyMS)
-		}
-		if rec.TTFTMS > 0 {
-			ttftCount++
-			ttftSum += int64(rec.TTFTMS)
-		}
+	// Success rate + average latency, computed from the full period in SQL.
+	// Cache hits count as successful; avg latency excludes cache hits (0ms).
+	// successRate is a 0-1 ratio (frontend multiplies by 100 for display).
+	var successRate float64
+	if sum.TotalRequests > 0 {
+		successRate = float64(sum.SuccessCount) / float64(sum.TotalRequests)
+	} else {
+		successRate = 1
 	}
-	successRate := 100.0
-	avgLatency := 0
-	avgTTFT := 0
-	if len(recent) > 0 {
-		successRate = float64(withLatency) / float64(len(recent)) * 100
-		if withLatency > 0 {
-			avgLatency = int(latencySum / withLatency)
-		}
-		if ttftCount > 0 {
-			avgTTFT = int(ttftSum / ttftCount)
-		}
-	}
+	avgLatency := int(sum.AvgLatencyMS)
+	avgTTFT := int(sum.AvgTTFTMS)
 
 	busiest := ""
 	if busiestCount > 0 && busiestIdx < len(buckets) {
 		busiest = buckets[busiestIdx].label
+	}
+
+	// Token savings analytics from RTK slimmer and Caveman/Terse.
+	ruleSavings, _ := s.usage.SavingsByRule(ctx, adminTenant, since)
+	rules := make([]map[string]any, 0, len(ruleSavings))
+	for _, rs := range ruleSavings {
+		rules = append(rules, map[string]any{
+			"rule":         rs.Rule,
+			"count":        rs.Count,
+			"bytes_saved":  rs.BytesSaved,
+			"tokens_saved": rs.BytesSaved / 4,
+		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -165,6 +175,13 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 			"avg_latency_ms":     avgLatency,
 			"avg_ttft_ms":        avgTTFT,
 			"since":              since,
+		},
+		"savings": map[string]any{
+			"slim_bytes_saved":  sum.SlimBytesSaved,
+			"slim_tokens_saved": sum.SlimTokensSaved,
+			"caveman_requests":  sum.CavemanRequests,
+			"terse_requests":    sum.TerseRequests,
+			"rules":             rules,
 		},
 		"providers": providers,
 		"recent":    recentRows,
@@ -290,6 +307,10 @@ func (s *Server) adminQuotaUsage(w http.ResponseWriter, r *http.Request) {
 			outputPerM = spec.OutputPerM
 			providerNotice = spec.Notice
 		}
+		usageType := "token"
+		if connectors.GetQuotaSource(a.Provider) != nil {
+			usageType = "credit"
+		}
 		entry := map[string]any{
 			"id":                a.ID,
 			"provider":          a.Provider,
@@ -298,6 +319,7 @@ func (s *Server) adminQuotaUsage(w http.ResponseWriter, r *http.Request) {
 			"auth_kind":         a.AuthKind,
 			"priority":          a.Priority,
 			"status":            status,
+			"usage_type":        usageType,
 			"total_requests":     u.TotalRequests,
 			"prompt_tokens":      u.PromptTokens,
 			"completion_tokens":  u.CompletionTokens,
