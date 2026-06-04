@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -101,6 +102,75 @@ func (c *OpenAICompatible) Validate(ctx context.Context, creds core.Credentials)
 		return fmt.Errorf("validation failed for %s: %w", c.id, err)
 	}
 	return nil
+}
+
+// OpenAICompatibleModelSource implements LiveModelSource by fetching the
+// upstream GET /models endpoint — the standard discovery API for OpenAI-
+// compatible providers. This auto-discovers models at runtime using the
+// connected account's credentials.
+type OpenAICompatibleModelSource struct {
+	provider    string
+	defaultBase string
+}
+
+// ListModels fetches GET /models from the upstream and returns ModelSpecs.
+func (s *OpenAICompatibleModelSource) ListModels(ctx context.Context, creds core.Credentials) ([]ModelSpec, error) {
+	base := s.defaultBase
+	if creds.BaseURL != "" {
+		base = creds.BaseURL
+	}
+	// Resolve template placeholders (e.g. cloudflare {accountId}).
+	for key, val := range creds.Extra {
+		base = strings.ReplaceAll(base, "{"+key+"}", val)
+	}
+
+	url := joinURL(base, "models")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case creds.AccessToken != "":
+		req.Header.Set("Authorization", bearer(creds.AccessToken))
+	case creds.APIKey != "":
+		req.Header.Set("Authorization", bearer(creds.APIKey))
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := sharedClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
+		return nil, fmt.Errorf("GET /models returned %d: %s", resp.StatusCode, truncateError(body))
+	}
+
+	// Parse the standard OpenAI models response shape.
+	var envelope struct {
+		Data []struct {
+			ID      string `json:"id"`
+			OwnedBy string `json:"owned_by"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return nil, fmt.Errorf("decode /models response: %w", err)
+	}
+
+	out := make([]ModelSpec, 0, len(envelope.Data))
+	for _, entry := range envelope.Data {
+		if entry.ID == "" {
+			continue
+		}
+		out = append(out, ModelSpec{
+			ID:   entry.ID,
+			Name: entry.ID, // best-effort; static catalog may have a better name
+			Kind: core.ServiceLLM,
+		})
+	}
+	return out, nil
 }
 
 // StreamRaw opens a streaming SSE connection and returns the raw response body
