@@ -313,7 +313,11 @@ function TokenStats({
   cached: number;
   cacheHits: number;
 }) {
-  const total = prompt + completion + cached;
+  // Cached tokens are a *subset* of prompt tokens (prompt cache hits).
+  // Use prompt + completion as the true total; show non-cached input vs cached
+  // as separate, mutually exclusive breakdown rows.
+  const nonCachedInput = Math.max(prompt - cached, 0);
+  const total = prompt + completion;
 
   if (total === 0) {
     return (
@@ -324,7 +328,7 @@ function TokenStats({
   }
 
   const rows = [
-    { label: "Input", value: prompt, color: "bg-[var(--color-chart-1)]" },
+    { label: "Input", value: nonCachedInput, color: "bg-[var(--color-chart-1)]" },
     { label: "Output", value: completion, color: "bg-[var(--color-chart-2)]" },
     { label: "Cached", value: cached, color: "bg-[var(--color-chart-3)]" },
   ];
