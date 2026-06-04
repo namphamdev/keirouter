@@ -89,26 +89,77 @@ func (r *RoutingRepo) ExpireModelCooldowns(ctx context.Context) (int64, error) {
 // GetChainRotation returns the persisted round-robin index for a chain.
 // Returns 0 if no rotation state exists yet.
 func (r *RoutingRepo) GetChainRotation(ctx context.Context, chainID string) (int, error) {
-	q := r.db.rebind(`SELECT last_index FROM chain_rotation WHERE chain_id = ?`)
-	var idx int
-	err := r.db.sql.QueryRowContext(ctx, q, chainID).Scan(&idx)
-	if err == sql.ErrNoRows {
-		return 0, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("store: get chain rotation: %w", err)
-	}
-	return idx, nil
+	state, err := r.GetChainRotationState(ctx, chainID)
+	return state.LastIndex, err
 }
 
 // SetChainRotation persists the round-robin cursor for a chain.
 func (r *RoutingRepo) SetChainRotation(ctx context.Context, chainID string, index int) error {
-	q := r.db.rebind(`INSERT INTO chain_rotation (chain_id, last_index, updated_at)
-		VALUES (?, ?, ?)
-		ON CONFLICT(chain_id) DO UPDATE SET last_index = excluded.last_index, updated_at = excluded.updated_at`)
-	_, err := r.db.sql.ExecContext(ctx, q, chainID, index, formatTime(time.Now()))
+	return r.SetChainRotationState(ctx, ChainRotation{ChainID: chainID, LastIndex: index})
+}
+
+// GetChainRotationState returns the persisted round-robin cursor and sticky
+// hit count for a chain. Missing state is treated as a zero cursor.
+func (r *RoutingRepo) GetChainRotationState(ctx context.Context, chainID string) (ChainRotation, error) {
+	q := r.db.rebind(`SELECT chain_id, last_index, hit_count, updated_at FROM chain_rotation WHERE chain_id = ?`)
+	var state ChainRotation
+	var updated string
+	err := r.db.sql.QueryRowContext(ctx, q, chainID).Scan(&state.ChainID, &state.LastIndex, &state.HitCount, &updated)
+	if err == sql.ErrNoRows {
+		return ChainRotation{ChainID: chainID}, nil
+	}
+	if err != nil {
+		return ChainRotation{}, fmt.Errorf("store: get chain rotation: %w", err)
+	}
+	state.UpdatedAt = parseTime(updated)
+	return state, nil
+}
+
+// SetChainRotationState persists the round-robin cursor and sticky hit count
+// for a chain.
+func (r *RoutingRepo) SetChainRotationState(ctx context.Context, state ChainRotation) error {
+	q := r.db.rebind(`INSERT INTO chain_rotation (chain_id, last_index, hit_count, updated_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(chain_id) DO UPDATE SET
+			last_index = excluded.last_index,
+			hit_count = excluded.hit_count,
+			updated_at = excluded.updated_at`)
+	_, err := r.db.sql.ExecContext(ctx, q, state.ChainID, state.LastIndex, state.HitCount, formatTime(time.Now()))
 	if err != nil {
 		return fmt.Errorf("store: set chain rotation: %w", err)
+	}
+	return nil
+}
+
+// GetTargetRotationState returns the persisted round-robin cursor and sticky
+// hit count for a provider/model target. Missing state is treated as zero.
+func (r *RoutingRepo) GetTargetRotationState(ctx context.Context, scopeKey string) (TargetRotation, error) {
+	q := r.db.rebind(`SELECT scope_key, last_index, hit_count, updated_at FROM target_rotation WHERE scope_key = ?`)
+	var state TargetRotation
+	var updated string
+	err := r.db.sql.QueryRowContext(ctx, q, scopeKey).Scan(&state.ScopeKey, &state.LastIndex, &state.HitCount, &updated)
+	if err == sql.ErrNoRows {
+		return TargetRotation{ScopeKey: scopeKey}, nil
+	}
+	if err != nil {
+		return TargetRotation{}, fmt.Errorf("store: get target rotation: %w", err)
+	}
+	state.UpdatedAt = parseTime(updated)
+	return state, nil
+}
+
+// SetTargetRotationState persists the round-robin cursor and sticky hit count
+// for a provider/model target.
+func (r *RoutingRepo) SetTargetRotationState(ctx context.Context, state TargetRotation) error {
+	q := r.db.rebind(`INSERT INTO target_rotation (scope_key, last_index, hit_count, updated_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(scope_key) DO UPDATE SET
+			last_index = excluded.last_index,
+			hit_count = excluded.hit_count,
+			updated_at = excluded.updated_at`)
+	_, err := r.db.sql.ExecContext(ctx, q, state.ScopeKey, state.LastIndex, state.HitCount, formatTime(time.Now()))
+	if err != nil {
+		return fmt.Errorf("store: set target rotation: %w", err)
 	}
 	return nil
 }

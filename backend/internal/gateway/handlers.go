@@ -138,10 +138,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 
 	opts := pipeline.Options{
 		Targets:  resolved.Targets,
-		PlanOpts: resolved.PlanOpts,
-		Slimmer: s.slimmerConfig(),
-		Terse:   s.terseConfig(),
-		Caveman: s.cavemanConfig(),
+		PlanOpts: s.endpointPlanOptions(r.Context(), resolved.PlanOpts),
+		Slimmer:  s.slimmerConfig(),
+		Terse:    s.terseConfig(),
+		Caveman:  s.cavemanConfig(),
 	}
 
 	if req.Stream {
@@ -381,16 +381,16 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type budgetOut struct {
-		Period         string  `json:"period"`
-		LimitTokens    int64   `json:"limit_tokens"`
-		TokensUsed     int64   `json:"tokens_used"`
-		TokensRemain   int64   `json:"tokens_remaining"`
-		TokensPctUsed  float64 `json:"tokens_pct_used"`
-		LimitUSD       float64 `json:"limit_usd"`
-		SpentUSD       float64 `json:"spent_usd"`
-		USDRemaining   float64 `json:"usd_remaining"`
-		USDUsed        float64 `json:"usd_pct_used"`
-		Alert          bool    `json:"alert"`
+		Period        string  `json:"period"`
+		LimitTokens   int64   `json:"limit_tokens"`
+		TokensUsed    int64   `json:"tokens_used"`
+		TokensRemain  int64   `json:"tokens_remaining"`
+		TokensPctUsed float64 `json:"tokens_pct_used"`
+		LimitUSD      float64 `json:"limit_usd"`
+		SpentUSD      float64 `json:"spent_usd"`
+		USDRemaining  float64 `json:"usd_remaining"`
+		USDUsed       float64 `json:"usd_pct_used"`
+		Alert         bool    `json:"alert"`
 	}
 
 	var budgetOuts []budgetOut
@@ -403,7 +403,7 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 		}
 
 		bo := budgetOut{
-			Period:     b.Period,
+			Period:      b.Period,
 			LimitTokens: b.LimitTokens,
 			TokensUsed:  tokens,
 			LimitUSD:    float64(b.LimitMicros) / 1_000_000,

@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Layers, Plus, Trash2, X, ArrowRight, Pencil, Check, Copy,
   ArrowUp, ArrowDown, Loader2, Search, ChevronDown, Network,
-  Shield, Shuffle, Zap, DollarSign, Clock, AlertTriangle, Route,
+  Shield, Shuffle, Zap, DollarSign, Clock, AlertTriangle,
 } from "lucide-react";
 import {
   ReactFlow, Handle, Position, Controls,
@@ -21,6 +21,15 @@ interface DraftStep {
   provider: string;
   model: string;
 }
+
+const isRoundRobinStrategy = (strategy: string) =>
+  strategy === "round_robin" || strategy === "round-robin";
+
+const normalizeChainStrategy = (strategy: string) =>
+  isRoundRobinStrategy(strategy) ? "round_robin" : strategy;
+
+const displayStrategy = (strategy: string) =>
+  isRoundRobinStrategy(strategy) ? "round-robin" : strategy;
 
 // ─── Searchable Select ───────────────────────────────────────────────────────
 
@@ -202,7 +211,7 @@ function ComboStartNode({ data }: { data: { name: string; strategy: string; step
         <Layers className="h-4 w-4 text-accent-600 dark:text-accent-400" />
         <div>
           <span className="block text-sm font-bold text-accent-700 dark:text-accent-300">chain:{data.name}</span>
-          <span className="text-[10px] text-[var(--text-muted)]">{data.stepCount} step{data.stepCount !== 1 ? "s" : ""} · {data.strategy === "round_robin" ? "round-robin" : data.strategy}</span>
+          <span className="text-[10px] text-[var(--text-muted)]">{data.stepCount} step{data.stepCount !== 1 ? "s" : ""} · {displayStrategy(data.strategy)}</span>
         </div>
       </div>
     </>
@@ -352,8 +361,8 @@ const strategies = [
   { value: "cost", label: "Cost", desc: "Route to the cheapest model first, fall back to pricier", icon: DollarSign, color: "text-amber-500" },
 ];
 
-function StrategyCard({ value, label, desc, icon: Icon, color, selected, onClick }: {
-  value: string; label: string; desc: string; icon: any; color: string; selected: boolean; onClick: () => void;
+function StrategyCard({ label, desc, icon: Icon, color, selected, onClick }: {
+  label: string; desc: string; icon: any; color: string; selected: boolean; onClick: () => void;
 }) {
   return (
     <button
@@ -469,7 +478,7 @@ export function ChainsPage() {
                 onDelete={() => setDeletingId(c.id)}
                 onToggleRR={() => updateStrategy.mutate({
                   id: c.id,
-                  strategy: c.strategy === "round_robin" ? "priority" : "round_robin",
+                  strategy: isRoundRobinStrategy(c.strategy) ? "priority" : "round_robin",
                 })}
               />
             ))}
@@ -525,7 +534,7 @@ function ComboCard({ chain: c, providers, onEdit, onDelete, onToggleRR }: {
             <div className="flex flex-wrap items-center gap-2">
               <Layers className="h-4 w-4 shrink-0 text-accent-500" />
               <span className="font-mono text-sm font-semibold">chain:{c.name}</span>
-              <Badge tone="accent">{c.strategy === "round_robin" ? "round-robin" : c.strategy}</Badge>
+              <Badge tone="accent">{displayStrategy(c.strategy)}</Badge>
               <span className="text-xs text-[var(--text-muted)]">{models.length} model{models.length !== 1 ? "s" : ""}</span>
               {hasFallback && (
                 <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
@@ -584,7 +593,7 @@ function ComboCard({ chain: c, providers, onEdit, onDelete, onToggleRR }: {
             </button>
             <button onClick={onToggleRR}
               className={`flex h-7 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium transition-colors ${
-                c.strategy === "round_robin"
+                isRoundRobinStrategy(c.strategy)
                   ? "border-accent-500/40 bg-accent-500/10 text-accent-600 dark:text-accent-400"
                   : "border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--bg-subtle)]"
               }`}
@@ -631,7 +640,7 @@ function ComboModal({ chain, providers, onClose }: {
   const isEdit = !!chain;
 
   const [name, setName] = useState(chain?.name ?? "");
-  const [strategy, setStrategy] = useState(chain?.strategy ?? "priority");
+  const [strategy, setStrategy] = useState(normalizeChainStrategy(chain?.strategy ?? "priority"));
   const [steps, setSteps] = useState<DraftStep[]>(
     chain?.steps.map((s) => ({ provider: s.provider, model: s.model })) ?? [{ provider: "", model: "" }]
   );

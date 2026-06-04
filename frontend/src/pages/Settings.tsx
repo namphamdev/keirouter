@@ -33,6 +33,9 @@ const terseHints: Record<string, string> = {
   aggressive: "Bare technical minimum.",
 };
 
+const isRoundRobin = (strategy: string) =>
+  strategy === "round-robin" || strategy === "round_robin";
+
 export function SettingsPage() {
   const qc = useQueryClient();
   const toast = useToast();
@@ -182,19 +185,19 @@ function RoutingStrategy({
       <div className="divide-y divide-[var(--border)] border-t border-[var(--border)]">
         <div className="flex items-center justify-between gap-4 px-6 py-4">
           <div>
-            <p className="text-sm font-medium">Round Robin</p>
-            <p className="mt-0.5 text-xs text-[var(--text-muted)]">Cycle through accounts to distribute load</p>
+            <p className="text-sm font-medium">Provider group round robin</p>
+            <p className="mt-0.5 text-xs text-[var(--text-muted)]">Cycle through accounts in the same provider/model group</p>
           </div>
           <Toggle
-            checked={local.routing_strategy === "round-robin"}
-            onChange={() => update({ routing_strategy: local.routing_strategy === "round-robin" ? "fill-first" : "round-robin" })}
+            checked={isRoundRobin(local.routing_strategy)}
+            onChange={() => update({ routing_strategy: isRoundRobin(local.routing_strategy) ? "fill-first" : "round-robin" })}
           />
         </div>
 
-        {local.routing_strategy === "round-robin" && (
+        {isRoundRobin(local.routing_strategy) && (
           <div className="flex items-center justify-between gap-4 px-6 py-4">
             <div>
-              <p className="text-sm font-medium">Sticky Limit</p>
+              <p className="text-sm font-medium">Provider sticky limit</p>
               <p className="mt-0.5 text-xs text-[var(--text-muted)]">Calls per account before switching</p>
             </div>
             <Input
@@ -210,19 +213,19 @@ function RoutingStrategy({
 
         <div className="flex items-center justify-between gap-4 px-6 py-4">
           <div>
-            <p className="text-sm font-medium">Combo Round Robin</p>
+            <p className="text-sm font-medium">Combo round robin</p>
             <p className="mt-0.5 text-xs text-[var(--text-muted)]">Cycle through providers in combos instead of always starting with first</p>
           </div>
           <Toggle
-            checked={local.combo_strategy === "round-robin"}
-            onChange={() => update({ combo_strategy: local.combo_strategy === "round-robin" ? "fallback" : "round-robin" })}
+            checked={isRoundRobin(local.combo_strategy)}
+            onChange={() => update({ combo_strategy: isRoundRobin(local.combo_strategy) ? "fallback" : "round-robin" })}
           />
         </div>
 
-        {local.combo_strategy === "round-robin" && (
+        {isRoundRobin(local.combo_strategy) && (
           <div className="flex items-center justify-between gap-4 px-6 py-4">
             <div>
-              <p className="text-sm font-medium">Combo Sticky Limit</p>
+              <p className="text-sm font-medium">Combo sticky limit</p>
               <p className="mt-0.5 text-xs text-[var(--text-muted)]">Calls per combo model before switching</p>
             </div>
             <Input
@@ -238,10 +241,10 @@ function RoutingStrategy({
 
         <div className="px-6 py-3">
           <p className="text-xs text-[var(--text-muted)] italic">
-            {local.routing_strategy === "round-robin"
+            {isRoundRobin(local.routing_strategy)
               ? `Distributing requests across all available accounts with ${local.sticky_limit || 3} calls per account.`
               : "Using accounts in priority order (Fill First)."}
-            {local.combo_strategy === "round-robin"
+            {isRoundRobin(local.combo_strategy)
               ? ` Combos rotate after ${local.combo_sticky_limit || 1} call${(local.combo_sticky_limit || 1) === 1 ? "" : "s"} per model.`
               : " Combos always start with their first model."}
           </p>

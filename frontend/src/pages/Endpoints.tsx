@@ -9,16 +9,15 @@ import {
   ToggleLeft,
   ToggleRight,
   Loader2,
-  WifiOff,
   ArrowUpRight,
 } from "lucide-react";
 import {
   api,
-  type APIKey,
   type CreatedKey,
   type TailscaleEnableResult,
 } from "../lib/api";
 import { PageHeader } from "../components/Layout";
+import { formatTokenLimit, FormattedTokenInput, ModelMultiSelect } from "../components/ModelSelect";
 import {
   Card,
   CardHeader,
@@ -635,7 +634,7 @@ function APIKeys() {
   const [budgetPeriod, setBudgetPeriod] = useState("monthly");
   const [budgetAlertPct, setBudgetAlertPct] = useState(80);
   const [budgetHardCutoff, setBudgetHardCutoff] = useState(true);
-  const [allowedModels, setAllowedModels] = useState("");
+  const [allowedModels, setAllowedModels] = useState<string[]>([]);
   const [created, setCreated] = useState<CreatedKey | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -646,7 +645,7 @@ function APIKeys() {
     setBudgetPeriod("monthly");
     setBudgetAlertPct(80);
     setBudgetHardCutoff(true);
-    setAllowedModels("");
+    setAllowedModels([]);
     setCreated(null);
     setCopied(false);
     setStep(1);
@@ -662,13 +661,12 @@ function APIKeys() {
     mutationFn: () => {
       const hasLimit = parseFloat(budgetLimit) > 0;
       const hasTokenLimit = parseInt(budgetLimitTokens) > 0;
-      const models = allowedModels.split(",").map((s) => s.trim()).filter(Boolean);
-      const opts = hasLimit || hasTokenLimit || models.length > 0
+      const opts = hasLimit || hasTokenLimit || allowedModels.length > 0
         ? {
             ...(hasLimit ? { budget_limit_usd: parseFloat(budgetLimit) } : {}),
             ...(hasTokenLimit ? { budget_limit_tokens: parseInt(budgetLimitTokens) } : {}),
             ...(hasLimit || hasTokenLimit ? { budget_period: budgetPeriod, budget_alert_pct: budgetAlertPct, budget_hard_cutoff: budgetHardCutoff } : {}),
-            ...(models.length > 0 ? { allowed_models: models } : {}),
+            ...(allowedModels.length > 0 ? { allowed_models: allowedModels } : {}),
           }
         : undefined;
       return api.createKey(name, opts);
@@ -742,11 +740,12 @@ function APIKeys() {
             )}
             <div className="flex gap-3">
               <div className="flex-1"><Field label="Limit (USD)"><Input type="number" min="0" step="0.01" value={budgetLimit} onChange={(e) => setBudgetLimit(e.target.value)} placeholder="50.00" /></Field></div>
-              <div className="flex-1"><Field label="Limit (Tokens)"><Input type="number" min="0" step="1000" value={budgetLimitTokens} onChange={(e) => setBudgetLimitTokens(e.target.value)} placeholder="100000000" /></Field></div>
+              <div className="flex-1"><Field label="Limit (Tokens)"><FormattedTokenInput value={budgetLimitTokens} onChange={setBudgetLimitTokens} placeholder="100000000" /></Field></div>
               <div className="w-36"><Field label="Period"><Select value={budgetPeriod} onChange={(e) => setBudgetPeriod(e.target.value)}>{budgetPeriods.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}</Select></Field></div>
             </div>
-            <Field label="Allowed models (comma-separated, supports * wildcard)">
-              <Input value={allowedModels} onChange={(e) => setAllowedModels(e.target.value)} placeholder="claude-sonnet-4-20250514, gpt-4o, claude-*" />
+            <Field label="Allowed models">
+              <ModelMultiSelect value={allowedModels} onChange={setAllowedModels} />
+              <p className="mt-1 text-[10px] text-[var(--text-muted)]">Select models or add custom patterns with * wildcard (e.g. claude-*)</p>
             </Field>
             <div className="flex items-end gap-6">
               <div className="w-40"><Field label="Alert threshold (%)"><Input type="number" min="1" max="100" value={budgetAlertPct} onChange={(e) => setBudgetAlertPct(parseInt(e.target.value) || 80)} /></Field></div>
@@ -778,7 +777,7 @@ function APIKeys() {
                 <p className="mt-0.5 text-sm">
                   {created.budget.limit_micros > 0 && `$${(created.budget.limit_micros / 1_000_000).toFixed(2)}`}
                   {created.budget.limit_micros > 0 && created.budget.limit_tokens > 0 && " + "}
-                  {created.budget.limit_tokens > 0 && `${created.budget.limit_tokens >= 1_000_000 ? `${(created.budget.limit_tokens / 1_000_000).toFixed(0)}M` : created.budget.limit_tokens} tokens`}
+                  {created.budget.limit_tokens > 0 && `${formatTokenLimit(String(created.budget.limit_tokens))} tokens`}
                   {` / ${created.budget.period}`}
                   {created.budget.hard_cutoff ? " (hard cutoff)" : ""}
                 </p>

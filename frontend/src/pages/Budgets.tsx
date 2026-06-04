@@ -16,6 +16,7 @@ import {
   EmptyState,
   ErrorBanner,
   Toggle,
+  Modal,
 } from "../components/ui";
 
 const periods = [
@@ -43,6 +44,44 @@ function progressColor(pct: number, alertPct: number): string {
   return "bg-emerald-500";
 }
 
+// Format number with thousand separators: 1000000 → "1.000.000"
+function formatTokenLimit(value: string): string {
+  if (!value) return "";
+  const n = parseInt(value.replace(/\D/g, ""), 10);
+  if (isNaN(n)) return "";
+  return n.toLocaleString("id-ID");
+}
+
+/* ── Formatted Token Input ─────────────────────────────────────────── */
+
+function FormattedTokenInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  const [focused, setFocused] = useState(false);
+  const formatted = formatTokenLimit(value);
+
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      value={focused ? value : formatted}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      onChange={(e) => {
+        const raw = e.target.value.replace(/[^\d]/g, "");
+        onChange(raw);
+      }}
+      placeholder={placeholder ? formatTokenLimit(placeholder) : undefined}
+      className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 text-sm placeholder:text-[var(--text-muted)] focus:border-accent-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/40"
+    />
+  );
+}
 
 export function BudgetsPage() {
   const qc = useQueryClient();
@@ -73,6 +112,7 @@ export function BudgetsPage() {
   });
 
   const budgets = status.data?.budgets ?? [];
+  const editingBudget = budgets.find((b) => b.id === editingId);
 
   return (
     <>
@@ -81,7 +121,7 @@ export function BudgetsPage() {
         icon={Wallet}
         description="Hard spend caps per key or tenant. Requests are auto-blocked when a budget is exhausted."
         action={
-          <Button onClick={() => setShowCreate((v) => !v)}>
+          <Button onClick={() => setShowCreate(true)}>
             <Plus className="h-4 w-4" />
             New budget
           </Button>
@@ -141,21 +181,33 @@ export function BudgetsPage() {
         </Card>
       )}
 
-      {/* ── Create form ────────────────────────────────────────── */}
-      {showCreate && (
+      {/* ── Create Modal ────────────────────────────────────────── */}
+      <Modal
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+        title="Create budget"
+        subtitle="Set a spending cap for a scope and period."
+      >
         <CreateBudgetForm
           keys={keys.data?.keys ?? []}
           onClose={() => setShowCreate(false)}
         />
-      )}
+      </Modal>
 
-      {/* ── Edit form ──────────────────────────────────────────── */}
-      {editingId && budgets.find((b) => b.id === editingId) && (
-        <EditBudgetForm
-          budget={budgets.find((b) => b.id === editingId)!}
-          onClose={() => setEditingId(null)}
-        />
-      )}
+      {/* ── Edit Modal ──────────────────────────────────────────── */}
+      <Modal
+        open={!!editingId}
+        onClose={() => setEditingId(null)}
+        title="Edit budget"
+        subtitle={editingBudget ? `Editing ${editingBudget.scope_name} ${editingBudget.period} budget` : undefined}
+      >
+        {editingBudget && (
+          <EditBudgetForm
+            budget={editingBudget}
+            onClose={() => setEditingId(null)}
+          />
+        )}
+      </Modal>
 
       {/* ── Budget list ────────────────────────────────────────── */}
       <Card>
@@ -360,118 +412,112 @@ function CreateBudgetForm({ keys, onClose }: { keys: APIKey[]; onClose: () => vo
   });
 
   return (
-    <Card className="mb-6">
-      <SectionHeader title="Create budget" description="Set a spending cap for a scope and period." icon={Plus} />
-      <form
-        className="space-y-4 px-6 pb-6"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (parseFloat(limit) > 0 || parseInt(limitTokens) > 0) create.mutate();
-        }}
-      >
-        {/* Scope selector */}
-        <div className="flex gap-3">
-          <div className="w-44">
-            <Field label="Scope">
-              <Select
-                value={scopeKind}
-                onChange={(e) => {
-                  setScopeKind(e.target.value);
-                  setScopeId("");
-                }}
-              >
-                <option value="tenant">Tenant (global)</option>
-                <option value="api_key">API Key</option>
-              </Select>
-            </Field>
-          </div>
-          {scopeKind === "api_key" && (
-            <div className="flex-1">
-              <Field label="API Key">
-                <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
-                  <option value="">Select a key…</option>
-                  {keys.map((k) => (
-                    <option key={k.id} value={k.id}>
-                      {k.name} ({k.display})
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            </div>
-          )}
+    <form
+      className="space-y-4 px-6 py-5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (parseFloat(limit) > 0 || parseInt(limitTokens) > 0) create.mutate();
+      }}
+    >
+      {/* Scope selector */}
+      <div className="flex gap-3">
+        <div className="w-44">
+          <Field label="Scope">
+            <Select
+              value={scopeKind}
+              onChange={(e) => {
+                setScopeKind(e.target.value);
+                setScopeId("");
+              }}
+            >
+              <option value="tenant">Tenant (global)</option>
+              <option value="api_key">API Key</option>
+            </Select>
+          </Field>
         </div>
-
-        {/* Limit (USD) + Limit (Tokens) + Period */}
-        <div className="flex gap-3">
-          <div className="w-40">
-            <Field label="Limit (USD)">
-              <Input
-                type="number"
-                min="0"
-                step="0.01"
-                value={limit}
-                onChange={(e) => setLimit(e.target.value)}
-                placeholder="50.00"
-              />
-            </Field>
-          </div>
-          <div className="w-44">
-            <Field label="Limit (Tokens)">
-              <Input
-                type="number"
-                min="0"
-                step="1000"
-                value={limitTokens}
-                onChange={(e) => setLimitTokens(e.target.value)}
-                placeholder="100000000"
-              />
-            </Field>
-          </div>
-          <div className="w-40">
-            <Field label="Period">
-              <Select value={period} onChange={(e) => setPeriod(e.target.value)}>
-                {periods.map((p) => (
-                  <option key={p.value} value={p.value}>
-                    {p.label}
+        {scopeKind === "api_key" && (
+          <div className="flex-1">
+            <Field label="API Key">
+              <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
+                <option value="">Select a key…</option>
+                {keys.map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.name} ({k.display})
                   </option>
                 ))}
               </Select>
             </Field>
           </div>
-        </div>
+        )}
+      </div>
 
-        {/* Alert + Cutoff */}
-        <div className="flex items-end gap-6">
-          <div className="w-40">
-            <Field label="Alert threshold (%)">
-              <Input
-                type="number"
-                min="1"
-                max="100"
-                value={alertPct}
-                onChange={(e) => setAlertPct(parseInt(e.target.value) || 80)}
-              />
-            </Field>
-          </div>
-          <div className="flex items-center gap-2 pb-0.5">
-            <Toggle checked={hardCutoff} onChange={setHardCutoff} />
-            <span className="text-sm">Hard cutoff (block when exhausted)</span>
-          </div>
+      {/* Limit (USD) + Limit (Tokens) + Period */}
+      <div className="flex gap-3">
+        <div className="flex-1">
+          <Field label="Limit (USD)">
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              value={limit}
+              onChange={(e) => setLimit(e.target.value)}
+              placeholder="50.00"
+            />
+          </Field>
         </div>
-
-        {error && <ErrorBanner message={error} />}
-
-        <div className="flex gap-2 pt-1">
-          <Button type="submit" disabled={create.isPending || (parseFloat(limit) <= 0 && parseInt(limitTokens) <= 0) || (scopeKind === "api_key" && !scopeId)}>
-            <Plus className="h-4 w-4" />
-            {create.isPending ? "Creating…" : "Create budget"}
-          </Button>
-          <Button variant="ghost" type="button" onClick={onClose}>
-            Cancel
-          </Button>
+        <div className="flex-1">
+          <Field label="Limit (Tokens)">
+            <FormattedTokenInput
+              value={limitTokens}
+              onChange={setLimitTokens}
+              placeholder="100000000"
+            />
+          </Field>
         </div>
-      </form>
-    </Card>
+        <div className="w-36">
+          <Field label="Period">
+            <Select value={period} onChange={(e) => setPeriod(e.target.value)}>
+              {periods.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+      </div>
+
+      {/* Alert + Cutoff */}
+      <div className="flex items-end gap-6">
+        <div className="w-40">
+          <Field label="Alert threshold (%)">
+            <Input
+              type="number"
+              min="1"
+              max="100"
+              value={alertPct}
+              onChange={(e) => setAlertPct(parseInt(e.target.value) || 80)}
+            />
+          </Field>
+        </div>
+        <div className="flex items-center gap-2 pb-0.5">
+          <Toggle checked={hardCutoff} onChange={setHardCutoff} />
+          <span className="text-sm">Hard cutoff (block when exhausted)</span>
+        </div>
+      </div>
+
+      {error && <ErrorBanner message={error} />}
+
+      <div className="flex gap-2 pt-2 border-t border-[var(--border)]">
+        <div className="flex-1" />
+        <Button variant="ghost" type="button" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={create.isPending || (parseFloat(limit) <= 0 && parseInt(limitTokens) <= 0) || (scopeKind === "api_key" && !scopeId)}>
+          {create.isPending ? "Creating…" : "Create budget"}
+        </Button>
+      </div>
+    </form>
   );
 }
 
@@ -516,86 +562,79 @@ function EditBudgetForm({ budget, onClose }: { budget: BudgetStatus; onClose: ()
   });
 
   return (
-    <Card className="mb-6">
-      <SectionHeader
-        title="Edit budget"
-        description={`Editing ${budget.scope_name} ${budget.period} budget`}
-        icon={Pencil}
-      />
-      <form
-        className="space-y-4 px-6 pb-6"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (parseFloat(limit) > 0) update.mutate();
-        }}
-      >
-        <div className="flex gap-3">
-          <div className="w-40">
-            <Field label="Limit (USD)">
-              <Input
-                type="number"
-                min="0"
-                step="0.01"
-                value={limit}
-                onChange={(e) => setLimit(e.target.value)}
-                placeholder="0 = no limit"
-              />
-            </Field>
-          </div>
-          <div className="w-44">
-            <Field label="Limit (Tokens)">
-              <Input
-                type="number"
-                min="0"
-                step="1000"
-                value={limitTokens}
-                onChange={(e) => setLimitTokens(e.target.value)}
-                placeholder="0 = no limit"
-              />
-            </Field>
-          </div>
-          <div className="w-40">
-            <Field label="Period">
-              <Select value={period} onChange={(e) => setPeriod(e.target.value)}>
-                {periods.map((p) => (
-                  <option key={p.value} value={p.value}>
-                    {p.label}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          </div>
+    <form
+      className="space-y-4 px-6 py-5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (parseFloat(limit) > 0 || parseInt(limitTokens) > 0) update.mutate();
+      }}
+    >
+      {/* Limit (USD) + Limit (Tokens) + Period */}
+      <div className="flex gap-3">
+        <div className="flex-1">
+          <Field label="Limit (USD)">
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              value={limit}
+              onChange={(e) => setLimit(e.target.value)}
+              placeholder="0 = no limit"
+            />
+          </Field>
         </div>
-
-        <div className="flex items-end gap-6">
-          <div className="w-40">
-            <Field label="Alert threshold (%)">
-              <Input
-                type="number"
-                min="1"
-                max="100"
-                value={alertPct}
-                onChange={(e) => setAlertPct(parseInt(e.target.value) || 80)}
-              />
-            </Field>
-          </div>
-          <div className="flex items-center gap-2 pb-0.5">
-            <Toggle checked={hardCutoff} onChange={setHardCutoff} />
-            <span className="text-sm">Hard cutoff</span>
-          </div>
+        <div className="flex-1">
+          <Field label="Limit (Tokens)">
+            <FormattedTokenInput
+              value={limitTokens}
+              onChange={setLimitTokens}
+              placeholder="0 = no limit"
+            />
+          </Field>
         </div>
-
-        {error && <ErrorBanner message={error} />}
-
-        <div className="flex gap-2 pt-1">
-          <Button type="submit" disabled={update.isPending || (parseFloat(limit) <= 0 && parseInt(limitTokens) <= 0)}>
-            {update.isPending ? "Saving…" : "Save changes"}
-          </Button>
-          <Button variant="ghost" type="button" onClick={onClose}>
-            Cancel
-          </Button>
+        <div className="w-36">
+          <Field label="Period">
+            <Select value={period} onChange={(e) => setPeriod(e.target.value)}>
+              {periods.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
         </div>
-      </form>
-    </Card>
+      </div>
+
+      <div className="flex items-end gap-6">
+        <div className="w-40">
+          <Field label="Alert threshold (%)">
+            <Input
+              type="number"
+              min="1"
+              max="100"
+              value={alertPct}
+              onChange={(e) => setAlertPct(parseInt(e.target.value) || 80)}
+            />
+          </Field>
+        </div>
+        <div className="flex items-center gap-2 pb-0.5">
+          <Toggle checked={hardCutoff} onChange={setHardCutoff} />
+          <span className="text-sm">Hard cutoff</span>
+        </div>
+      </div>
+
+      {error && <ErrorBanner message={error} />}
+
+      <div className="flex gap-2 pt-2 border-t border-[var(--border)]">
+        <div className="flex-1" />
+        <Button variant="ghost" type="button" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={update.isPending || (parseFloat(limit) <= 0 && parseInt(limitTokens) <= 0)}>
+          {update.isPending ? "Saving…" : "Save changes"}
+        </Button>
+      </div>
+    </form>
   );
 }
+

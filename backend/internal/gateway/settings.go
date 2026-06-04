@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/mydisha/keirouter/backend/internal/caveman"
+	"github.com/mydisha/keirouter/backend/internal/dispatch"
 	"github.com/mydisha/keirouter/backend/internal/slimmer"
 	"github.com/mydisha/keirouter/backend/internal/terse"
 )
@@ -31,10 +33,10 @@ type EndpointSettings struct {
 	TerseLevel   string `json:"terse_level"`
 
 	// Routing strategy fields (mirrors 9router).
-	RoutingStrategy     string `json:"routing_strategy"`      // "fill-first" | "round-robin"
-	StickyLimit         int    `json:"sticky_limit"`          // calls per account before switching
-	ComboStrategy       string `json:"combo_strategy"`        // "fallback" | "round-robin"
-	ComboStickyLimit    int    `json:"combo_sticky_limit"`    // calls per combo model before switching
+	RoutingStrategy  string `json:"routing_strategy"`   // "fill-first" | "round-robin"
+	StickyLimit      int    `json:"sticky_limit"`       // calls per account before switching
+	ComboStrategy    string `json:"combo_strategy"`     // "fallback" | "round-robin"
+	ComboStickyLimit int    `json:"combo_sticky_limit"` // calls per combo model before switching
 
 	// Outbound proxy settings.
 	OutboundProxyEnabled bool   `json:"outbound_proxy_enabled"`
@@ -87,11 +89,19 @@ func (s *Server) loadEndpointSettings(ctx context.Context) EndpointSettings {
 	}
 	if es.RoutingStrategy == "" {
 		es.RoutingStrategy = def.RoutingStrategy
+	} else if normalized, ok := normalizeAccountRoutingStrategy(es.RoutingStrategy); ok {
+		es.RoutingStrategy = normalized
+	} else {
+		es.RoutingStrategy = def.RoutingStrategy
 	}
 	if es.StickyLimit == 0 {
 		es.StickyLimit = def.StickyLimit
 	}
 	if es.ComboStrategy == "" {
+		es.ComboStrategy = def.ComboStrategy
+	} else if normalized, ok := normalizeComboRoutingStrategy(es.ComboStrategy); ok {
+		es.ComboStrategy = normalized
+	} else {
 		es.ComboStrategy = def.ComboStrategy
 	}
 	if es.ComboStickyLimit == 0 {
@@ -173,15 +183,33 @@ func (s *Server) adminUpdateEndpointSettings(w http.ResponseWriter, r *http.Requ
 		current.TerseLevel = *patch.TerseLevel
 	}
 	if patch.RoutingStrategy != nil {
-		current.RoutingStrategy = *patch.RoutingStrategy
+		normalized, ok := normalizeAccountRoutingStrategy(*patch.RoutingStrategy)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "routing_strategy must be fill-first or round-robin")
+			return
+		}
+		current.RoutingStrategy = normalized
 	}
 	if patch.StickyLimit != nil {
+		if *patch.StickyLimit < 1 {
+			writeError(w, http.StatusBadRequest, "sticky_limit must be at least 1")
+			return
+		}
 		current.StickyLimit = *patch.StickyLimit
 	}
 	if patch.ComboStrategy != nil {
-		current.ComboStrategy = *patch.ComboStrategy
+		normalized, ok := normalizeComboRoutingStrategy(*patch.ComboStrategy)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "combo_strategy must be fallback or round-robin")
+			return
+		}
+		current.ComboStrategy = normalized
 	}
 	if patch.ComboStickyLimit != nil {
+		if *patch.ComboStickyLimit < 1 {
+			writeError(w, http.StatusBadRequest, "combo_sticky_limit must be at least 1")
+			return
+		}
 		current.ComboStickyLimit = *patch.ComboStickyLimit
 	}
 	if patch.OutboundProxyEnabled != nil {
@@ -220,6 +248,45 @@ func (s *Server) adminUpdateEndpointSettings(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, current)
+}
+
+func (s *Server) endpointPlanOptions(ctx context.Context, opts dispatch.PlanOptions) dispatch.PlanOptions {
+	es := s.loadEndpointSettings(ctx)
+	if es.RoutingStrategy == string(dispatch.StrategyRoundRobin) {
+		opts.AccountStrategy = dispatch.StrategyRoundRobin
+		opts.AccountStickyLimit = es.StickyLimit
+	}
+	if opts.Strategy == dispatch.StrategyRoundRobin || es.ComboStrategy == string(dispatch.StrategyRoundRobin) {
+		opts.Strategy = dispatch.StrategyRoundRobin
+		opts.StickyLimit = es.ComboStickyLimit
+	}
+	return opts
+}
+
+func normalizeAccountRoutingStrategy(raw string) (string, bool) {
+	switch normalizeStrategyToken(raw) {
+	case "", "fill-first", "fill_first", "priority", "fallback":
+		return "fill-first", true
+	case "round-robin", "round_robin", "roundrobin":
+		return string(dispatch.StrategyRoundRobin), true
+	default:
+		return "", false
+	}
+}
+
+func normalizeComboRoutingStrategy(raw string) (string, bool) {
+	switch normalizeStrategyToken(raw) {
+	case "", "fallback", "priority", "fill-first", "fill_first":
+		return string(dispatch.StrategyFallback), true
+	case "round-robin", "round_robin", "roundrobin":
+		return string(dispatch.StrategyRoundRobin), true
+	default:
+		return "", false
+	}
+}
+
+func normalizeStrategyToken(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
 }
 
 // ---- access settings --------------------------------------------------------

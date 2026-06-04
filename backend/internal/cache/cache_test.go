@@ -68,7 +68,7 @@ func TestCache_TTLExpiry(t *testing.T) {
 }
 
 func TestMemoryStore_Eviction(t *testing.T) {
-	store := NewMemoryStore(2)
+	store := NewMemoryStore(2, 0)
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
 		require.NoError(t, store.Put(ctx, Entry{Vector: []float32{float32(i)}, StoredAt: time.Now().Add(time.Duration(i) * time.Millisecond)}))

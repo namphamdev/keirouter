@@ -88,8 +88,10 @@ type RoutingSource interface {
 	SetModelCooldown(ctx context.Context, accountID, model string, until time.Time) error
 	ClearModelCooldown(ctx context.Context, accountID, model string) error
 	IsModelCooldownActive(ctx context.Context, accountID, model string) (bool, error)
-	GetChainRotation(ctx context.Context, chainID string) (int, error)
-	SetChainRotation(ctx context.Context, chainID string, index int) error
+	GetChainRotationState(ctx context.Context, chainID string) (store.ChainRotation, error)
+	SetChainRotationState(ctx context.Context, state store.ChainRotation) error
+	GetTargetRotationState(ctx context.Context, scopeKey string) (store.TargetRotation, error)
+	SetTargetRotationState(ctx context.Context, state store.TargetRotation) error
 }
 
 // Dispatcher walks fallback chains, yielding resolved attempts.
@@ -136,6 +138,13 @@ type PlanOptions struct {
 	// StickyLimit is the number of consecutive requests per target before
 	// round-robin advances. Zero defaults to DefaultStickyLimit.
 	StickyLimit int
+	// AccountStrategy controls how accounts inside one provider/model target
+	// are ordered. "fallback" keeps priority order; "round-robin" rotates the
+	// starting account while preserving cooldown/fallback behavior.
+	AccountStrategy Strategy
+	// AccountStickyLimit is the number of consecutive requests per account
+	// before account round-robin advances. Zero defaults to DefaultStickyLimit.
+	AccountStickyLimit int
 }
 
 // Plan resolves the ordered list of attempts for a chain of targets, scoped to
@@ -177,6 +186,7 @@ func (d *Dispatcher) PlanWith(ctx context.Context, tenantID string, targets []Ta
 			lastReason = fmt.Sprintf("no accounts configured for provider %q", target.Provider)
 			continue
 		}
+		accs = d.applyAccountRotation(ctx, tenantID, target, accs, opts)
 
 		for _, acc := range accs {
 			// Account-level cooldown (global cooldown from NoteFailure).
@@ -316,27 +326,81 @@ func (d *Dispatcher) applyRotation(ctx context.Context, targets []Target, opts P
 		return targets
 	}
 
-	cursor, _ := d.routing.GetChainRotation(ctx, opts.ChainID)
 	sticky := opts.StickyLimit
 	if sticky <= 0 {
 		sticky = DefaultStickyLimit
 	}
+	state, _ := d.routing.GetChainRotationState(ctx, opts.ChainID)
+	cursor, nextCursor, nextHitCount := advanceRotationState(len(targets), state.LastIndex, state.HitCount, sticky)
 
-	// Normalize cursor to valid range.
-	cursor = cursor % len(targets)
-
-	// Rotate targets so cursor index comes first.
 	rotated := make([]Target, len(targets))
 	for i := range targets {
 		rotated[i] = targets[(cursor+i)%len(targets)]
 	}
 
-	// Advance cursor for the next call. We advance unconditionally per call
-	// (sticky limit is managed at a higher level if needed).
-	nextCursor := (cursor + 1) % len(targets)
-	_ = d.routing.SetChainRotation(ctx, opts.ChainID, nextCursor)
+	_ = d.routing.SetChainRotationState(ctx, store.ChainRotation{
+		ChainID:   opts.ChainID,
+		LastIndex: nextCursor,
+		HitCount:  nextHitCount,
+	})
 
 	return rotated
+}
+
+// applyAccountRotation reorders accounts within one target according to the
+// account round-robin strategy. The persisted key is tenant/provider/model so
+// direct model routes and combo steps share fair account distribution.
+func (d *Dispatcher) applyAccountRotation(ctx context.Context, tenantID string, target Target, accounts []store.Account, opts PlanOptions) []store.Account {
+	if opts.AccountStrategy != StrategyRoundRobin || len(accounts) <= 1 || d.routing == nil {
+		return accounts
+	}
+
+	sticky := opts.AccountStickyLimit
+	if sticky <= 0 {
+		sticky = DefaultStickyLimit
+	}
+	scopeKey := accountRotationKey(tenantID, target)
+	state, _ := d.routing.GetTargetRotationState(ctx, scopeKey)
+	cursor, nextCursor, nextHitCount := advanceRotationState(len(accounts), state.LastIndex, state.HitCount, sticky)
+
+	rotated := make([]store.Account, len(accounts))
+	for i := range accounts {
+		rotated[i] = accounts[(cursor+i)%len(accounts)]
+	}
+
+	_ = d.routing.SetTargetRotationState(ctx, store.TargetRotation{
+		ScopeKey:  scopeKey,
+		LastIndex: nextCursor,
+		HitCount:  nextHitCount,
+	})
+	return rotated
+}
+
+func accountRotationKey(tenantID string, target Target) string {
+	return tenantID + "\x00" + target.Provider + "\x00" + target.Model
+}
+
+// advanceRotationState returns the cursor to use for this request, plus the
+// cursor/hit-count state to persist for the next request. lastIndex is the next
+// starting index.
+func advanceRotationState(length, lastIndex, hitCount, stickyLimit int) (cursor int, nextCursor int, nextHitCount int) {
+	if length <= 0 {
+		return 0, 0, 0
+	}
+	if stickyLimit <= 0 {
+		stickyLimit = DefaultStickyLimit
+	}
+	cursor = lastIndex % length
+	if cursor < 0 {
+		cursor += length
+	}
+	nextCursor = cursor
+	nextHitCount = hitCount + 1
+	if nextHitCount >= stickyLimit {
+		nextCursor = (cursor + 1) % length
+		nextHitCount = 0
+	}
+	return cursor, nextCursor, nextHitCount
 }
 
 // TargetsFromChain flattens a stored chain into ordered targets.

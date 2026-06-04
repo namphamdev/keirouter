@@ -114,7 +114,7 @@ type UsageRecord struct {
 	CostMicros       int64
 	CacheHit         bool
 	LatencyMS        int
-	TTFTMS           int // time-to-first-token in ms (0 for non-streaming or cache hits)
+	TTFTMS           int    // time-to-first-token in ms (0 for non-streaming or cache hits)
 	SlimBytesSaved   int    // bytes removed by RTK slimmer (input-side compression)
 	SlimTokensSaved  int    // estimated tokens saved by RTK (bytes/4)
 	SlimRules        string // comma-separated rule names that fired (e.g. "git-diff,grep")
@@ -139,7 +139,7 @@ type Budget struct {
 	ScopeKind   BudgetScope
 	ScopeID     string
 	LimitMicros int64
-	LimitTokens int64  // 0 = no token limit
+	LimitTokens int64 // 0 = no token limit
 	Period      string
 	AlertPct    int
 	HardCutoff  bool
@@ -170,11 +170,11 @@ type APIKeyModelAccess struct {
 // dispatch layer skips this account for that model but still allows other
 // models on the same account.
 type ModelCooldown struct {
-	ID             string
-	AccountID      string
-	Model          string
-	CooldownUntil  time.Time
-	CreatedAt      time.Time
+	ID            string
+	AccountID     string
+	Model         string
+	CooldownUntil time.Time
+	CreatedAt     time.Time
 }
 
 // ChainRotation persists the round-robin cursor for a routing chain so
@@ -182,5 +182,16 @@ type ModelCooldown struct {
 type ChainRotation struct {
 	ChainID   string
 	LastIndex int
+	HitCount  int
+	UpdatedAt time.Time
+}
+
+// TargetRotation persists the round-robin cursor for a provider/model target.
+// It is scoped by an opaque key so callers can include tenant/provider/model
+// without coupling the store schema to routing string parsing.
+type TargetRotation struct {
+	ScopeKey  string
+	LastIndex int
+	HitCount  int
 	UpdatedAt time.Time
 }

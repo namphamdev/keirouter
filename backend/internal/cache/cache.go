@@ -15,7 +15,6 @@ package cache
 import (
 	"context"
 	"math"
-	"sort"
 	"sync"
 	"time"
 
@@ -126,7 +125,7 @@ func (m *MemoryStore) Nearest(_ context.Context, vec []float32) (Entry, float64,
 	if m.count == 0 && len(m.entries) == 0 {
 		return Entry{}, 0, false, nil
 	}
-	
+
 	now := time.Now()
 	var best Entry
 	bestScore := -1.0

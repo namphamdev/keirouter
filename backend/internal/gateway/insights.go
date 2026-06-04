@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/mydisha/keirouter/backend/internal/connectors"
+	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/store"
 	"github.com/mydisha/keirouter/backend/internal/usagehub"
@@ -289,7 +290,7 @@ func (s *Server) adminQuotaUsage(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	out := make([]map[string]any, 0, len(accs))
-	
+
 	for i, a := range accs {
 		u := usageByID[a.ID]
 		status := "active"
@@ -339,7 +340,7 @@ func (s *Server) adminQuotaUsage(w http.ResponseWriter, r *http.Request) {
 		if qs := connectors.GetQuotaSource(a.Provider); qs != nil && !a.Disabled {
 			if creds, err := s.vault.Open(a); err == nil {
 				wg.Add(1)
-				go func(idx int, qs connectors.QuotaSource, creds map[string]string) {
+				go func(idx int, qs connectors.QuotaSource, creds core.Credentials) {
 					defer wg.Done()
 					quotaCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 					quota, qerr := qs.FetchQuota(quotaCtx, creds)
@@ -355,7 +356,7 @@ func (s *Server) adminQuotaUsage(w http.ResponseWriter, r *http.Request) {
 								"reset_at":      q.ResetAt,
 							})
 						}
-						
+
 						mu.Lock()
 						out[idx]["plan_name"] = quota.PlanName
 						out[idx]["message"] = quota.Message

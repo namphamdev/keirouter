@@ -12,8 +12,8 @@ import (
 // resolveResult carries both the targets and the strategy metadata needed
 // by the pipeline to apply round-robin or other rotation strategies.
 type resolveResult struct {
-	Targets    []dispatch.Target
-	PlanOpts   dispatch.PlanOptions
+	Targets  []dispatch.Target
+	PlanOpts dispatch.PlanOptions
 }
 
 // ChainSource resolves a named chain for a tenant.
@@ -83,7 +83,7 @@ func chainResult(ctx context.Context, chains ChainSource, tenantID, name string)
 	if err != nil {
 		return resolveResult{}, err
 	}
-		for _, c := range list {
+	for _, c := range list {
 		if c.Name == name {
 			targets := dispatch.TargetsFromChain(c)
 			if len(targets) == 0 {
@@ -99,8 +99,8 @@ func chainResult(ctx context.Context, chains ChainSource, tenantID, name string)
 			opts := dispatch.PlanOptions{
 				ChainID: c.ID,
 			}
-			switch dispatch.Strategy(c.Strategy) {
-			case dispatch.StrategyRoundRobin:
+			switch normalizeStrategyToken(c.Strategy) {
+			case string(dispatch.StrategyRoundRobin), "round_robin", "roundrobin":
 				opts.Strategy = dispatch.StrategyRoundRobin
 			default:
 				opts.Strategy = dispatch.StrategyFallback

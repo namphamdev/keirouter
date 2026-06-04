@@ -2,10 +2,10 @@
   <img src="keirouter-logo.png" alt="KeiRouter Logo" width="160">
 </p>
 
-<h1 align="center">KeiRouter</h1>
+<h1 align="center">KeiRouter 🚀</h1>
 
 <p align="center">
-  A fast, self-hostable AI gateway.
+  <strong>Your friendly, blazing-fast, self-hostable AI gateway.</strong>
 </p>
 
 <p align="center">
@@ -14,222 +14,107 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
+<p align="center">
+  <img src="assets/keirouter-social-banner.png" alt="KeiRouter Dashboard" width="800">
+</p>
+
 ---
 
-Point your coding tools (Claude Code, Cursor, Codex, Cline, OpenClaw, and any OpenAI/Anthropic-compatible client) at one local endpoint. KeiRouter routes requests across many providers with automatic fallback, token-saving compression, encrypted credential storage, and spend controls.
+Hey there! 👋 Welcome to **KeiRouter**.
 
-Written in Go for a small footprint (single static binary, ~20–30MB RAM idle, instant startup) with a React + Tailwind dashboard.
+If you're using AI coding tools like Claude Code, Cursor, Cline, or literally any app that talks to OpenAI or Anthropic, you know the struggle: juggling API keys, hitting rate limits, and watching your token costs explode.
 
-> **Status:** Active development. See the [Architecture](#architecture) section for what's implemented.
+**KeiRouter fixes that.**
 
-## Why KeiRouter
+You just point all your AI tools to one local endpoint on your machine. KeiRouter acts as your smart middleman—routing requests to the right AI models, automatically falling back if a service goes down, caching repeated questions to save money, and compressing big chunks of text before they even reach the AI!
 
-- **One endpoint, many providers.** Speak OpenAI or Anthropic; KeiRouter
-  translates to whatever the target provider expects.
-- **Never stop coding.** Routing chains fall back across accounts and providers
-  on rate limits, quota exhaustion, or errors — without silently downgrading to
-  a model that lacks a capability your request needs.
-- **Spend less.** The Slimmer compresses bulky tool outputs (diffs, greps, file
-  listings, build logs) before they reach the model. Terse mode trims output
-  tokens. Budgets enforce hard USD caps per key, project, or org.
-- **Secure by default.** Provider secrets are encrypted at rest with envelope
-  encryption (AES-256-GCM). API keys are stored only as argon2id hashes and
-  shown in plaintext exactly once. The dashboard is protected by a password
-  (seeded on first run, changed via onboarding) and HMAC session cookies.
-- **Observable.** Prometheus metrics at `/metrics` cover request volume,
-  latency, tokens, cost, fallbacks, and cache hits.
-- **Caches what repeats.** An optional semantic response cache returns stored
-  answers for repeated prompts at zero cost and instant latency.
+It's built with Go, which means it’s incredibly lightweight (using barely ~20MB of RAM) and starts up instantly. Plus, it comes with a beautiful dashboard to manage everything. ✨
 
-## Quick start
+> **Status:** Active development. See the [Architecture](#-architecture-for-the-curious) section for what's implemented.
 
-Install with curl (requires Go 1.22+, Node.js 20+):
+## 🌟 Why you'll love KeiRouter
 
+- 🔀 **One Endpoint to Rule Them All:** Your apps only need to speak OpenAI or Anthropic. KeiRouter handles translating your requests to whatever provider you actually want to use behind the scenes.
+- 🛡️ **Never Stop Coding:** Hit a rate limit? Provider down? KeiRouter automatically falls back to your backup models so your workflow never gets interrupted.
+- 💸 **Save Serious Cash:** 
+  - **Input Compression:** It shrinks massive logs, code diffs, and file structures before sending them to the LLM. 
+  - **Output Compression:** Tell the AI to speak in "terse mode" to cut out all the yapping and just give you the code.
+- 🔐 **Super Secure:** Your API keys are encrypted with military-grade envelope encryption (AES-256-GCM). We never store plain text keys. Your local dashboard is also protected by a secure password and HMAC session cookies.
+- 📊 **Track Everything:** Wondering where your money is going? The dashboard gives you beautiful charts showing your token usage, costs, and latency.
+- ⚡ **Lightning Fast Caching:** Ask the same question twice? The semantic cache remembers the answer and gives it back to you instantly, for exactly $0.00.
+
+## 🚀 Let's get started!
+
+### 1. Install KeiRouter
+You can install it in a snap using our quick script (make sure you have Go 1.22+ and Node.js 20+):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mydisha/keirouter/main/scripts/install.sh | bash
 ```
 
-Or build manually:
-
-```bash
-git clone https://github.com/mydisha/keirouter.git
-cd keirouter
-make build
-./keirouter
-```
-
-Or with Docker:
-
+*Prefer Docker? We've got you covered:*
 ```bash
 docker compose -f deploy/compose.yaml up -d --build
 ```
 
-On first run, sign in at **http://localhost:20180** with the default password
-`keirouter` — the onboarding flow prompts you to set a new one.
+### 2. Set up your Dashboard
+Once it's running, open your browser and go to **http://localhost:20180**. 
+Log in with the default password: `keirouter` (it will ask you to change this immediately for security).
 
-Create an API key without the dashboard:
-
+You can also create an API key directly from the terminal without the dashboard:
 ```bash
 keirouter -bootstrap   # prints a kr_ key once
 ```
 
-For development with hot reload:
+### 3. Connect your tools
+In your favorite AI tool (like Cursor or Claude Code), set it up like this:
+- **Base URL:** `http://localhost:20180/v1`
+- **API Key:** Use the `kr_` key you generated in the dashboard or via bootstrap
+- **Model:** Type the provider and model (e.g., `openai/gpt-4o`) or the name of a fallback chain you created!
 
+## 🧠 Smart Routing (Chains)
+Instead of just picking one model, you can create a "Chain" in the dashboard. 
+
+For example, a chain named `coding` could try:
+1. `openai/gpt-4o` (First choice)
+2. `deepseek/deepseek-chat` (If GPT-4o fails or hits a rate limit)
+
+Then, in your app, just set the model to `chain:coding` (or just `coding`) and let KeiRouter do the heavy lifting!
+
+## 🔌 What else can it do?
+KeiRouter isn't just for chat! It supports everything:
+- **Image Generation** (`/v1/images/generations`)
+- **Speech-to-Text** (`/v1/audio/transcriptions`)
+- **Text-to-Speech** (`/v1/audio/speech`)
+- **Web Search & Fetching** (`/v1/search`, `/v1/web/fetch`)
+- **Embeddings** (`/v1/embeddings`)
+
+## 🔑 Connect via OAuth (No API Keys needed!)
+Tired of copying API keys? You can connect providers like Claude, GitHub Copilot, Gemini CLI, and more directly from the Connections page using OAuth. Just click, sign in, and KeiRouter handles securely refreshing your tokens in the background!
+
+## 🛠️ Architecture for the curious
+Curious how it works under the hood? Here's the life of a request:
+1. **Gateway:** Receives your HTTP request and parses the AI dialect (OpenAI, Anthropic, Gemini, etc.).
+2. **Pipeline:** Compresses your inputs (Slimmer), injects cost-saving prompts (Terse mode), and checks your budget limits.
+3. **Dispatch:** Picks the best provider account and handles fallbacks.
+4. **Connector & Transform:** Talks to the provider and translates the response back into the format your tool expects.
+5. **Meter:** Logs how many tokens you used so you can view it on the dashboard.
+
+## ⚙️ Configuration
+By default, KeiRouter uses an embedded SQLite database (zero config required!). If you are deploying it for a team, you can use PostgreSQL. Just copy `config.example.yaml` and run with `-config`, or use environment variables like `KEIROUTER_SERVER__PORT=8080`.
+
+## 🔒 Security Notes
+- The admin API (`/api/*`) is restricted to your local machine by default. If you expose it to the internet, put it behind a reverse proxy and set a stable `master_key`!
+- **Don't lose your master key!** It is the root of trust for all your encrypted credentials.
+
+## 🧑‍💻 Development & Contributing
+Want to hack on KeiRouter?
 ```bash
-make dev   # backend on :20180, dashboard on :5180
+make dev   # Runs the backend on :20180 and dashboard on :5180
 ```
+Contributions are always welcome! Check out [CONTRIBUTING.md](CONTRIBUTING.md) to see how you can get involved.
 
-Then add a provider account and a routing chain via the admin API (loopback
-only by default):
+## 🛡️ Security Vulnerabilities
+If you find a security issue, please check [SECURITY.md](SECURITY.md) instead of opening a public issue.
 
-```bash
-# Add an OpenAI account.
-curl -s localhost:20180/api/accounts -d '{
-  "provider": "openai", "label": "personal", "api_key": "sk-..."
-}'
-
-# Create a fallback chain: try GPT-4o, then DeepSeek.
-curl -s localhost:20180/api/chains -d '{
-  "name": "coding",
-  "steps": [
-    {"provider": "openai", "model": "gpt-4o"},
-    {"provider": "deepseek", "model": "deepseek-chat"}
-  ]
-}'
-```
-
-Point your tool at KeiRouter:
-
-```
-Base URL: http://localhost:20180/v1
-API Key:  <your kr_ key from bootstrap>
-Model:    openai/gpt-4o     # direct provider/model
-          chain:coding      # or a named routing chain
-```
-
-## Routing model strings
-
-The `model` field accepts:
-
-- `provider/model` — a single explicit target, e.g. `openai/gpt-4o`.
-- `chain:name` — a named routing chain with ordered fallback steps.
-- `name` — shorthand for a chain named `name`. Chains are also advertised by
-  `GET /v1/models` with `owned_by: "combo"`, so client tools can pick them.
-
-## Capabilities and endpoints
-
-Beyond chat, KeiRouter speaks the full OpenAI-style surface. Each endpoint
-routes by the same `provider/model` or chain string and falls back across
-accounts:
-
-| Capability | Endpoint | Example model |
-|---|---|---|
-| Chat | `POST /v1/chat/completions`, `POST /v1/messages` | `openai/gpt-4o` |
-| Chat (Gemini-native) | `POST /v1beta/models/{model}:generateContent` | path-encoded model |
-| Embeddings | `POST /v1/embeddings` | `openai/text-embedding-3-small` |
-| Image generation | `POST /v1/images/generations` | `openai/gpt-image-1` |
-| Speech-to-text | `POST /v1/audio/transcriptions` | `groq/whisper-large-v3` |
-| Text-to-speech | `POST /v1/audio/speech` | `openai/tts-1` |
-| Web search | `POST /v1/search` | `tavily/tavily-search` |
-| Web fetch | `POST /v1/web/fetch` | `firecrawl/firecrawl-scrape` |
-
-Discover what is available per capability:
-
-- `GET /v1/models` — chains (as combos) plus every catalogued LLM model.
-- `GET /v1/models/{kind}` — models for a service kind (`llm`, `embedding`,
-  `image`, `stt`, `tts`, `search`, `fetch`).
-- `GET /v1/models/info?id=provider/model` — metadata for a single model.
-
-## Token saving
-
-Two complementary layers reduce cost, configurable from the dashboard's Token
-Saving page (or `POST /api/settings/endpoint`):
-
-- **RTK input compression** (on by default) compresses bulky tool-result
-  payloads — diffs, greps, directory listings, build logs — before they reach
-  the model. It is safe by design: a filter that errors or would grow the
-  content is silently skipped.
-- **Caveman output compression** injects a terse "caveman speak" system
-  directive that keeps all technical substance while dropping filler, cutting
-  output tokens. Levels: `lite`, `full`, `ultra`. A separate `terse` mode offers
-  KeiRouter's own concise-output directive as an alternative.
-
-## OAuth provider connections
-
-Subscription/OAuth providers (Claude, Codex, Gemini CLI, GitHub Copilot, Qwen,
-xAI, ...) connect without an API key from the dashboard's Connections page. Two
-flows are supported: authorization-code with PKCE (browser sign-in) and device
-code (enter a code on the provider's verification page). Access tokens are
-sealed with envelope encryption and refreshed automatically before they expire.
-
-## Architecture
-
-```
-backend/
-  cmd/keirouter/        entrypoint
-  internal/
-    core/               canonical domain model (provider-agnostic)
-    config/             koanf config (env + YAML)
-    crypto/             envelope encryption + API key & password hashing
-    store/              SQLite/Postgres repos + embedded migrations
-    transform/          OpenAI / Anthropic / Gemini codecs (unary + streaming)
-    connectors/         provider drivers (chat/media/web) + catalog + models
-    slimmer/            RTK tool-output compression (input token saver)
-    terse/              terse-mode prompt injection (output token saver)
-    caveman/            caveman output compression (output token saver)
-    oauth/              OAuth flows (PKCE + device code) + token refresh
-    capability/         model capability matrix (anti-downgrade guard)
-    dispatch/           account selection + fallback + cooldown + token refresh
-    budget/             hard spend enforcement
-    meter/              usage + cost recording
-    cache/              semantic response cache + embedder
-    observ/             Prometheus metrics
-    auth/               dashboard password + session tokens
-    identity/           API key issuance + authentication
-    vault/              encrypted-credential <-> live-credential bridge
-    pipeline/           request lifecycle orchestration
-    gateway/            HTTP edge: auth, routing, admin API, /metrics
-    app/                dependency wiring
-frontend/               React + Vite + Tailwind dashboard
-deploy/                 Dockerfile + compose
-```
-
-A request flows: gateway (auth, parse dialect) → pipeline (slimmer, terse,
-budget guard) → dispatch (pick account, capability check) → connector (HTTP to
-provider) → transform (translate response) → gateway (render in client dialect)
-→ meter (record usage).
-
-## Configuration
-
-Copy `config.example.yaml` and pass it with `-config`, or use environment
-variables prefixed `KEIROUTER_` with `__` for nesting (e.g.
-`KEIROUTER_SERVER__PORT=8080`). SQLite is the zero-config default; set
-`database.driver: postgres` with a DSN for team/VPS deployments.
-
-## Security notes
-
-- The admin API (`/api/*`) is restricted to loopback by default. When exposing
-  KeiRouter beyond localhost, place it behind a reverse proxy with access
-  control or a trusted network policy, and set a stable `master_key`.
-- The master key is the root of trust for all stored credentials. Back it up;
-  losing it makes encrypted credentials unrecoverable.
-
-## Development
-
-```bash
-cd backend
-go test ./...        # run the test suite
-go vet ./...         # static checks
-```
-
-## Contributing
-
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, coding guidelines, and how to submit pull requests.
-
-## Security
-
-To report a vulnerability, see [SECURITY.md](SECURITY.md). Please do not open a public issue for security concerns.
-
-## License
-
-[MIT](LICENSE)
+## 📄 License
+MIT License - See [LICENSE](LICENSE) for details.

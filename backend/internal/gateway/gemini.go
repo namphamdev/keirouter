@@ -78,10 +78,10 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 
 	opts := pipeline.Options{
 		Targets:  resolved.Targets,
-		PlanOpts: resolved.PlanOpts,
-		Slimmer: s.slimmerConfig(),
-		Terse:   s.terseConfig(),
-		Caveman: s.cavemanConfig(),
+		PlanOpts: s.endpointPlanOptions(r.Context(), resolved.PlanOpts),
+		Slimmer:  s.slimmerConfig(),
+		Terse:    s.terseConfig(),
+		Caveman:  s.cavemanConfig(),
 	}
 
 	if req.Stream {
