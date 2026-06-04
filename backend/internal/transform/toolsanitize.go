@@ -35,6 +35,13 @@ func NewToolArgSanitizer() *ToolArgSanitizer {
 // passed through directly.
 func (s *ToolArgSanitizer) Process(chunk core.StreamChunk, emit func(core.StreamChunk)) {
 	if chunk.Type != core.ChunkToolCall || chunk.ToolCall == nil {
+		// Flush buffered tool calls BEFORE emitting finish, so clients see
+		// tool call data before the finish_reason signal. Without this,
+		// ChunkFinish passes through immediately while tool calls are still
+		// buffered — causing parse errors in CLI tools like Cline.
+		if chunk.Type == core.ChunkFinish {
+			s.Flush(emit)
+		}
 		emit(chunk)
 		return
 	}
