@@ -261,7 +261,35 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 	// sanitized JSON when each tool call completes. This fixes malformed
 	// arguments from non-Anthropic models (e.g., Read.limit as string).
 	sanitizer := transform.NewToolArgSanitizer()
+	// ThinkTagState strips <think>...</think> tags from streaming content.
+	// Some models (MiMo, QwQ) embed reasoning as XML tags in the content
+	// field instead of using a structured reasoning_content field.
+	thinkFilter := &transform.ThinkTagState{}
 	renderChunk := func(cleaned core.StreamChunk) {
+		// Route thinking chunks through the filter; tool calls and others
+		// pass through directly.
+		if cleaned.Type == core.ChunkText {
+			for _, fc := range thinkFilter.ProcessFeed(cleaned.Delta) {
+				if fc.Type == core.ChunkThinking {
+					// Thinking content is consumed internally — not sent to client.
+					continue
+				}
+				events, rerr := streamCodec.RenderStreamChunk(fc, state)
+				if rerr != nil {
+					s.log.Warn("failed to render stream chunk", "err", rerr)
+					return
+				}
+				for _, ev := range events {
+					if _, werr := bw.Write(ev); werr != nil {
+						s.consoleLog.Logf("WARN", "  client disconnected after %d chunks", chunkCount)
+						return
+					}
+				}
+			}
+			bw.Flush()
+			flusher.Flush()
+			return
+		}
 		events, rerr := streamCodec.RenderStreamChunk(cleaned, state)
 		if rerr != nil {
 			s.log.Warn("failed to render stream chunk", "err", rerr)
@@ -292,8 +320,18 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 		sanitizer.Process(chunk, renderChunk)
 	}
 
-	// Flush any remaining buffered tool calls.
+	// Flush any remaining buffered tool calls and think-tag buffer.
 	sanitizer.Flush(renderChunk)
+	// Flush think-tag state — emit any remaining buffered text.
+	for _, fc := range thinkFilter.Flush() {
+		if fc.Type == core.ChunkThinking {
+			continue
+		}
+		events, _ := streamCodec.RenderStreamChunk(fc, state)
+		for _, ev := range events {
+			_, _ = bw.Write(ev)
+		}
+	}
 
 	for _, ev := range streamCodec.RenderStreamDone(state) {
 		_, _ = bw.Write(ev)

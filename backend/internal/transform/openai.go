@@ -350,6 +350,9 @@ type oaiResponse struct {
 		Message struct {
 			Role      string        `json:"role"`
 			Content   string        `json:"content"`
+			// ReasoningContent carries thinking/reasoning text from models
+			// that expose it as a structured field (DeepSeek, some MiMo).
+			ReasoningContent string        `json:"reasoning_content"`
 			ToolCalls []oaiToolCall `json:"tool_calls"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
@@ -392,8 +395,26 @@ func (OpenAICodec) buildResponse(raw oaiResponse, model string) (*core.ChatRespo
 
 	choice := raw.Choices[0]
 	msg := core.Message{Role: core.RoleAssistant}
-	if choice.Message.Content != "" {
-		msg.Content = append(msg.Content, core.ContentPart{Type: core.PartText, Text: choice.Message.Content})
+
+	// Extract thinking content: prefer structured reasoning_content field,
+	// fall back to <think> tag extraction from content.
+	thinkingText := choice.Message.ReasoningContent
+	contentText := choice.Message.Content
+	if thinkingText == "" && contentText != "" {
+		thinkingChunks, clean := StripThinkTags(contentText)
+		if len(thinkingChunks) > 0 {
+			// Store thinking as the first content part.
+			for _, tc := range thinkingChunks {
+				msg.Content = append(msg.Content, core.ContentPart{Type: core.PartThinking, Text: tc.Delta})
+			}
+			contentText = clean
+		}
+	} else if thinkingText != "" {
+		msg.Content = append(msg.Content, core.ContentPart{Type: core.PartThinking, Text: thinkingText})
+	}
+
+	if contentText != "" {
+		msg.Content = append(msg.Content, core.ContentPart{Type: core.PartText, Text: contentText})
 	}
 	for _, tc := range choice.Message.ToolCalls {
 		msg.Content = append(msg.Content, core.ContentPart{
