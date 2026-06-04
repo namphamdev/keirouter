@@ -107,7 +107,7 @@ function UsageContent({ data, models }: { data: any; models: ModelUsage[] }) {
               <Clock className="h-4 w-4 text-[var(--text-muted)]" />
               <div>
                 <p className="text-[10px] font-bold tracking-wider text-[var(--text-muted)]">ROUTING EFFICIENCY</p>
-                <p className="text-sm font-semibold">{summary.avg_latency_ms ? "98.7%" : "100%"}</p>
+                <p className="text-sm font-semibold">{summary.total_requests > 0 && summary.cache_hits != null ? `${((summary.cache_hits / summary.total_requests) * 100).toFixed(1)}%` : "—"}</p>
               </div>
             </div>
             <TrendingUp className="h-4 w-4 text-emerald-500 opacity-60" />
@@ -118,7 +118,7 @@ function UsageContent({ data, models }: { data: any; models: ModelUsage[] }) {
               <ShieldCheck className="h-4 w-4 text-[var(--text-muted)]" />
               <div>
                 <p className="text-[10px] font-bold tracking-wider text-[var(--text-muted)]">SUCCESS RATE</p>
-                <p className="text-sm font-semibold">{summary.success_rate?.toFixed(1) ?? 100}%</p>
+                <p className="text-sm font-semibold">{summary.success_rate != null ? (summary.success_rate * 100).toFixed(1) : summary.total_requests > 0 ? "—" : "100"}%</p>
               </div>
             </div>
             <TrendingUp className="h-4 w-4 text-emerald-500 opacity-60" />
