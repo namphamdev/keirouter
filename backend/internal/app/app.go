@@ -30,6 +30,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/transform"
 	"github.com/mydisha/keirouter/backend/internal/tunnel/cloudflare"
 	"github.com/mydisha/keirouter/backend/internal/tunnel/tailscale"
+	"github.com/mydisha/keirouter/backend/internal/usagehub"
 	"github.com/mydisha/keirouter/backend/internal/vault"
 )
 
@@ -89,6 +90,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, erro
 	pricing := buildPricing()
 	modelPrices := buildModelPrices()
 	mtr := meter.New(db.Usage(), pricing, modelPrices)
+	uh := usagehub.New()
+	mtr.SetHub(uh)
 	bud := budget.New(db.Budgets(), db.Usage())
 	disp := dispatch.New(connRegistry, db.Accounts(), v)
 	// Refresh expiring OAuth access tokens just-in-time before each upstream
@@ -96,6 +99,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, erro
 	disp.SetTokenRefresher(oauth.NewTokenManager(v, db.Accounts()))
 	// Resolve proxy pool bindings for accounts that have one.
 	disp.SetPoolSource(db.ProxyPools())
+	// Model-level cooldowns and round-robin chain rotation.
+	disp.SetRoutingSource(db.Routing())
 	slim := slimmer.Default()
 	metrics := observ.New()
 
@@ -163,6 +168,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, erro
 	gw := gateway.New(gateway.Deps{
 		Config:      cfg,
 		Logger:      log,
+		DB:          db,
 		Identity:    idSvc,
 		Auth:        authSvc,
 		Pipeline:    pipe,
@@ -181,6 +187,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, erro
 		DataDir:     dataDir,
 		CfManager:   cfManager,
 		TsManager:   tsManager,
+		UsageHub:    uh,
 	})
 
 	srv := &http.Server{

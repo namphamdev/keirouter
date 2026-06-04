@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -107,6 +108,27 @@ func (c *Anthropic) Validate(ctx context.Context, creds core.Credentials) error 
 		return fmt.Errorf("validation failed for %s: %w", c.id, err)
 	}
 	return nil
+}
+
+// StreamRaw opens a streaming SSE connection and returns the raw response body
+// for zero-copy same-dialect piping. NOTE: when Claude cloaking is active
+// (OAuth tokens), the caller should NOT use direct pipe because tool names
+// need decloaking on the response path.
+func (c *Anthropic) StreamRaw(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (io.ReadCloser, http.Header, error) {
+	req.Stream = true
+	body, err := c.codec.RenderRequest(req)
+	if err != nil {
+		return nil, nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
+	}
+
+	body, _ = applyClaudeCloaking(body, creds.AccessToken)
+
+	url := joinURL(c.baseURL(creds), "messages")
+	resp, err := openStream(ctx, c.id, req.Model, url, body, c.headers(creds))
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp.Body, resp.Header, nil
 }
 
 // Stream performs a streaming completion. Anthropic emits named SSE events; the

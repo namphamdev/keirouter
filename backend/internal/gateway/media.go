@@ -20,12 +20,12 @@ import (
 func (s *Server) mediaOptions(r *http.Request, model string) (pipeline.MediaOptions, error) {
 	key, _ := authedKey(r.Context())
 	tenantID := tenantOf(key)
-	targets, err := resolveTargets(r.Context(), s.chains, s.aliases, tenantID, model)
+	resolved, err := resolveTargets(r.Context(), s.chains, s.aliases, tenantID, model)
 	if err != nil {
 		return pipeline.MediaOptions{}, err
 	}
 	return pipeline.MediaOptions{
-		Targets:   targets,
+		Targets:   resolved.Targets,
 		TenantID:  tenantID,
 		ProjectID: key.ProjectID,
 		APIKeyID:  key.ID,

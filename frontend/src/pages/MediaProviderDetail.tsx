@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, Plus, Trash2, KeyRound, X, Play, Copy, Check,
+  ArrowLeft, Plus, Trash2, KeyRound, Play, Copy, Check,
   Image, AudioLines, Mic, Search, Globe, Boxes, ExternalLink,
   ToggleLeft, ToggleRight, Loader2,
 } from "lucide-react";
@@ -74,7 +74,6 @@ export function MediaProviderDetailPage() {
   });
 
   const meta = kindMeta[kind ?? ""] ?? kindMeta.embedding;
-  const MetaIcon = meta.icon;
 
   if (providers.isLoading) return <Spinner />;
 
@@ -192,7 +191,7 @@ function AccountRow({ account: a, onRemove, onToggle }: { account: Account; onRe
         </button>
         <div>
           <span className="text-sm font-medium">{a.label || a.provider}</span>
-          {a.disabled && <Badge tone="neutral" className="ml-2">disabled</Badge>}
+          {a.disabled && <span className="ml-2"><Badge tone="neutral">disabled</Badge></span>}
         </div>
       </div>
       <Button variant="ghost" onClick={onRemove} className="px-2">
@@ -244,7 +243,6 @@ function EmbeddingTestCard({ provider, models }: { provider: Provider; models: {
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState(false);
 
   const run = async () => {
     setLoading(true);

@@ -2,6 +2,8 @@ package connectors
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
@@ -83,6 +85,22 @@ func (c *OpenAIResponses) Chat(ctx context.Context, req *core.ChatRequest, creds
 		return nil, &core.ProviderError{Kind: core.ErrUpstream, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
 	}
 	return resp, nil
+}
+
+// StreamRaw opens a streaming SSE connection and returns the raw response body
+// for zero-copy same-dialect piping.
+func (c *OpenAIResponses) StreamRaw(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (io.ReadCloser, http.Header, error) {
+	req.Stream = true
+	body, err := c.codec.RenderRequest(req)
+	if err != nil {
+		return nil, nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
+	}
+
+	resp, err := openStream(ctx, c.id, req.Model, c.endpoint(creds), body, c.headers(creds))
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp.Body, resp.Header, nil
 }
 
 // Stream performs a streaming Responses call, reading the typed SSE event stream.

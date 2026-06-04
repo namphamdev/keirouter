@@ -29,6 +29,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/transform"
 	"github.com/mydisha/keirouter/backend/internal/tunnel/cloudflare"
 	"github.com/mydisha/keirouter/backend/internal/tunnel/tailscale"
+	"github.com/mydisha/keirouter/backend/internal/usagehub"
 	"github.com/mydisha/keirouter/backend/internal/vault"
 )
 
@@ -36,6 +37,7 @@ import (
 type Server struct {
 	cfg      config.Config
 	log      *slog.Logger
+	db       *store.DB
 	identity *identity.Service
 	auth     *auth.Service
 	pipeline *pipeline.Pipeline
@@ -58,6 +60,7 @@ type Server struct {
 	oauthSessions *oauth.SessionStore
 	cfManager   *cloudflare.Manager
 	tsManager   *tailscale.Manager
+	usageHub    *usagehub.Hub
 	router   chi.Router
 }
 
@@ -65,6 +68,7 @@ type Server struct {
 type Deps struct {
 	Config   config.Config
 	Logger   *slog.Logger
+	DB       *store.DB
 	Identity *identity.Service
 	Auth     *auth.Service
 	Pipeline *pipeline.Pipeline
@@ -86,6 +90,7 @@ type Deps struct {
 	DataDir     string
 	CfManager   *cloudflare.Manager
 	TsManager   *tailscale.Manager
+	UsageHub    *usagehub.Hub
 }
 
 // New builds a gateway Server and wires its routes.
@@ -109,6 +114,7 @@ func New(d Deps) *Server {
 	s := &Server{
 		cfg:      d.Config,
 		log:      log,
+		db:       d.DB,
 		identity: d.Identity,
 		auth:     d.Auth,
 		pipeline: d.Pipeline,
@@ -131,6 +137,7 @@ func New(d Deps) *Server {
 		oauthSessions: oauth.NewSessionStore(),
 		cfManager:   d.CfManager,
 		tsManager:   d.TsManager,
+		usageHub:    d.UsageHub,
 	}
 	s.router = s.routes()
 	return s

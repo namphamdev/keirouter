@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -143,6 +145,23 @@ func (c *Qwen) Stream(ctx context.Context, req *core.ChatRequest, creds core.Cre
 	return scanOpenAISSE(ctx, c.id, req.Model, resp, c.codec, cfg.OnFirstChunk), nil
 }
 
+// StreamRaw opens a streaming SSE connection and returns the raw response body
+// for zero-copy same-dialect piping.
+func (c *Qwen) StreamRaw(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (io.ReadCloser, http.Header, error) {
+	req.Stream = true
+	body, err := c.codec.RenderRequest(req)
+	if err != nil {
+		return nil, nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
+	}
+	body = c.transformBody(body, true)
+
+	resp, err := openStream(ctx, c.id, req.Model, c.endpoint(creds), body, c.headers(creds, true))
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp.Body, resp.Header, nil
+}
+
 // ---- iFlow (apis.iflow.cn) --------------------------------------------------
 
 const iflowUserAgent = "iFlow-Cli"
@@ -261,4 +280,21 @@ func (c *IFlow) Stream(ctx context.Context, req *core.ChatRequest, creds core.Cr
 		return nil, err
 	}
 	return scanOpenAISSE(ctx, c.id, req.Model, resp, c.codec, cfg.OnFirstChunk), nil
+}
+
+// StreamRaw opens a streaming SSE connection and returns the raw response body
+// for zero-copy same-dialect piping.
+func (c *IFlow) StreamRaw(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (io.ReadCloser, http.Header, error) {
+	req.Stream = true
+	body, err := c.codec.RenderRequest(req)
+	if err != nil {
+		return nil, nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
+	}
+	body = c.transformBody(body, true)
+
+	resp, err := openStream(ctx, c.id, req.Model, c.endpoint(creds), body, c.headers(creds, true))
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp.Body, resp.Header, nil
 }

@@ -82,6 +82,14 @@ export interface CreatedKey {
   name: string;
   key: string;
   display: string;
+  budget?: {
+    id: string;
+    scope_kind: string;
+    limit_micros: number;
+    period: string;
+    alert_pct: number;
+    hard_cutoff: boolean;
+  };
 }
 
 export interface Account {
@@ -410,7 +418,8 @@ export const api = {
     request<{ models: { id: string; name: string; kind: string }[] }>("GET", `/providers/${id}/models`),
 
   listKeys: () => request<{ keys: APIKey[] }>("GET", "/keys"),
-  createKey: (name: string) => request<CreatedKey>("POST", "/keys", { name }),
+  createKey: (name: string, budget?: { budget_limit_usd: number; budget_period?: string; budget_alert_pct?: number; budget_hard_cutoff?: boolean }) =>
+    request<CreatedKey>("POST", "/keys", { name, ...(budget ? budget : {}) }),
   updateKey: (id: string, patch: { disabled: boolean }) =>
     request<{ id: string; disabled: boolean }>("PATCH", `/keys/${id}`, patch),
   deleteKey: (id: string) => request<void>("DELETE", `/keys/${id}`),
@@ -540,5 +549,33 @@ export const api = {
       label,
     }),
 };
+
+// ---- SSE usage stream --------------------------------------------------------
+
+export interface UsageEvent {
+  provider: string;
+  model: string;
+  account_id: string;
+  tokens: number;
+}
+
+/**
+ * Creates an EventSource connected to the usage SSE stream. The caller
+ * provides a callback that fires on each usage event. Returns a cleanup
+ * function that closes the connection.
+ */
+export function connectUsageStream(onEvent: (ev: UsageEvent) => void): () => void {
+  const es = new EventSource("/api/usage/stream");
+  es.onmessage = (msg) => {
+    try {
+      const ev = JSON.parse(msg.data) as UsageEvent;
+      onEvent(ev);
+    } catch { /* ignore malformed events */ }
+  };
+  es.onerror = () => {
+    // EventSource auto-reconnects; nothing to do here.
+  };
+  return () => es.close();
+}
 
 export { APIError };

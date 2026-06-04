@@ -21,7 +21,7 @@ func (r *UsageRepo) Record(ctx context.Context, u UsageRecord) error {
 			 cost_micros, cache_hit, latency_ms, ttft_ms,
 			 slim_bytes_saved, slim_tokens_saved, slim_rules, caveman_active, terse_active,
 			 created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err := r.db.sql.ExecContext(ctx, q,
 		u.ID, u.TenantID, nullString(u.ProjectID), nullString(u.APIKeyID),
 		u.Provider, u.Model, nullString(u.AccountID),

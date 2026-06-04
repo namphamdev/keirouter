@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/connectors"
 	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/store"
+	"github.com/mydisha/keirouter/backend/internal/usagehub"
 )
 
 // sinceForPeriod maps a dashboard period query value to a lower-bound time.
@@ -362,6 +364,60 @@ func (s *Server) adminQuotaUsage(w http.ResponseWriter, r *http.Request) {
 		out = append(out, entry)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"accounts": out, "since": since})
+}
+
+// ---- usage SSE stream --------------------------------------------------------
+
+// adminUsageStream serves an SSE endpoint that pushes usage events to the
+// frontend for near-real-time dashboard updates. When a new usage record is
+// inserted, the meter publishes to the usagehub.Hub, which delivers the event
+// here. The frontend subscribes via EventSource and invalidates its query cache
+// on each event.
+func (s *Server) adminUsageStream(w http.ResponseWriter, r *http.Request) {
+	if s.usageHub == nil {
+		writeError(w, http.StatusServiceUnavailable, "usage hub not configured")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	// Send initial heartbeat so the client knows the connection is live.
+	fmt.Fprintf(w, ": connected\n\n")
+	flusher.Flush()
+
+	// Subscribe to usage events.
+	listener := &usagehub.Listener{
+		OnEvent: func(ev usagehub.Event) {
+			data, _ := json.Marshal(ev)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		},
+	}
+	s.usageHub.Subscribe(listener)
+	defer s.usageHub.Unsubscribe(listener)
+
+	// Keepalive ping every 25s to prevent proxy timeouts.
+	keepalive := time.NewTicker(25 * time.Second)
+	defer keepalive.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-keepalive.C:
+			fmt.Fprintf(w, ": ping\n\n")
+			flusher.Flush()
+		}
+	}
 }
 
 // ---- console log ------------------------------------------------------------

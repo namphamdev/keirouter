@@ -54,6 +54,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/usage", s.adminUsageSummary)
 	r.Get("/usage/insights", s.adminUsageInsights)
 	r.Get("/usage/models", s.adminModelUsage)
+	r.Get("/usage/stream", s.adminUsageStream)
 	r.Get("/quota", s.adminQuotaUsage)
 	r.Get("/console", s.adminConsoleLog)
 	r.Delete("/console", s.adminConsoleClear)
@@ -246,6 +247,12 @@ func (s *Server) adminCreateKey(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name      string `json:"name"`
 		ProjectID string `json:"project_id"`
+		// Optional budget fields — when present, a budget is co-created
+		// atomically alongside the key so it is protected from the first request.
+		BudgetLimitUSD   *float64 `json:"budget_limit_usd"`
+		BudgetPeriod     string   `json:"budget_period"`
+		BudgetAlertPct   *int     `json:"budget_alert_pct"`
+		BudgetHardCutoff *bool    `json:"budget_hard_cutoff"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -255,15 +262,82 @@ func (s *Server) adminCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	issued, err := s.identity.Create(r.Context(), adminTenant, body.ProjectID, body.Name)
+	// Generate key material (crypto operations, no DB write yet).
+	issued, err := s.identity.Generate(adminTenant, body.ProjectID, body.Name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Plaintext is returned exactly once.
+
+	hasBudget := body.BudgetLimitUSD != nil && *body.BudgetLimitUSD > 0
+
+	if !hasBudget {
+		// Simple path: no budget requested, insert key directly.
+		if err := s.identity.CreateFromIssued(r.Context(), issued); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"id": issued.Record.ID, "name": issued.Record.Name,
+			"key": issued.Plaintext, "display": issued.Record.Display,
+		})
+		return
+	}
+
+	// Transactional path: key + budget atomically.
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "transaction start failed")
+		return
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after commit
+
+	if err := s.identity.Keys().CreateOnTx(r.Context(), tx, issued.Record); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	hardCutoff := true
+	if body.BudgetHardCutoff != nil {
+		hardCutoff = *body.BudgetHardCutoff
+	}
+	alertPct := 80
+	if body.BudgetAlertPct != nil {
+		alertPct = *body.BudgetAlertPct
+	}
+	period := defaultStr(body.BudgetPeriod, "monthly")
+
+	now := time.Now()
+	budgetRec := store.Budget{
+		ID:          uuid.NewString(),
+		TenantID:    adminTenant,
+		ScopeKind:   store.ScopeAPIKey,
+		ScopeID:     issued.Record.ID,
+		LimitMicros: int64(*body.BudgetLimitUSD * 1_000_000),
+		Period:      period,
+		AlertPct:    alertPct,
+		HardCutoff:  hardCutoff,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := s.budgets.CreateOnTx(r.Context(), tx, budgetRec); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "transaction commit failed")
+		return
+	}
+
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": issued.Record.ID, "name": issued.Record.Name,
 		"key": issued.Plaintext, "display": issued.Record.Display,
+		"budget": map[string]any{
+			"id": budgetRec.ID, "scope_kind": string(budgetRec.ScopeKind),
+			"limit_micros": budgetRec.LimitMicros, "period": budgetRec.Period,
+			"alert_pct": budgetRec.AlertPct, "hard_cutoff": budgetRec.HardCutoff,
+		},
 	})
 }
 
@@ -1418,10 +1492,15 @@ func (s *Server) adminTestProxy(w http.ResponseWriter, r *http.Request) {
 // validateAccountCredentials unseals an account's credentials and, if the
 // connector implements core.Validator, probes the upstream to confirm they are
 // accepted. Returns nil when validation passes or the connector does not support
-// it.
+// it. Accounts with auth_kind "none" (e.g. local Ollama) skip validation since
+// there are no credentials to verify.
 func (s *Server) validateAccountCredentials(ctx context.Context, acc store.Account) error {
 	if s.conns == nil || s.vault == nil {
 		return nil // can't validate without registry + vault
+	}
+	// Skip validation for no-auth providers — nothing to verify.
+	if acc.AuthKind == store.AuthNone {
+		return nil
 	}
 	conn, err := s.conns.Get(acc.Provider)
 	if err != nil {

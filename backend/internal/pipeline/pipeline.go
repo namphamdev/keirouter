@@ -8,8 +8,14 @@
 package pipeline
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/budget"
@@ -36,7 +42,7 @@ type Pipeline struct {
 	embedder   cache.Embedder
 	log        *slog.Logger
 
-	requestTimeout    time.Duration // upper bound on non-streaming upstream calls
+	requestTimeout     time.Duration // upper bound on non-streaming upstream calls
 	streamStallTimeout time.Duration // aborts a stream with no bytes for this long
 }
 
@@ -74,7 +80,7 @@ func New(d Deps) *Pipeline {
 		embedder:   d.Embedder,
 		log:        log,
 
-		requestTimeout:    d.RequestTimeout,
+		requestTimeout:     d.RequestTimeout,
 		streamStallTimeout: d.StreamStallTimeout,
 	}
 }
@@ -84,6 +90,8 @@ func New(d Deps) *Pipeline {
 type Options struct {
 	// Targets is the ordered fallback chain (provider+model candidates).
 	Targets []dispatch.Target
+	// PlanOpts carries strategy metadata (round-robin, chain ID, sticky limit).
+	PlanOpts dispatch.PlanOptions
 	// Slimmer / Terse / Caveman control token-saving transforms. Slimmer (RTK)
 	// compresses bulky tool outputs on the input side; Terse and Caveman inject
 	// system-prompt directives that reduce output tokens.
@@ -144,7 +152,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	save := buildSaveState(slimStats, opts)
 
 	required := capability.Required(req)
-	attempts, err := p.dispatcher.Plan(ctx, req.Metadata.TenantID, opts.Targets, required)
+	attempts, err := p.dispatcher.PlanWith(ctx, req.Metadata.TenantID, opts.Targets, required, opts.PlanOpts)
 	if err != nil {
 		p.log.Debug("dispatcher plan failed", "err", err)
 		return nil, err
@@ -188,6 +196,8 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 			continue
 		}
 
+		// Reset backoff and clear model cooldown on success.
+		p.dispatcher.NoteSuccess(ctx, attempt.Account.ID, attempt.Target.Model)
 		cost := p.record(ctx, req.Metadata, attempt, resp.Usage, false, latency, save)
 		p.cacheStore(ctx, vec, resp)
 		p.log.Debug("attempt success", "provider", attempt.Target.Provider,
@@ -217,6 +227,17 @@ type StreamResult struct {
 	Provider  string
 	Model     string
 	AccountID string
+
+	// DirectBody is set when the pipeline detected a same-dialect, no-tools
+	// scenario and obtained a raw io.ReadCloser from the upstream. The gateway
+	// should io.Copy this directly to the response writer for zero-copy
+	// streaming. When set, Chunks is nil — the two paths are mutually exclusive.
+	DirectBody io.ReadCloser
+
+	// DirectUsageFunc, when non-nil, must be called after the DirectBody stream
+	// is fully consumed (after io.Copy completes). It parses the captured SSE
+	// data for usage tokens and records them in the meter.
+	DirectUsageFunc func()
 }
 
 // Stream runs a streaming request with fallback. Fallback applies only to the
@@ -232,7 +253,7 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 	save := buildSaveState(slimStats, opts)
 
 	required := capability.Required(req)
-	attempts, err := p.dispatcher.Plan(ctx, req.Metadata.TenantID, opts.Targets, required)
+	attempts, err := p.dispatcher.PlanWith(ctx, req.Metadata.TenantID, opts.Targets, required, opts.PlanOpts)
 	if err != nil {
 		p.log.Debug("stream dispatcher plan failed", "err", err)
 		return nil, err
@@ -255,6 +276,61 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 		}
 
 		callCtx := core.WithProxy(ctx, attempt.Creds)
+
+		// Zero-copy fast path: when the client dialect matches the upstream
+		// dialect, no tools are present (so no argument sanitization needed),
+		// and the connector implements DirectStreamable, we can pipe the raw
+		// SSE bytes directly to the client — bypassing all JSON parse/serialize
+		// overhead. This is the highest-throughput path for same-dialect proxying.
+		if len(attemptReq.Tools) == 0 && req.Metadata.SourceDialect == attempt.Conn.Dialect() {
+			if ds, ok := attempt.Conn.(core.DirectStreamable); ok {
+				body, _, rawErr := ds.StreamRaw(callCtx, attemptReq, attempt.Creds, streamCfg)
+				if rawErr != nil {
+					pe := core.AsProviderError(rawErr)
+					lastErr = pe
+					p.dispatcher.NoteFailure(ctx, attempt.Account.ID, pe)
+					if p.metrics != nil {
+						p.metrics.RecordUpstreamError(attempt.Target.Provider, string(pe.Kind))
+					}
+					if !pe.Fallbackable() {
+						return nil, pe
+					}
+					if p.metrics != nil {
+						p.metrics.RecordFallback(string(pe.Kind))
+					}
+					p.log.Warn("direct stream attempt failed, falling back",
+						"provider", attempt.Target.Provider, "model", attempt.Target.Model, "kind", pe.Kind)
+					continue
+				}
+				p.log.Debug("direct stream connected (zero-copy)", "provider", attempt.Target.Provider,
+					"model", attempt.Target.Model)
+				p.dispatcher.NoteSuccess(ctx, attempt.Account.ID, attempt.Target.Model)
+				// Wrap the raw body in a tee reader that captures all bytes
+				// into a buffer. After io.Copy completes in the gateway, the
+				// DirectUsageFunc callback parses the captured SSE data for
+				// usage tokens and records them in the meter.
+				var capture safeBuffer
+				wrapped := &teeReadCloser{r: body, w: &capture}
+				meta := req.Metadata
+				acc := attempt
+				started := time.Now()
+				saveCopy := save
+				usageFunc := func() {
+					usage := extractUsageFromStream(capture.Bytes())
+					p.recordWithTTFT(ctx, meta, acc, usage, false, time.Since(started), 0, saveCopy)
+				}
+				return &StreamResult{
+					DirectBody:      wrapped,
+					Provider:        attempt.Target.Provider,
+					Model:           attempt.Target.Model,
+					AccountID:       attempt.Account.ID,
+					DirectUsageFunc: usageFunc,
+				}, nil
+			}
+		}
+
+		// Standard channel path: parse upstream SSE into canonical chunks,
+		// then render back to the client's dialect.
 		upstream, callErr := attempt.Conn.Stream(callCtx, attemptReq, attempt.Creds, streamCfg)
 		if callErr != nil {
 			pe := core.AsProviderError(callErr)
@@ -277,6 +353,7 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 
 		p.log.Debug("stream connected", "provider", attempt.Target.Provider,
 			"model", attempt.Target.Model, "account", attempt.Account.ID)
+		p.dispatcher.NoteSuccess(ctx, attempt.Account.ID, attempt.Target.Model)
 
 		// Tee the upstream channel so we can meter terminal usage without
 		// blocking the client consumer.
@@ -621,4 +698,176 @@ func cloneForAttempt(req *core.ChatRequest, model string) *core.ChatRequest {
 	clone := *req
 	clone.Model = model
 	return &clone
+}
+
+// ---- direct-body usage capture -----------------------------------------------
+
+// safeBuffer is a thread-safe bytes.Buffer used as the tee target for direct
+// body streams. It captures the head (first 4KB, for Anthropic's message_start
+// which carries input_tokens) and the tail (last 256KB, for the final usage
+// events). This bounds memory usage while capturing all usage data across
+// both OpenAI and Anthropic SSE formats.
+type safeBuffer struct {
+	mu       sync.Mutex
+	head     bytes.Buffer // first 4KB — captures message_start (Anthropic)
+	tail     bytes.Buffer // rolling window of last 256KB
+	total    int
+	headDone bool // true once head is full
+}
+
+const headCaptureSize = 4 * 1024   // 4 KiB — enough for message_start
+const tailCaptureSize = 256 * 1024 // 256 KiB — usage events are small
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := len(p)
+	b.total += n
+
+	// Capture the first 4KB into head (for Anthropic input_tokens).
+	if !b.headDone {
+		remain := headCaptureSize - b.head.Len()
+		if remain > 0 {
+			if n <= remain {
+				b.head.Write(p)
+			} else {
+				b.head.Write(p[:remain])
+			}
+		}
+		if b.head.Len() >= headCaptureSize {
+			b.headDone = true
+		}
+	}
+
+	// Always write to tail; when it exceeds the limit, keep only the last chunk.
+	b.tail.Write(p)
+	if b.tail.Len() > tailCaptureSize {
+		old := b.tail.Bytes()
+		tail := old[len(old)-tailCaptureSize:]
+		b.tail.Reset()
+		b.tail.Write(tail)
+	}
+
+	return n, nil
+}
+
+// Bytes returns the captured data: head first (for Anthropic message_start),
+// then the tail (for final usage events). For small streams (<260KB) this is
+// the entire stream; for large streams it's the first 4KB + last 256KB.
+func (b *safeBuffer) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.total <= headCaptureSize+tailCaptureSize {
+		// Small stream — head contains everything up to 4KB, tail has the rest.
+		// Just return tail which has the full content for small streams.
+		return b.tail.Bytes()
+	}
+	// Large stream — combine head + tail.
+	out := make([]byte, 0, b.head.Len()+b.tail.Len())
+	out = append(out, b.head.Bytes()...)
+	out = append(out, b.tail.Bytes()...)
+	return out
+}
+
+// teeReadCloser wraps an io.ReadCloser with an io.TeeReader so that every Read
+// also writes the bytes to a secondary writer (the capture buffer). Close
+// delegates to the original reader.
+type teeReadCloser struct {
+	r io.ReadCloser
+	w io.Writer
+}
+
+func (t *teeReadCloser) Read(p []byte) (int, error) {
+	n, err := t.r.Read(p)
+	if n > 0 {
+		if _, werr := t.w.Write(p[:n]); werr != nil {
+			return n, werr
+		}
+	}
+	return n, err
+}
+
+func (t *teeReadCloser) Close() error {
+	return t.r.Close()
+}
+
+// sseUsageEnvelope is the minimal JSON structure needed to extract usage from
+// both OpenAI and Anthropic SSE payloads. OpenAI puts usage at the top level;
+// Anthropic splits it across message_start (input_tokens) and message_delta
+// (output_tokens), with usage nested under "message" or at the top level.
+type sseUsageEnvelope struct {
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+		InputTokens      int `json:"input_tokens"`
+		OutputTokens     int `json:"output_tokens"`
+	} `json:"usage"`
+	Message *struct {
+		Usage *struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	} `json:"message"`
+}
+
+// extractUsageFromSSEData tries to parse a single SSE data payload for usage
+// tokens. Returns nil when the payload contains no usage information.
+func extractUsageFromSSEData(data []byte) *core.Usage {
+	if !bytes.Contains(data, []byte(`"usage"`)) {
+		return nil
+	}
+	var env sseUsageEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		return nil
+	}
+	u := &core.Usage{}
+	// Top-level usage (OpenAI format, or Anthropic message_delta).
+	if env.Usage != nil {
+		u.PromptTokens = env.Usage.PromptTokens
+		u.CompletionTokens = env.Usage.CompletionTokens
+		u.TotalTokens = env.Usage.TotalTokens
+		if env.Usage.InputTokens > 0 {
+			u.PromptTokens = env.Usage.InputTokens
+		}
+		if env.Usage.OutputTokens > 0 {
+			u.CompletionTokens = env.Usage.OutputTokens
+		}
+	}
+	// Anthropic message_start wraps usage under "message".
+	if env.Message != nil && env.Message.Usage != nil {
+		if env.Message.Usage.InputTokens > 0 {
+			u.PromptTokens = env.Message.Usage.InputTokens
+		}
+		if env.Message.Usage.OutputTokens > 0 {
+			u.CompletionTokens = env.Message.Usage.OutputTokens
+		}
+	}
+	if u.PromptTokens == 0 && u.CompletionTokens == 0 && u.TotalTokens == 0 {
+		return nil
+	}
+	return u
+}
+
+// extractUsageFromStream scans captured raw SSE bytes for usage data. It
+// handles both OpenAI and Anthropic streaming formats, merging usage across
+// multiple events (Anthropic splits input/output tokens across message_start
+// and message_delta).
+func extractUsageFromStream(raw []byte) core.Usage {
+	var usage core.Usage
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	for scanner.Scan() {
+		line := strings.TrimRight(scanner.Text(), "\r")
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "[DONE]" || payload == "" {
+			continue
+		}
+		if u := extractUsageFromSSEData([]byte(payload)); u != nil {
+			usage = mergeUsage(usage, *u)
+		}
+	}
+	return usage
 }

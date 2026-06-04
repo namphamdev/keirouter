@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bufio"
 	"errors"
 	"io"
 	"net/http"
@@ -97,7 +98,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 	s.consoleLog.Logf("DEBUG", "  model=%s · stream=%v · messages=%d · tenant=%s",
 		req.Model, req.Stream, len(req.Messages), tenantID)
 
-	targets, err := resolveTargets(r.Context(), s.chains, s.aliases, tenantID, req.Model)
+	resolved, err := resolveTargets(r.Context(), s.chains, s.aliases, tenantID, req.Model)
 	if err != nil {
 		var bad badModelError
 		if errors.As(err, &bad) {
@@ -110,12 +111,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 		return
 	}
 
-	for i, t := range targets {
+	for i, t := range resolved.Targets {
 		s.consoleLog.Logf("DEBUG", "  target[%d]: %s/%s", i, t.Provider, t.Model)
 	}
 
 	opts := pipeline.Options{
-		Targets: targets,
+		Targets:  resolved.Targets,
+		PlanOpts: resolved.PlanOpts,
 		Slimmer: s.slimmerConfig(),
 		Terse:   s.terseConfig(),
 		Caveman: s.cavemanConfig(),
@@ -160,7 +162,7 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transfo
 		w.Header().Set("X-KeiRouter-Cache", "hit")
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(out)
+	_, _ = w.Write(out) // out is already a []byte from RenderResponse
 }
 
 // streamChat runs a streaming request and relays SSE events in the client's
@@ -199,6 +201,36 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	// Zero-copy direct pipe path: the pipeline detected same-dialect, no-tools
+	// and obtained a raw io.ReadCloser from the upstream. Pipe it directly to
+	// the client via io.Copy — no JSON parse/serialize, no goroutines, minimal
+	// memory allocation. This is the fastest possible streaming path.
+	if result.DirectBody != nil {
+		defer result.DirectBody.Close()
+		n, cpErr := io.Copy(w, result.DirectBody)
+		if cpErr != nil && !isClientDisconnect(cpErr) {
+			s.consoleLog.Logf("ERROR", "  ✖ direct pipe error after %d bytes: %v", n, cpErr)
+			s.log.Warn("direct pipe error", "bytes", n, "err", cpErr)
+		}
+		flusher.Flush()
+		// Record usage from the captured SSE stream. The pipeline wraps
+		// the direct body in a tee reader that captures all bytes; the
+		// DirectUsageFunc parses the captured data for usage tokens.
+		if result.DirectUsageFunc != nil {
+			result.DirectUsageFunc()
+		}
+		latency := int(time.Since(start).Milliseconds())
+		s.consoleLog.Logf("DEBUG", "  ✔ direct pipe done: %d bytes · %dms", n, latency)
+		s.logRequest(result.Provider, result.Model, 0, 0, latency, false, nil)
+		return
+	}
+
+	// Wrap the response writer in a bufio.Writer to batch small SSE writes
+	// into fewer syscalls. The pool avoids allocating a new writer per request.
+	bw := core.SSEWriterPool.Get().(*bufio.Writer)
+	defer core.SSEWriterPool.Put(bw)
+	bw.Reset(w)
+
 	state := &transform.StreamState{Model: result.Model}
 	streamStart := time.Now()
 	var totalTokens int
@@ -215,11 +247,14 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 			return
 		}
 		for _, ev := range events {
-			if _, werr := w.Write(ev); werr != nil {
+			if _, werr := bw.Write(ev); werr != nil {
 				s.consoleLog.Logf("WARN", "  client disconnected after %d chunks", chunkCount)
 				return
 			}
 		}
+		// Flush the buffered writer to the underlying http.ResponseWriter,
+		// then flush the HTTP flusher to push bytes to the client.
+		bw.Flush()
 		flusher.Flush()
 	}
 
@@ -229,6 +264,9 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 			s.log.Warn("stream error", "err", chunk.Err)
 			break
 		}
+		if chunk.Type == core.ChunkUsage && chunk.Usage != nil {
+			totalTokens = chunk.Usage.PromptTokens + chunk.Usage.CompletionTokens
+		}
 		chunkCount++
 		sanitizer.Process(chunk, renderChunk)
 	}
@@ -237,8 +275,9 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 	sanitizer.Flush(renderChunk)
 
 	for _, ev := range streamCodec.RenderStreamDone(state) {
-		_, _ = w.Write(ev)
+		_, _ = bw.Write(ev)
 	}
+	bw.Flush()
 	flusher.Flush()
 
 	latency := int(time.Since(streamStart).Milliseconds())
@@ -265,6 +304,20 @@ func (s *Server) writeProviderError(w http.ResponseWriter, err error) {
 		status = http.StatusInternalServerError
 	}
 	writeError(w, status, pe.Message)
+}
+
+// isClientDisconnect reports whether an error is a client disconnection
+// (broken pipe, reset by peer) rather than a server-side failure. These are
+// expected during streaming and should not be logged as errors.
+func isClientDisconnect(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "broken pipe") ||
+		strings.Contains(s, "reset by peer") ||
+		strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "use of closed network connection")
 }
 
 // detectClient identifies the calling tool from request headers, used for

@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"time"
 )
 
@@ -109,6 +111,24 @@ type SearchConnector interface {
 // content.
 type FetchConnector interface {
 	Fetch(ctx context.Context, req *FetchRequest, creds Credentials) (*FetchResponse, error)
+}
+
+// DirectStreamable is optionally implemented by connectors that can return the
+// raw upstream SSE stream as an io.ReadCloser. The pipeline uses this for
+// zero-copy same-dialect streaming: when the client dialect matches the
+// upstream dialect and no tool-argument sanitization is needed, the raw bytes
+// are piped directly to the client via io.Copy, bypassing all JSON parse and
+// re-serialize overhead.
+//
+// Connectors that implement this MUST:
+//   - Return a response whose body is valid SSE (data: lines with \n\n delimiters)
+//   - Close the body when the stream ends or ctx is cancelled
+//   - Not start any goroutines — the caller owns the read loop
+type DirectStreamable interface {
+	// StreamRaw opens an SSE connection to the upstream and returns the raw
+	// response body. The caller is responsible for closing body when done.
+	// Headers contains the upstream response headers (for content-type, etc).
+	StreamRaw(ctx context.Context, req *ChatRequest, creds Credentials, cfg StreamConfig) (body io.ReadCloser, headers http.Header, err error)
 }
 
 // EmbeddingRequest is a canonical embeddings request.

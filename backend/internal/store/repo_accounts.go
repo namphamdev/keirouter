@@ -18,20 +18,35 @@ const accountColumns = `id, tenant_id, provider, label, auth_kind,
 	secret_wrapped_dek, secret_ciphertext,
 	token_wrapped_dek, token_ciphertext,
 	refresh_wrapped_dek, refresh_ciphertext,
-	token_expires_at, metadata, priority, disabled, cooldown_until,
+	token_expires_at, metadata, priority, backoff_level, disabled, cooldown_until,
 	proxy_pool_id, created_at, updated_at`
+
+// SetBackoffLevel updates the exponential backoff level for an account.
+func (r *AccountRepo) SetBackoffLevel(ctx context.Context, id string, level int) error {
+	q := r.db.rebind(`UPDATE accounts SET backoff_level = ?, updated_at = ? WHERE id = ?`)
+	_, err := r.db.sql.ExecContext(ctx, q, level, formatTime(time.Now()), id)
+	return err
+}
+
+// ResetBackoffLevel resets the exponential backoff level to 0 and clears
+// cooldown, called on a successful request.
+func (r *AccountRepo) ResetBackoffLevel(ctx context.Context, id string) error {
+	q := r.db.rebind(`UPDATE accounts SET backoff_level = 0, cooldown_until = NULL, updated_at = ? WHERE id = ?`)
+	_, err := r.db.sql.ExecContext(ctx, q, formatTime(time.Now()), id)
+	return err
+}
 
 // Create inserts a new account.
 func (r *AccountRepo) Create(ctx context.Context, a Account) error {
 	q := r.db.rebind(`INSERT INTO accounts (` + accountColumns + `)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err := r.db.sql.ExecContext(ctx, q,
 		a.ID, a.TenantID, a.Provider, a.Label, string(a.AuthKind),
 		nullString(a.SecretWrappedDEK), nullString(a.SecretCiphertext),
 		nullString(a.TokenWrappedDEK), nullString(a.TokenCiphertext),
 		nullString(a.RefreshWrappedDEK), nullString(a.RefreshCiphertext),
-		nullTime(a.TokenExpiresAt), a.Metadata, a.Priority, boolToInt(a.Disabled),
-		nullTime(a.CooldownUntil), a.ProxyPoolID,
+		nullTime(a.TokenExpiresAt), a.Metadata, a.Priority, a.BackoffLevel,
+		boolToInt(a.Disabled), nullTime(a.CooldownUntil), a.ProxyPoolID,
 		formatTime(a.CreatedAt), formatTime(a.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("store: create account: %w", err)
@@ -137,6 +152,7 @@ func scanAccountRow(scan func(dest ...any) error) (Account, error) {
 		refreshDEK   sql.NullString
 		refreshCT    sql.NullString
 		tokenExpires sql.NullString
+		backoffLevel int
 		cooldown     sql.NullString
 		disabled     int
 		proxyPoolID  sql.NullString
@@ -146,7 +162,7 @@ func scanAccountRow(scan func(dest ...any) error) (Account, error) {
 	err := scan(
 		&a.ID, &a.TenantID, &a.Provider, &a.Label, &authKind,
 		&secretDEK, &secretCT, &tokenDEK, &tokenCT, &refreshDEK, &refreshCT,
-		&tokenExpires, &a.Metadata, &a.Priority, &disabled, &cooldown,
+		&tokenExpires, &a.Metadata, &a.Priority, &backoffLevel, &disabled, &cooldown,
 		&proxyPoolID, &createdRaw, &updatedRaw,
 	)
 	if err != nil {
@@ -159,6 +175,7 @@ func scanAccountRow(scan func(dest ...any) error) (Account, error) {
 	a.TokenCiphertext = tokenCT.String
 	a.RefreshWrappedDEK = refreshDEK.String
 	a.RefreshCiphertext = refreshCT.String
+	a.BackoffLevel = backoffLevel
 	a.Disabled = disabled != 0
 	a.ProxyPoolID = proxyPoolID.String
 	a.CreatedAt = parseTime(createdRaw)

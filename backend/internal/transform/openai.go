@@ -3,6 +3,7 @@ package transform
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
@@ -365,11 +366,26 @@ type oaiUsage struct {
 	} `json:"prompt_tokens_details,omitempty"`
 }
 
-func (OpenAICodec) ParseResponse(body []byte, model string) (*core.ChatResponse, error) {
+func (c OpenAICodec) ParseResponse(body []byte, model string) (*core.ChatResponse, error) {
 	var raw oaiResponse
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("openai: parse response: %w", err)
 	}
+	return c.buildResponse(raw, model)
+}
+
+// ParseResponseFrom implements StreamingResponseCodec. It decodes directly from
+// an io.Reader, avoiding the intermediate []byte allocation.
+func (c OpenAICodec) ParseResponseFrom(r io.Reader, model string) (*core.ChatResponse, error) {
+	var raw oaiResponse
+	if err := json.NewDecoder(r).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("openai: parse response: %w", err)
+	}
+	return c.buildResponse(raw, model)
+}
+
+// buildResponse converts a parsed oaiResponse into a canonical ChatResponse.
+func (OpenAICodec) buildResponse(raw oaiResponse, model string) (*core.ChatResponse, error) {
 	if len(raw.Choices) == 0 {
 		return nil, fmt.Errorf("openai: response has no choices")
 	}

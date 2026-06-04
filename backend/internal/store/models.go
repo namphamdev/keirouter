@@ -66,6 +66,7 @@ type Account struct {
 
 	Metadata      string // JSON: base_url, region, project_id, ...
 	Priority      int
+	BackoffLevel  int // exponential backoff level for adaptive cooldowns
 	Disabled      bool
 	CooldownUntil *time.Time
 	ProxyPoolID   string // bound proxy pool id (empty = no proxy)
@@ -152,4 +153,23 @@ type AuditEntry struct {
 	Target    string
 	Detail    string
 	CreatedAt time.Time
+}
+
+// ModelCooldown locks a specific model on an account. While active, the
+// dispatch layer skips this account for that model but still allows other
+// models on the same account.
+type ModelCooldown struct {
+	ID             string
+	AccountID      string
+	Model          string
+	CooldownUntil  time.Time
+	CreatedAt      time.Time
+}
+
+// ChainRotation persists the round-robin cursor for a routing chain so
+// distribution is fair across restarts.
+type ChainRotation struct {
+	ChainID   string
+	LastIndex int
+	UpdatedAt time.Time
 }

@@ -125,6 +125,12 @@ func (db *DB) SQL() *sql.DB { return db.sql }
 // Dialect reports the active engine.
 func (db *DB) Dialect() Dialect { return db.dialect }
 
+// BeginTx starts a database transaction. Callers use this for multi-table
+// writes that must succeed or fail atomically (e.g. key + budget creation).
+func (db *DB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+	return db.sql.BeginTx(ctx, opts)
+}
+
 // Close releases the connection pool.
 func (db *DB) Close() error { return db.sql.Close() }
 

@@ -16,10 +16,19 @@ func (db *DB) Budgets() *BudgetRepo { return &BudgetRepo{db: db} }
 
 // Create inserts a budget.
 func (r *BudgetRepo) Create(ctx context.Context, b Budget) error {
+	return r.insert(ctx, r.db.sql, b)
+}
+
+// CreateOnTx inserts a budget within an existing transaction.
+func (r *BudgetRepo) CreateOnTx(ctx context.Context, tx *sql.Tx, b Budget) error {
+	return r.insert(ctx, tx, b)
+}
+
+func (r *BudgetRepo) insert(ctx context.Context, ex sqlExec, b Budget) error {
 	q := r.db.rebind(`INSERT INTO budgets
 		(id, tenant_id, scope_kind, scope_id, limit_micros, period, alert_pct, hard_cutoff, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-	_, err := r.db.sql.ExecContext(ctx, q,
+	_, err := ex.ExecContext(ctx, q,
 		b.ID, b.TenantID, string(b.ScopeKind), b.ScopeID, b.LimitMicros, b.Period,
 		b.AlertPct, boolToInt(b.HardCutoff), formatTime(b.CreatedAt), formatTime(b.UpdatedAt))
 	if err != nil {

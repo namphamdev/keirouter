@@ -14,6 +14,7 @@ import (
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/store"
+	"github.com/mydisha/keirouter/backend/internal/usagehub"
 )
 
 // Price holds per-million-token rates in USD.
@@ -30,7 +31,13 @@ type Meter struct {
 	usage       *store.UsageRepo
 	pricing     map[string]Price   // provider-level fallback
 	modelPrices map[string]Price   // provider/model-level (e.g. "openai/gpt-4o")
+	hub         *usagehub.Hub      // notifies subscribers of new usage records
 }
+
+// SetHub installs a usage event hub. When set, the meter publishes an event
+// after every successful Record call. This enables SSE-based near-real-time
+// dashboard updates.
+func (m *Meter) SetHub(h *usagehub.Hub) { m.hub = h }
 
 // New builds a Meter backed by a usage repo and pricing tables.
 func New(usage *store.UsageRepo, pricing map[string]Price, modelPrices map[string]Price) *Meter {
@@ -156,6 +163,16 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 	}
 	if err := m.usage.Record(ctx, rec); err != nil {
 		return cost, err
+	}
+	// Notify SSE subscribers of the new usage record for near-real-time
+	// dashboard updates.
+	if m.hub != nil {
+		m.hub.Publish(usagehub.Event{
+			Provider:  ev.Provider,
+			Model:     ev.Model,
+			AccountID: ev.AccountID,
+			Tokens:    ev.Usage.PromptTokens + ev.Usage.CompletionTokens,
+		})
 	}
 	return cost, nil
 }

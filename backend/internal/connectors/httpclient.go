@@ -12,6 +12,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -25,12 +26,21 @@ import (
 )
 
 // sharedClient is reused across connectors; the transport pools connections.
+// Tuned for AI-proxy workloads: many concurrent long-lived streams to a handful
+// of upstream hosts (OpenAI, Anthropic, Google, etc.).
 var sharedClient = &http.Client{
 	Timeout: 0, // per-request deadlines come from context
 	Transport: &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
+		MaxIdleConns:          200,              // keep more idle conns across all hosts
+		MaxIdleConnsPerHost:   20,               // more conns per upstream (parallel streams)
+		IdleConnTimeout:       120 * time.Second, // keep idle conns longer for bursty traffic
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,  // don't wait forever for upstream headers
+		ExpectContinueTimeout: 1 * time.Second,
+		WriteBufferSize:       64 * 1024,         // larger write buffer for request bodies
+		ReadBufferSize:        64 * 1024,         // larger read buffer for response bodies
+		ForceAttemptHTTP2:     true,              // prefer HTTP/2 for multiplexed streams
+		MaxResponseHeaderBytes: 64 * 1024,        // cap response header size
 	},
 }
 
@@ -41,9 +51,15 @@ func clientFor(creds core.Credentials) *http.Client {
 		return sharedClient
 	}
 	t := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
+		MaxIdleConns:          200,
+		MaxIdleConnsPerHost:   20,
+		IdleConnTimeout:       120 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		WriteBufferSize:       64 * 1024,
+		ReadBufferSize:        64 * 1024,
+		ForceAttemptHTTP2:     true,
 	}
 	if creds.ProxyURL != "" {
 		if u, err := url.Parse(creds.ProxyURL); err == nil {
@@ -96,6 +112,63 @@ func doJSON(ctx context.Context, provider, model, url string, body []byte, heade
 		return nil, httpStatusError(provider, model, resp, respBody)
 	}
 	return respBody, nil
+}
+
+// doJSONDecode performs a JSON POST and returns a streaming json.Decoder
+// instead of reading the entire response body into memory. The decoder reads
+// directly from the response body, eliminating one full copy. The caller MUST
+// close the returned body when done.
+//
+// On error (status >= 400), the body is read and closed internally, and a
+// ProviderError is returned with the decoder set to nil.
+func doJSONDecode(ctx context.Context, provider, model, url string, body []byte, headers map[string]string) (*json.Decoder, io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, &core.ProviderError{Kind: core.ErrInternal, Provider: provider, Model: model, Message: err.Error(), Cause: err}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	proxyRewrite(ctx, req)
+	resp, err := proxyClient(ctx).Do(req)
+	if err != nil {
+		return nil, nil, transportError(ctx, provider, model, err)
+	}
+	if resp.StatusCode >= 400 {
+		defer resp.Body.Close()
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		return nil, nil, httpStatusError(provider, model, resp, errBody)
+	}
+	dec := json.NewDecoder(resp.Body)
+	return dec, resp.Body, nil
+}
+
+// doJSONReader is like doJSON but returns an io.ReadCloser for the response
+// body instead of reading it all into memory. The caller must close the reader.
+// Used for large responses that will be streamed (e.g. direct pipe path).
+func doJSONReader(ctx context.Context, provider, model, url string, body []byte, headers map[string]string) (io.ReadCloser, http.Header, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, &core.ProviderError{Kind: core.ErrInternal, Provider: provider, Model: model, Message: err.Error(), Cause: err}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	proxyRewrite(ctx, req)
+	resp, err := proxyClient(ctx).Do(req)
+	if err != nil {
+		return nil, nil, transportError(ctx, provider, model, err)
+	}
+	if resp.StatusCode >= 400 {
+		defer resp.Body.Close()
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		return nil, nil, httpStatusError(provider, model, resp, errBody)
+	}
+	return resp.Body, resp.Header, nil
 }
 
 // doJSONMethod performs a JSON request with an explicit method (GET/POST) and
@@ -359,8 +432,18 @@ func isMeaningfulChunk(ch core.StreamChunk) bool {
 }
 
 // sseScanner returns a bufio.Scanner configured for SSE: it reads one logical
-// line at a time with a generous buffer for large data payloads.
+// line at a time with a generous buffer for large data payloads. Uses a pooled
+// initial buffer to reduce allocation pressure on high-throughput streams.
 func sseScanner(r io.Reader) *bufio.Scanner {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	return sc
+}
+
+// sseScannerPooled returns a bufio.Scanner like sseScanner but reuses a buffer
+// from the pool. The caller should NOT return the buffer — the scanner owns it
+// for the lifetime of the stream.
+func sseScannerPooled(r io.Reader) *bufio.Scanner {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	return sc

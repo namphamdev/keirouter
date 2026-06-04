@@ -3,10 +3,11 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Clock, Calendar, RefreshCw, Power, PowerOff,
   Loader2, Trash2, ToggleLeft, ToggleRight, ChevronDown,
+  Activity, Zap, DollarSign, Server,
 } from "lucide-react";
-import { api, type QuotaAccount, type UpstreamQuota } from "../lib/api";
+import { api, connectUsageStream, type QuotaAccount, type UpstreamQuota } from "../lib/api";
 import { PageHeader } from "../components/Layout";
-import { Card, Spinner, EmptyState, Badge, StatusDot } from "../components/ui";
+import { Card, Spinner, EmptyState, Badge, StatusDot, StatCard } from "../components/ui";
 import { useToast } from "../components/Toast";
 
 const periods = [
@@ -16,13 +17,19 @@ const periods = [
 ];
 
 const DEPLETED_THRESHOLD = 5;
-const REFRESH_INTERVAL = 60_000;
+const REFRESH_INTERVAL = 10_000; // 10s near-real-time refresh
 
 const statusMeta: Record<string, { label: string; tone: "success" | "warning" | "danger" }> = {
   active: { label: "Active", tone: "success" },
   paused: { label: "Paused", tone: "warning" },
   needs_attention: { label: "Needs attention", tone: "danger" },
 };
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toLocaleString();
+}
 
 function getColor(remainingPct: number) {
   if (remainingPct > 70) return { bar: "bg-emerald-500", text: "text-emerald-600 dark:text-emerald-400", emoji: "🟢" };
@@ -82,6 +89,17 @@ export function QuotaPage() {
     queryFn: () => api.quota(period),
     refetchInterval: autoRefresh ? REFRESH_INTERVAL : false,
   });
+
+  // Subscribe to SSE usage stream for instant cache invalidation. When a new
+  // usage record is inserted (e.g. a combo-mode request completes), the meter
+  // publishes to the hub, which pushes an SSE event here. We invalidate the
+  // quota query so the next render shows fresh data without waiting for the
+  // polling interval.
+  useEffect(() => {
+    return connectUsageStream(() => {
+      qc.invalidateQueries({ queryKey: ["quota"] });
+    });
+  }, [qc]);
 
   const accounts = quota.data?.accounts ?? [];
   const providers = [...new Set(accounts.map((a) => a.provider))].sort();
@@ -204,6 +222,13 @@ export function QuotaPage() {
   const depletedCount = sorted.filter((a) => a.status === "active" && isDepleted(a)).length;
   const pausedAvailCount = sorted.filter((a) => a.status === "paused" && !isDepleted(a)).length;
 
+  // Aggregate stats across all accounts
+  const totalRequests = accounts.reduce((s, a) => s + a.total_requests, 0);
+  const totalPromptTokens = accounts.reduce((s, a) => s + a.prompt_tokens, 0);
+  const totalCompletionTokens = accounts.reduce((s, a) => s + a.completion_tokens, 0);
+  const totalCost = accounts.reduce((s, a) => s + a.cost_usd, 0);
+  const activeCount = accounts.filter((a) => a.status === "active").length;
+
   return (
     <>
       <PageHeader
@@ -222,6 +247,17 @@ export function QuotaPage() {
           </div>
         </div>
       </div>
+
+      {/* Summary stat cards */}
+      {!quota.isLoading && accounts.length > 0 && (
+        <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <StatCard label="Total Requests" value={totalRequests.toLocaleString()} icon={Activity} iconTone="accent" />
+          <StatCard label="Input Tokens" value={fmtTokens(totalPromptTokens)} icon={Zap} iconTone="accent" />
+          <StatCard label="Output Tokens" value={fmtTokens(totalCompletionTokens)} icon={Zap} iconTone="accent" />
+          <StatCard label="Total Cost" value={`$${totalCost.toFixed(2)}`} icon={DollarSign} iconTone="warning" />
+          <StatCard label="Active Accounts" value={`${activeCount} / ${accounts.length}`} icon={Server} iconTone="accent" />
+        </div>
+      )}
 
       <Card>
         {/* ── Toolbar ──────────────────────────────────────────── */}
@@ -419,40 +455,42 @@ function QuotaRow({
           </div>
         )}
 
-        {/* Stats — adapt per usage_type */}
-        <div className="hidden items-center gap-3 text-[11px] text-[var(--text-muted)] lg:flex">
-          {account.usage_type === "credit" ? (
-            <>
-              <span>{account.total_requests.toLocaleString()} req</span>
-              {(() => {
-                const q = account.upstream_quotas?.[0];
-                if (!q) return null;
-                const remainingPct = q.limit > 0 ? Math.round((q.remaining / q.limit) * 100) : null;
-                return (
-                  <>
-                    <span>
-                      <span className="font-medium text-[var(--text)]">{q.used.toLocaleString()}</span>
-                      <span className="mx-0.5">/</span>
-                      <span>{q.limit > 0 ? q.limit.toLocaleString() : "∞"}</span>
-                      <span className="ml-0.5">used</span>
-                    </span>
-                    <span>
-                      <span className={`font-medium ${remainingPct !== null && remainingPct < 30 ? "text-red-500" : remainingPct !== null && remainingPct < 70 ? "text-amber-500" : "text-emerald-500"}`}>
-                        {q.remaining.toLocaleString()}
-                      </span>
-                      <span className="ml-0.5">left</span>
-                    </span>
-                  </>
-                );
-              })()}
-            </>
-          ) : (
-            <>
-              <span>{account.total_requests.toLocaleString()} req</span>
-              <span>{(account.prompt_tokens + account.completion_tokens).toLocaleString()} tok</span>
-              <span className="font-medium tabular-nums text-[var(--text)]">${account.cost_usd.toFixed(4)}</span>
-            </>
-          )}
+        {/* Stats — always show request/token/cost; credit accounts also show quota inline */}
+        <div className="hidden items-center gap-3 text-[11px] text-[var(--text-muted)] md:flex">
+          <span className="flex items-center gap-1">
+            <Activity className="h-3 w-3" />
+            <span className="font-medium text-[var(--text)]">{account.total_requests.toLocaleString()}</span> req
+          </span>
+          <span className="flex items-center gap-1">
+            <Zap className="h-3 w-3" />
+            {fmtTokens(account.prompt_tokens + account.completion_tokens)} tok
+          </span>
+          <span className="flex items-center gap-1">
+            <DollarSign className="h-3 w-3" />
+            <span className="font-medium tabular-nums text-[var(--text)]">${account.cost_usd.toFixed(4)}</span>
+          </span>
+          {account.usage_type === "credit" && (() => {
+            const q = account.upstream_quotas?.[0];
+            if (!q) return null;
+            const remainingPct = q.limit > 0 ? Math.round((q.remaining / q.limit) * 100) : null;
+            return (
+              <>
+                <div className="mx-0.5 h-3 w-px bg-[var(--border)]" />
+                <span>
+                  <span className="font-medium text-[var(--text)]">{q.used.toLocaleString()}</span>
+                  <span className="mx-0.5">/</span>
+                  <span>{q.limit > 0 ? q.limit.toLocaleString() : "∞"}</span>
+                  <span className="ml-0.5">used</span>
+                </span>
+                <span>
+                  <span className={`font-medium ${remainingPct !== null && remainingPct < 30 ? "text-red-500" : remainingPct !== null && remainingPct < 70 ? "text-amber-500" : "text-emerald-500"}`}>
+                    {q.remaining.toLocaleString()}
+                  </span>
+                  <span className="ml-0.5">left</span>
+                </span>
+              </>
+            );
+          })()}
         </div>
 
         {/* Actions */}
@@ -484,33 +522,25 @@ function QuotaRow({
       {expanded && hasQuota && (
         <div className="border-t border-[var(--border)] bg-[var(--bg-subtle)]/30 px-4 py-2">
           <QuotaTable quotas={quotas} />
-          {/* Mobile stats (hidden on lg+) — adapt per usage_type */}
-          <div className="mt-2 flex items-center justify-between text-[11px] text-[var(--text-muted)] lg:hidden">
-            {account.usage_type === "credit" ? (
-              <>
-                <span>{account.total_requests.toLocaleString()} requests</span>
-                {(() => {
-                  const q = account.upstream_quotas?.[0];
-                  if (!q) return null;
-                  const remainingPct = q.limit > 0 ? Math.round((q.remaining / q.limit) * 100) : null;
-                  return (
-                    <span>
-                      {q.used.toLocaleString()} / {q.limit > 0 ? q.limit.toLocaleString() : "∞"} used
-                      {" · "}
-                      <span className={remainingPct !== null && remainingPct < 30 ? "text-red-500" : remainingPct !== null && remainingPct < 70 ? "text-amber-500" : "text-emerald-500"}>
-                        {q.remaining.toLocaleString()} left
-                      </span>
-                    </span>
-                  );
-                })()}
-              </>
-            ) : (
-              <>
-                <span>{account.total_requests.toLocaleString()} requests</span>
-                <span>{(account.prompt_tokens + account.completion_tokens).toLocaleString()} tokens</span>
-                <span className="font-medium tabular-nums">${account.cost_usd.toFixed(4)}</span>
-              </>
-            )}
+          {/* Mobile stats (hidden on md+) — always show req/tokens/cost */}
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--text-muted)] md:hidden">
+            <span>{account.total_requests.toLocaleString()} requests</span>
+            <span>{fmtTokens(account.prompt_tokens + account.completion_tokens)} tokens</span>
+            <span className="font-medium tabular-nums">${account.cost_usd.toFixed(4)}</span>
+            {account.usage_type === "credit" && (() => {
+              const q = account.upstream_quotas?.[0];
+              if (!q) return null;
+              const remainingPct = q.limit > 0 ? Math.round((q.remaining / q.limit) * 100) : null;
+              return (
+                <span>
+                  {q.used.toLocaleString()} / {q.limit > 0 ? q.limit.toLocaleString() : "∞"} used
+                  {" · "}
+                  <span className={remainingPct !== null && remainingPct < 30 ? "text-red-500" : remainingPct !== null && remainingPct < 70 ? "text-amber-500" : "text-emerald-500"}>
+                    {q.remaining.toLocaleString()} left
+                  </span>
+                </span>
+              );
+            })()}
           </div>
         </div>
       )}

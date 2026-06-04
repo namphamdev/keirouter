@@ -3,13 +3,13 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Network, Plus, Trash2, Play, Upload, Pencil, X, Check,
   ToggleLeft, ToggleRight, Loader2, CheckCircle2, XCircle, CircleDot,
-  ChevronDown, RefreshCw,
+  RefreshCw,
 } from "lucide-react";
 import { api, type ProxyPool } from "../lib/api";
 import { PageHeader } from "../components/Layout";
 import { useToast } from "../components/Toast";
 import {
-  Card, CardHeader, Button, Input, Field, Badge, Spinner, EmptyState, Select,
+  Card, Button, Input, Field, Badge, Spinner, EmptyState,
 } from "../components/ui";
 
 export function ProxyPoolsPage() {

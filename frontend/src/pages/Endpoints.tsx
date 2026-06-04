@@ -164,8 +164,8 @@ function CloudflareTunnel() {
   const [loading, setLoading] = useState(false);
   const [reachable, setReachable] = useState<boolean | null>(null);
   const missRef = useRef(0);
-  const pingTimerRef = useRef<ReturnType<typeof setInterval>>();
-  const pollTimerRef = useRef<ReturnType<typeof setInterval>>();
+  const pingTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const status = useQuery({
     queryKey: ["tunnel-status"],
@@ -292,7 +292,7 @@ function TailscaleTunnel() {
   const [authUrl, setAuthUrl] = useState<string | null>(null);
   const [showInstall, setShowInstall] = useState(false);
   const missRef = useRef(0);
-  const pingTimerRef = useRef<ReturnType<typeof setInterval>>();
+  const pingTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const status = useQuery({
     queryKey: ["tunnel-status"],
@@ -500,7 +500,7 @@ function TailscaleTunnel() {
         {/* Status */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
-            <TunnelDot running={isRunning} reachable={reachable} loading={loading} />
+            <TunnelDot running={isRunning} reachable={reachable} />
             <span className="text-sm font-medium truncate">{statusText}</span>
           </div>
           {isRunning && (
@@ -619,7 +619,7 @@ function TunnelCard({
         {/* Status */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
-            <TunnelDot running={isRunning} reachable={reachable} loading={loading} />
+            <TunnelDot running={isRunning} reachable={reachable} />
             <span className="text-sm font-medium truncate">{statusText}</span>
           </div>
           {isRunning && (
@@ -669,11 +669,9 @@ function TunnelCard({
 function TunnelDot({
   running,
   reachable,
-  loading,
 }: {
   running: boolean;
   reachable: boolean | null;
-  loading: boolean;
 }) {
   const color = running
     ? reachable === true

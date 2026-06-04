@@ -9,6 +9,13 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/store"
 )
 
+// resolveResult carries both the targets and the strategy metadata needed
+// by the pipeline to apply round-robin or other rotation strategies.
+type resolveResult struct {
+	Targets    []dispatch.Target
+	PlanOpts   dispatch.PlanOptions
+}
+
 // ChainSource resolves a named chain for a tenant.
 type ChainSource interface {
 	ListByTenant(ctx context.Context, tenantID string) ([]store.Chain, error)
@@ -29,15 +36,18 @@ type AliasSource interface {
 //   - bare "name"        -> resolved as a chain named "name" if one exists,
 //     then as a model alias. A bare name is never assumed to be a provider
 //     model; routing stays explicit and predictable.
-func resolveTargets(ctx context.Context, chains ChainSource, aliases AliasSource, tenantID, model string) ([]dispatch.Target, error) {
+//
+// When a chain is resolved, the returned resolveResult carries the chain ID
+// and strategy so the dispatcher can apply round-robin rotation.
+func resolveTargets(ctx context.Context, chains ChainSource, aliases AliasSource, tenantID, model string) (resolveResult, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
-		return nil, errBadModel("model is required")
+		return resolveResult{}, errBadModel("model is required")
 	}
 
 	// chain:<name>
 	if name, ok := strings.CutPrefix(model, "chain:"); ok {
-		return chainTargets(ctx, chains, tenantID, name)
+		return chainResult(ctx, chains, tenantID, name)
 	}
 
 	// provider/model — resolve provider alias (e.g. "mmtp" -> "xiaomi-tokenplan").
@@ -45,13 +55,13 @@ func resolveTargets(ctx context.Context, chains ChainSource, aliases AliasSource
 		if spec, ok := connectors.SpecByAlias(provider); ok {
 			provider = spec.ID
 		}
-		return []dispatch.Target{{Provider: provider, Model: rest}}, nil
+		return resolveResult{Targets: []dispatch.Target{{Provider: provider, Model: rest}}}, nil
 	}
 
 	// bare name -> try a chain first
-	targets, err := chainTargets(ctx, chains, tenantID, model)
+	res, err := chainResult(ctx, chains, tenantID, model)
 	if err == nil {
-		return targets, nil
+		return res, nil
 	}
 
 	// bare name -> try an alias
@@ -59,29 +69,39 @@ func resolveTargets(ctx context.Context, chains ChainSource, aliases AliasSource
 		alias, aerr := aliases.Get(ctx, model)
 		if aerr == nil && alias.Target != "" {
 			if provider, rest, ok := strings.Cut(alias.Target, "/"); ok && provider != "" && rest != "" {
-				return []dispatch.Target{{Provider: provider, Model: rest}}, nil
+				return resolveResult{Targets: []dispatch.Target{{Provider: provider, Model: rest}}}, nil
 			}
 		}
 	}
 
-	return nil, errBadModel("model must be 'provider/model', a chain name, or an alias: " + model)
+	return resolveResult{}, errBadModel("model must be 'provider/model', a chain name, or an alias: " + model)
 }
 
-func chainTargets(ctx context.Context, chains ChainSource, tenantID, name string) ([]dispatch.Target, error) {
+// chainResult resolves a chain by name and extracts its strategy metadata.
+func chainResult(ctx context.Context, chains ChainSource, tenantID, name string) (resolveResult, error) {
 	list, err := chains.ListByTenant(ctx, tenantID)
 	if err != nil {
-		return nil, err
+		return resolveResult{}, err
 	}
 	for _, c := range list {
 		if c.Name == name {
 			targets := dispatch.TargetsFromChain(c)
 			if len(targets) == 0 {
-				return nil, errBadModel("chain has no steps: " + name)
+				return resolveResult{}, errBadModel("chain has no steps: " + name)
 			}
-			return targets, nil
+			opts := dispatch.PlanOptions{
+				ChainID: c.ID,
+			}
+			switch dispatch.Strategy(c.Strategy) {
+			case dispatch.StrategyRoundRobin:
+				opts.Strategy = dispatch.StrategyRoundRobin
+			default:
+				opts.Strategy = dispatch.StrategyFallback
+			}
+			return resolveResult{Targets: targets, PlanOpts: opts}, nil
 		}
 	}
-	return nil, errBadModel("no chain named " + name)
+	return resolveResult{}, errBadModel("no chain named " + name)
 }
 
 // badModelError signals an unresolvable model string (a client error).

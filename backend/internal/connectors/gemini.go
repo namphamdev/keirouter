@@ -2,6 +2,8 @@ package connectors
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"net/url"
 	"time"
 
@@ -76,6 +78,23 @@ func (c *Gemini) Chat(ctx context.Context, req *core.ChatRequest, creds core.Cre
 		return nil, &core.ProviderError{Kind: core.ErrUpstream, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
 	}
 	return resp, nil
+}
+
+// StreamRaw opens a streaming SSE connection and returns the raw response body
+// for zero-copy same-dialect piping.
+func (c *Gemini) StreamRaw(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (io.ReadCloser, http.Header, error) {
+	req.Stream = true
+	body, err := c.codec.RenderRequest(req)
+	if err != nil {
+		return nil, nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
+	}
+
+	streamURL := c.modelURL(creds, req.Model, "streamGenerateContent") + "?alt=sse"
+	resp, err := openStream(ctx, c.id, req.Model, streamURL, body, c.headers(creds))
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp.Body, resp.Header, nil
 }
 
 // Stream performs a streaming streamGenerateContent call. Gemini emits SSE when

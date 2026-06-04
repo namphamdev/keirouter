@@ -2,16 +2,16 @@ import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, Copy, Check, Settings, Trash2, Play, RotateCcw,
-  CheckCircle2, XCircle, CircleDot, ExternalLink, Loader2,
+  ArrowLeft, Copy, Check, Settings, Play, RotateCcw,
+  CheckCircle2, XCircle, CircleDot, Loader2,
   ChevronDown, ChevronUp, TerminalSquare, KeyRound, Globe, Cpu,
 } from "lucide-react";
-import { api, type CLITool } from "../lib/api";
+import { api } from "../lib/api";
 import { brandColor } from "../lib/brand-colors";
 import { useToast } from "../components/Toast";
 import {
-  Card, SectionHeader, CardHeader, Button, Input, Select, Field,
-  Badge, Spinner, EmptyState,
+  Card, SectionHeader, Button, Input, Select, Field,
+  Spinner, EmptyState,
 } from "../components/ui";
 
 // Tool metadata — descriptions, images, install commands. Colors from brand-colors.ts.
@@ -248,7 +248,7 @@ export function CLIToolDetailPage() {
             </Button>
             {tool.configured && (
               <Button
-                variant="outline"
+                variant="ghost"
                 onClick={() => removeMut.mutate()}
                 disabled={removeMut.isPending}
               >

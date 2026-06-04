@@ -2,6 +2,8 @@ package connectors
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
@@ -65,6 +67,24 @@ func (c *Ollama) Chat(ctx context.Context, req *core.ChatRequest, creds core.Cre
 		return nil, &core.ProviderError{Kind: core.ErrUpstream, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
 	}
 	return resp, nil
+}
+
+// StreamRaw opens a streaming connection and returns the raw response body
+// for zero-copy same-dialect piping. Ollama uses NDJSON, so the raw body
+// is newline-delimited JSON objects.
+func (c *Ollama) StreamRaw(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (io.ReadCloser, http.Header, error) {
+	req.Stream = true
+	body, err := c.codec.RenderRequest(req)
+	if err != nil {
+		return nil, nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
+	}
+
+	url := joinURL(c.baseURL(creds), "api/chat")
+	resp, err := openStream(ctx, c.id, req.Model, url, body, c.headers(creds))
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp.Body, resp.Header, nil
 }
 
 // Stream performs a streaming /api/chat call. Ollama emits NDJSON, so each

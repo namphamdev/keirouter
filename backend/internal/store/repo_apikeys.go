@@ -11,6 +11,12 @@ import (
 // ErrNotFound is returned when a lookup matches no row.
 var ErrNotFound = errors.New("store: not found")
 
+// sqlExec abstracts *sql.DB and *sql.Tx so repository helpers can run on
+// either a direct connection or inside an open transaction.
+type sqlExec interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 // APIKeyRepo persists inbound API keys.
 type APIKeyRepo struct{ db *DB }
 
@@ -19,11 +25,20 @@ func (db *DB) APIKeys() *APIKeyRepo { return &APIKeyRepo{db: db} }
 
 // Create inserts a new API key record.
 func (r *APIKeyRepo) Create(ctx context.Context, k APIKey) error {
+	return r.insert(ctx, r.db.sql, k)
+}
+
+// CreateOnTx inserts a key within an existing transaction.
+func (r *APIKeyRepo) CreateOnTx(ctx context.Context, tx *sql.Tx, k APIKey) error {
+	return r.insert(ctx, tx, k)
+}
+
+func (r *APIKeyRepo) insert(ctx context.Context, ex sqlExec, k APIKey) error {
 	q := r.db.rebind(`
 		INSERT INTO api_keys
 			(id, tenant_id, project_id, name, key_hash, lookup_hash, display, scopes, disabled, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-	_, err := r.db.sql.ExecContext(ctx, q,
+	_, err := ex.ExecContext(ctx, q,
 		k.ID, k.TenantID, nullString(k.ProjectID), k.Name, k.KeyHash, k.LookupHash,
 		k.Display, k.Scopes, boolToInt(k.Disabled), formatTime(k.CreatedAt))
 	if err != nil {

@@ -38,6 +38,20 @@ type Issued struct {
 
 // Create mints a new API key for a tenant/project, persisting only its hashes.
 func (s *Service) Create(ctx context.Context, tenantID, projectID, name string) (Issued, error) {
+	issued, err := s.Generate(tenantID, projectID, name)
+	if err != nil {
+		return Issued{}, err
+	}
+	if err := s.keys.Create(ctx, issued.Record); err != nil {
+		return Issued{}, err
+	}
+	return issued, nil
+}
+
+// Generate creates key material (hashes, display) without persisting.
+// The caller is responsible for inserting Issued.Record into the store,
+// typically inside a transaction when co-creating related resources.
+func (s *Service) Generate(tenantID, projectID, name string) (Issued, error) {
 	gen, err := crypto.GenerateAPIKey()
 	if err != nil {
 		return Issued{}, err
@@ -52,11 +66,16 @@ func (s *Service) Create(ctx context.Context, tenantID, projectID, name string) 
 		Display:    gen.Display,
 		CreatedAt:  time.Now(),
 	}
-	if err := s.keys.Create(ctx, rec); err != nil {
-		return Issued{}, err
-	}
 	return Issued{Record: rec, Plaintext: gen.Plaintext}, nil
 }
+
+// CreateFromIssued persists a previously generated key (from Generate).
+func (s *Service) CreateFromIssued(ctx context.Context, issued Issued) error {
+	return s.keys.Create(ctx, issued.Record)
+}
+
+// Keys exposes the underlying key repo for transactional flows.
+func (s *Service) Keys() *store.APIKeyRepo { return s.keys }
 
 // Authenticate verifies a presented plaintext key and returns its record. On
 // success it best-effort updates the key's last-used timestamp.

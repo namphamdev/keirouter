@@ -11,6 +11,7 @@ package transform
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 )
@@ -57,6 +58,16 @@ type StreamCodec interface {
 // StreamState carries per-stream rendering state across chunks (message ids,
 // whether the opening event was sent, running tool-call indices, ...). Each
 // streaming response gets its own zero-valued StreamState.
+
+// StreamingResponseCodec is optionally implemented by codecs that can parse a
+// unary response directly from an io.Reader, avoiding the intermediate []byte
+// allocation from io.ReadAll. Connectors check for this via type assertion and
+// fall back to ParseResponse when absent.
+type StreamingResponseCodec interface {
+	// ParseResponseFrom decodes a unary upstream response from a stream reader
+	// into canonical form. The reader is the raw HTTP response body.
+	ParseResponseFrom(r io.Reader, model string) (*core.ChatResponse, error)
+}
 type StreamState struct {
 	MessageID   string
 	Model       string

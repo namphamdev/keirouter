@@ -36,11 +36,6 @@ function progressColor(pct: number, alertPct: number): string {
   return "bg-emerald-500";
 }
 
-function statusTone(pct: number, alertPct: number): "success" | "warning" | "danger" {
-  if (pct >= 100) return "danger";
-  if (pct >= alertPct) return "warning";
-  return "success";
-}
 
 export function BudgetsPage() {
   const qc = useQueryClient();
