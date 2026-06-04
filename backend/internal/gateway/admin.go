@@ -547,6 +547,7 @@ func (s *Server) adminDeleteAccount(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminValidateKey(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Provider          string `json:"provider"`
+		Label             string `json:"label"`
 		APIKey            string `json:"api_key"`
 		BaseURL           string `json:"base_url"`
 		Region            string `json:"region"`

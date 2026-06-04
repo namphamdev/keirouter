@@ -2,12 +2,15 @@ package oauth
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -18,22 +21,96 @@ var httpClient = &http.Client{Timeout: 30 * time.Second}
 // AuthURL builds the provider authorize URL for an authorization-code(+PKCE)
 // flow. challenge is empty for non-PKCE flows.
 func (c ProviderConfig) AuthURL(redirectURI, state, challenge string) string {
+	params := c.authParams(redirectURI, state, challenge)
+	if c.EncodeAuthSpacesAsPercent {
+		return c.AuthorizeURL + "?" + encodeAuthParams(params, true)
+	}
+
 	q := url.Values{}
-	q.Set("response_type", "code")
-	q.Set("client_id", c.ClientID)
-	q.Set("redirect_uri", redirectURI)
-	if len(c.Scopes) > 0 {
-		q.Set("scope", strings.Join(c.Scopes, " "))
-	}
-	q.Set("state", state)
-	if c.Flow == FlowAuthCodePKCE && challenge != "" {
-		q.Set("code_challenge", challenge)
-		q.Set("code_challenge_method", "S256")
-	}
-	for k, v := range c.ExtraAuthParams {
-		q.Set(k, v)
+	for _, p := range params {
+		q.Set(p.key, p.value)
 	}
 	return c.AuthorizeURL + "?" + q.Encode()
+}
+
+type authParam struct {
+	key   string
+	value string
+}
+
+func (c ProviderConfig) authParams(redirectURI, state, challenge string) []authParam {
+	params := []authParam{
+		{"response_type", "code"},
+		{"client_id", c.ClientID},
+		{"redirect_uri", redirectURI},
+	}
+	if len(c.Scopes) > 0 {
+		params = append(params, authParam{"scope", strings.Join(c.Scopes, " ")})
+	}
+	if c.Flow == FlowAuthCodePKCE && challenge != "" {
+		params = append(params,
+			authParam{"code_challenge", challenge},
+			authParam{"code_challenge_method", "S256"},
+		)
+	}
+
+	if c.Provider == "xai" {
+		params = append(params, authParam{"state", state})
+		if c.NonceBytes > 0 {
+			params = append(params, authParam{"nonce", randomHex(c.NonceBytes)})
+		}
+		c.appendExtraAuthParams(&params)
+		return params
+	}
+
+	c.appendExtraAuthParams(&params)
+	params = append(params, authParam{"state", state})
+	return params
+}
+
+func (c ProviderConfig) appendExtraAuthParams(params *[]authParam) {
+	seen := map[string]bool{}
+	for _, key := range c.ExtraAuthParamOrder {
+		if value, ok := c.ExtraAuthParams[key]; ok {
+			*params = append(*params, authParam{key, value})
+			seen[key] = true
+		}
+	}
+	rest := make([]string, 0, len(c.ExtraAuthParams))
+	for key := range c.ExtraAuthParams {
+		if !seen[key] {
+			rest = append(rest, key)
+		}
+	}
+	sort.Strings(rest)
+	for _, key := range rest {
+		*params = append(*params, authParam{key, c.ExtraAuthParams[key]})
+	}
+}
+
+func encodeAuthParams(params []authParam, spacesAsPercent bool) string {
+	parts := make([]string, 0, len(params))
+	for _, p := range params {
+		key := url.QueryEscape(p.key)
+		value := url.QueryEscape(p.value)
+		if spacesAsPercent {
+			key = strings.ReplaceAll(key, "+", "%20")
+			value = strings.ReplaceAll(value, "+", "%20")
+		}
+		parts = append(parts, key+"="+value)
+	}
+	return strings.Join(parts, "&")
+}
+
+func randomHex(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
 }
 
 // ExchangeCode swaps an authorization code for tokens. verifier is the PKCE
@@ -64,6 +141,7 @@ func (c ProviderConfig) ExchangeCode(ctx context.Context, code, redirectURI, ver
 	if err != nil {
 		return nil, err
 	}
+	c.applyTokenMetadata(tokens)
 	// Best-effort: fetch the connected user's profile so the dashboard can
 	// show a human-readable label (email / display name).
 	c.FetchUserInfo(ctx, tokens)
@@ -139,6 +217,7 @@ func (c ProviderConfig) PollDeviceToken(ctx context.Context, deviceCode, verifie
 	var parsed struct {
 		AccessToken      string `json:"access_token"`
 		RefreshToken     string `json:"refresh_token"`
+		IDToken          string `json:"id_token"`
 		ExpiresIn        int    `json:"expires_in"`
 		Scope            string `json:"scope"`
 		Error            string `json:"error"`
@@ -150,9 +229,11 @@ func (c ProviderConfig) PollDeviceToken(ctx context.Context, deviceCode, verifie
 		tokens := &Tokens{
 			AccessToken:  parsed.AccessToken,
 			RefreshToken: parsed.RefreshToken,
+			IDToken:      parsed.IDToken,
 			ExpiresIn:    parsed.ExpiresIn,
 			Scope:        parsed.Scope,
 		}
+		c.applyTokenMetadata(tokens)
 		c.FetchUserInfo(ctx, tokens)
 		return PollResult{Done: true, Tokens: tokens}
 	}
@@ -196,11 +277,74 @@ func (c ProviderConfig) Refresh(ctx context.Context, refreshToken string) (*Toke
 	if err != nil {
 		return nil, err
 	}
+	c.applyTokenMetadata(t)
 	// Providers may omit a new refresh token; keep the existing one.
 	if t.RefreshToken == "" {
 		t.RefreshToken = refreshToken
 	}
 	return t, nil
+}
+
+func (c ProviderConfig) applyTokenMetadata(t *Tokens) {
+	if t == nil {
+		return
+	}
+	if t.Extra == nil {
+		t.Extra = map[string]string{}
+	}
+
+	payload := decodeJWTPayload(t.IDToken)
+	switch c.Provider {
+	case "codex":
+		if t.Email == "" {
+			if email, _ := payload["email"].(string); email != "" {
+				t.Email = email
+			}
+		}
+		if auth, _ := payload["https://api.openai.com/auth"].(map[string]any); auth != nil {
+			if accountID, _ := auth["chatgpt_account_id"].(string); accountID != "" {
+				t.Extra["chatgpt_account_id"] = accountID
+			}
+			if planType, _ := auth["chatgpt_plan_type"].(string); planType != "" {
+				t.Extra["chatgpt_plan_type"] = planType
+			}
+		}
+		if accountID, _ := payload["account_id"].(string); accountID != "" && t.Extra["chatgpt_account_id"] == "" {
+			t.Extra["chatgpt_account_id"] = accountID
+		}
+		if planType, _ := payload["plan_type"].(string); planType != "" && t.Extra["chatgpt_plan_type"] == "" {
+			t.Extra["chatgpt_plan_type"] = planType
+		}
+	case "xai":
+		if t.Email == "" {
+			if email, _ := payload["email"].(string); email != "" {
+				t.Email = email
+			}
+		}
+	}
+
+	if len(t.Extra) == 0 {
+		t.Extra = nil
+	}
+}
+
+func decodeJWTPayload(token string) map[string]any {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		payload, err = base64.URLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return nil
+		}
+	}
+	var out map[string]any
+	if err := json.Unmarshal(payload, &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 // tokenRequest posts a token-endpoint request and returns the body, erroring on
@@ -266,6 +410,7 @@ func mapTokenResponse(raw []byte) (*Tokens, error) {
 	var parsed struct {
 		AccessToken      string `json:"access_token"`
 		RefreshToken     string `json:"refresh_token"`
+		IDToken          string `json:"id_token"`
 		ExpiresIn        int    `json:"expires_in"`
 		Scope            string `json:"scope"`
 		Error            string `json:"error"`
@@ -283,6 +428,7 @@ func mapTokenResponse(raw []byte) (*Tokens, error) {
 	return &Tokens{
 		AccessToken:  parsed.AccessToken,
 		RefreshToken: parsed.RefreshToken,
+		IDToken:      parsed.IDToken,
 		ExpiresIn:    parsed.ExpiresIn,
 		Scope:        parsed.Scope,
 	}, nil
@@ -321,12 +467,12 @@ func (c ProviderConfig) FetchUserInfo(ctx context.Context, t *Tokens) {
 	//   GitHub:      { "login": "...", "email": "...", "name": "..." }
 	//   Claude:      { "email": "...", "display_name": "..." }
 	var info struct {
-		Email           string `json:"email"`
-		Name            string `json:"name"`
-		DisplayName     string `json:"display_name"`
-		Login           string `json:"login"`
-		PreferredUser   string `json:"preferred_username"`
-		Sub             string `json:"sub"`
+		Email         string `json:"email"`
+		Name          string `json:"name"`
+		DisplayName   string `json:"display_name"`
+		Login         string `json:"login"`
+		PreferredUser string `json:"preferred_username"`
+		Sub           string `json:"sub"`
 	}
 	_ = json.Unmarshal(body, &info)
 

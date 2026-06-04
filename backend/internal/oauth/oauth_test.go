@@ -3,6 +3,7 @@ package oauth
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -65,6 +66,65 @@ func TestAuthURLPKCE(t *testing.T) {
 		if !strings.Contains(url, want) {
 			t.Errorf("auth URL missing %q\ngot: %s", want, url)
 		}
+	}
+}
+
+func TestCodexAuthURLMatchesCLIFlow(t *testing.T) {
+	cfg, _ := ConfigFor("codex")
+	redirectURI := cfg.ResolveRedirectURI("http://localhost:20180/oauth/callback")
+	if redirectURI != "http://localhost:1455/auth/callback" {
+		t.Fatalf("codex redirect mismatch: got %q", redirectURI)
+	}
+
+	authURL := cfg.AuthURL(redirectURI, "state123", "challenge456")
+	for _, want := range []string{
+		"https://auth.openai.com/oauth/authorize?",
+		"response_type=code",
+		"client_id=app_EMoamEEZ73f0CkXaXp7hrann",
+		"redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback",
+		"scope=openid%20profile%20email%20offline_access",
+		"code_challenge=challenge456",
+		"code_challenge_method=S256",
+		"id_token_add_organizations=true",
+		"codex_cli_simplified_flow=true",
+		"originator=codex_cli_rs",
+		"state=state123",
+	} {
+		if !strings.Contains(authURL, want) {
+			t.Errorf("codex auth URL missing %q\ngot: %s", want, authURL)
+		}
+	}
+	if strings.Contains(authURL, "scope=openid+profile") {
+		t.Fatalf("codex scope must use %%20 encoding, got: %s", authURL)
+	}
+}
+
+func TestXAIAuthURLMatchesCLIFlow(t *testing.T) {
+	cfg, _ := ConfigFor("xai")
+	redirectURI := cfg.ResolveRedirectURI("http://localhost:20180/oauth/callback")
+	if redirectURI != "http://127.0.0.1:56121/callback" {
+		t.Fatalf("xai redirect mismatch: got %q", redirectURI)
+	}
+
+	authURL := cfg.AuthURL(redirectURI, "state123", "challenge456")
+	for _, want := range []string{
+		"https://auth.x.ai/oauth2/authorize?",
+		"redirect_uri=http%3A%2F%2F127.0.0.1%3A56121%2Fcallback",
+		"scope=openid%20profile%20email%20offline_access%20grok-cli%3Aaccess%20api%3Aaccess",
+		"state=state123",
+		"plan=generic",
+		"referrer=cli-proxy-api",
+	} {
+		if !strings.Contains(authURL, want) {
+			t.Errorf("xai auth URL missing %q\ngot: %s", want, authURL)
+		}
+	}
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nonce := parsed.Query().Get("nonce"); len(nonce) != 32 {
+		t.Fatalf("expected 16-byte hex nonce, got %q", nonce)
 	}
 }
 

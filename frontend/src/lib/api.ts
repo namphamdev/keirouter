@@ -51,6 +51,9 @@ export interface OAuthProvider {
   flow: string; // authorization_code_pkce | authorization_code | device_code
   icon: string;
   color: string;
+  callback_path?: string;
+  fixed_port?: number;
+  loopback_host?: string;
 }
 
 export interface DeviceCode {
@@ -558,7 +561,7 @@ export const api = {
   // OAuth provider connections.
   oauthProviders: () => request<{ providers: OAuthProvider[] }>("GET", "/oauth/providers"),
   oauthAuthorize: (provider: string, redirectUri: string) =>
-    request<{ authorize_url: string; state: string }>("POST", `/oauth/${provider}/authorize`, {
+    request<{ authorize_url: string; state: string; redirect_uri?: string }>("POST", `/oauth/${provider}/authorize`, {
       redirect_uri: redirectUri,
     }),
   oauthExchange: (provider: string, input: { code: string; state: string; label?: string }) =>

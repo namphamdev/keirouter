@@ -17,10 +17,18 @@ import {
   ErrorBanner,
 } from "../components/ui";
 
-// redirectURI is the OAuth callback the provider redirects to after sign-in.
+// defaultRedirectURI is the OAuth callback the provider redirects to after sign-in.
 // The backend intercepts this path, exchanges the code, and redirects to a
 // frontend callback page that notifies this tab via postMessage.
-const redirectURI = "http://localhost:20180/oauth/callback";
+const defaultRedirectURI = "http://localhost:20180/oauth/callback";
+
+function redirectURIForProvider(provider: OAuthProvider): string {
+  if (provider.fixed_port && provider.callback_path) {
+    const host = provider.loopback_host || "127.0.0.1";
+    return `http://${host}:${provider.fixed_port}${provider.callback_path}`;
+  }
+  return defaultRedirectURI;
+}
 
 export function ProviderDetailPage() {
   const { id } = useParams();
@@ -841,9 +849,9 @@ function AuthCodeFlow({ provider, onClose }: { provider: OAuthProvider; onClose:
   const start = async () => {
     setError("");
     try {
-      const res = await api.oauthAuthorize(provider.provider, redirectURI);
+      const res = await api.oauthAuthorize(provider.provider, redirectURIForProvider(provider));
       setWaiting(true);
-      window.open(res.authorize_url, "_blank", "noopener");
+      window.open(res.authorize_url, "_blank", "popup,width=560,height=760");
     } catch (e) {
       setError((e as Error).message);
     }

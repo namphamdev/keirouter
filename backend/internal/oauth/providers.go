@@ -25,8 +25,23 @@ type ProviderConfig struct {
 	UsesBasicAuth bool
 	// ExtraAuthParams are appended to the authorize URL (provider quirks).
 	ExtraAuthParams map[string]string
+	// ExtraAuthParamOrder preserves provider-specific parameter order when the
+	// authorize URL needs CLI-compatible percent encoding.
+	ExtraAuthParamOrder []string
+	// EncodeAuthSpacesAsPercent mirrors CLIs that build authorize URLs with
+	// encodeURIComponent, where spaces become %20 rather than +.
+	EncodeAuthSpacesAsPercent bool
+	// NonceBytes adds a random hex nonce parameter to the authorize URL.
+	NonceBytes int
 	// TokenContentType is "form" (x-www-form-urlencoded, default) or "json".
 	TokenContentType string
+
+	// CallbackPath and FixedLoopbackPort mirror CLI OAuth loopback callbacks.
+	// Providers with FixedLoopbackPort set ignore the dashboard-provided
+	// redirect host and use http://LoopbackHost:FixedLoopbackPort/CallbackPath.
+	CallbackPath      string
+	FixedLoopbackPort int
+	LoopbackHost      string
 
 	// UserInfoURL is the endpoint called after token exchange to retrieve the
 	// connected user's email and display name.  When empty, no profile fetch
@@ -59,14 +74,19 @@ var configs = map[string]ProviderConfig{
 		UserInfoURL:      "https://api.anthropic.com/v1/me",
 	},
 	"codex": {
-		Provider:        "codex",
-		Flow:            FlowAuthCodePKCE,
-		ClientID:        "app_EMoamEEZ73f0CkXaXp7hrann",
-		AuthorizeURL:    "https://auth.openai.com/oauth/authorize",
-		TokenURL:        "https://auth.openai.com/oauth/token",
-		Scopes:          []string{"openid", "profile", "email", "offline_access"},
-		ExtraAuthParams: map[string]string{"id_token_add_organizations": "true", "codex_cli_simplified_flow": "true", "originator": "codex_cli_rs"},
-		UserInfoURL:     "https://auth.openai.com/oauth/userinfo",
+		Provider:                  "codex",
+		Flow:                      FlowAuthCodePKCE,
+		ClientID:                  "app_EMoamEEZ73f0CkXaXp7hrann",
+		AuthorizeURL:              "https://auth.openai.com/oauth/authorize",
+		TokenURL:                  "https://auth.openai.com/oauth/token",
+		Scopes:                    []string{"openid", "profile", "email", "offline_access"},
+		ExtraAuthParams:           map[string]string{"id_token_add_organizations": "true", "codex_cli_simplified_flow": "true", "originator": "codex_cli_rs"},
+		ExtraAuthParamOrder:       []string{"id_token_add_organizations", "codex_cli_simplified_flow", "originator"},
+		EncodeAuthSpacesAsPercent: true,
+		CallbackPath:              "/auth/callback",
+		FixedLoopbackPort:         1455,
+		LoopbackHost:              "localhost",
+		UserInfoURL:               "https://auth.openai.com/oauth/userinfo",
 	},
 	"gemini-cli": {
 		Provider:        "gemini-cli",
@@ -77,7 +97,7 @@ var configs = map[string]ProviderConfig{
 		TokenURL:        "https://oauth2.googleapis.com/token",
 		Scopes:          []string{"https://www.googleapis.com/auth/cloud-platform", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"},
 		ExtraAuthParams: map[string]string{"access_type": "offline", "prompt": "consent"},
-		UserInfoURL:     "https://www.googleapis.com/oauth2/v2/userinfo",
+		UserInfoURL:     "https://www.googleapis.com/oauth2/v1/userinfo",
 	},
 	"antigravity": {
 		Provider:        "antigravity",
@@ -86,20 +106,26 @@ var configs = map[string]ProviderConfig{
 		ClientSecret:    "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",
 		AuthorizeURL:    "https://accounts.google.com/o/oauth2/v2/auth",
 		TokenURL:        "https://oauth2.googleapis.com/token",
-		Scopes:          []string{"https://www.googleapis.com/auth/cloud-platform", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"},
+		Scopes:          []string{"https://www.googleapis.com/auth/cloud-platform", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile", "https://www.googleapis.com/auth/cclog", "https://www.googleapis.com/auth/experimentsandconfigs"},
 		ExtraAuthParams: map[string]string{"access_type": "offline", "prompt": "consent"},
-		UserInfoURL:     "https://www.googleapis.com/oauth2/v2/userinfo",
+		UserInfoURL:     "https://www.googleapis.com/oauth2/v1/userinfo",
 	},
 	"xai": {
-		Provider:          "xai",
-		Flow:              FlowAuthCodePKCE,
-		ClientID:          "b1a00492-073a-47ea-816f-4c329264a828",
-		AuthorizeURL:      "https://auth.x.ai/oauth2/authorize",
-		TokenURL:          "https://auth.x.ai/oauth2/token",
-		Scopes:            []string{"openid", "profile", "email", "offline_access", "api"},
-		PKCEVerifierBytes: 96,
-		ExtraAuthParams:   map[string]string{"plan": "generic", "referrer": "cli-proxy-api"},
-		UserInfoURL:       "https://auth.x.ai/oauth2/userinfo",
+		Provider:                  "xai",
+		Flow:                      FlowAuthCodePKCE,
+		ClientID:                  "b1a00492-073a-47ea-816f-4c329264a828",
+		AuthorizeURL:              "https://auth.x.ai/oauth2/authorize",
+		TokenURL:                  "https://auth.x.ai/oauth2/token",
+		Scopes:                    []string{"openid", "profile", "email", "offline_access", "grok-cli:access", "api:access"},
+		PKCEVerifierBytes:         96,
+		ExtraAuthParams:           map[string]string{"plan": "generic", "referrer": "cli-proxy-api"},
+		ExtraAuthParamOrder:       []string{"plan", "referrer"},
+		EncodeAuthSpacesAsPercent: true,
+		NonceBytes:                16,
+		CallbackPath:              "/callback",
+		FixedLoopbackPort:         56121,
+		LoopbackHost:              "127.0.0.1",
+		UserInfoURL:               "https://auth.x.ai/oauth2/userinfo",
 	},
 	"github": {
 		Provider:      "github",

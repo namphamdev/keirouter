@@ -150,6 +150,32 @@ func TestOpenAICompatible_ValidateRejectsAuthError(t *testing.T) {
 	require.False(t, chatProbed, "auth failures should not fall back")
 }
 
+func TestOpenAICompatible_ValidateXAIStatusHandling(t *testing.T) {
+	t.Run("forbidden is accepted", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "/models", r.URL.Path)
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"error":"no credits"}`)
+		}))
+		defer srv.Close()
+
+		c := NewOpenAICompatible("xai", srv.URL)
+		require.NoError(t, c.Validate(context.Background(), core.Credentials{APIKey: "xai-key"}))
+	})
+
+	t.Run("bad request is rejected", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "/models", r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":"bad key"}`)
+		}))
+		defer srv.Close()
+
+		c := NewOpenAICompatible("xai", srv.URL)
+		require.Error(t, c.Validate(context.Background(), core.Credentials{APIKey: "bad-key"}))
+	})
+}
+
 func TestAzureOpenAI_ChatUsesDeploymentURLAndAPIKey(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/openai/deployments/prod-gpt/chat/completions", r.URL.Path)

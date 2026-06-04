@@ -69,6 +69,9 @@ func GenerateState() (string, error) {
 type Tokens struct {
 	AccessToken  string
 	RefreshToken string
+	// IDToken is used transiently to derive labels/provider metadata. It is not
+	// persisted because account metadata is stored as plaintext JSON.
+	IDToken string
 	// ExpiresIn is the access-token lifetime in seconds (0 if unknown).
 	ExpiresIn int
 	Scope     string

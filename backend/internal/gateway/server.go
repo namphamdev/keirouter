@@ -250,13 +250,13 @@ func (s *Server) routes() chi.Router {
 
 	// Serve frontend static files. The dashboard is a Vite SPA; unmatched
 	// paths fall through to index.html so client-side routing works.
-	// The OAuth callback (/oauth/callback) is intercepted here because it
-	// arrives as a GET redirect from the provider and must not require a
+	// OAuth callbacks are intercepted here because they
+	// arrive as a GET redirect from the provider and must not require a
 	// dashboard session — the state parameter provides CSRF protection.
 	if s.frontendDir != "" {
 		fs := http.FileServer(http.Dir(s.frontendDir))
 		r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/oauth/callback" {
+			if r.URL.Path == "/oauth/callback" || r.URL.Path == "/auth/callback" {
 				s.oauthCallback(w, r)
 				return
 			}

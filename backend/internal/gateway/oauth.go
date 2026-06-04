@@ -39,11 +39,14 @@ func (s *Server) oauthListProviders(w http.ResponseWriter, _ *http.Request) {
 		cfg, _ := oauth.ConfigFor(id)
 		spec, _ := connectors.SpecByID(id)
 		out = append(out, map[string]any{
-			"provider":     id,
-			"display_name": spec.DisplayName,
-			"flow":         cfg.Flow,
-			"icon":         "/providers/" + id + ".png",
-			"color":        spec.Color,
+			"provider":      id,
+			"display_name":  spec.DisplayName,
+			"flow":          cfg.Flow,
+			"icon":          "/providers/" + id + ".png",
+			"color":         spec.Color,
+			"callback_path": cfg.CallbackPath,
+			"fixed_port":    cfg.FixedLoopbackPort,
+			"loopback_host": cfg.LoopbackHost,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"providers": out})
@@ -74,14 +77,19 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "redirect_uri is required")
 		return
 	}
+	redirectURI := cfg.ResolveRedirectURI(body.RedirectURI)
 
 	// SSRF Protection: Validate redirect_uri to prevent open redirect attacks.
 	// OAuth callbacks legitimately target localhost/loopback, so we use a
 	// dedicated validator that permits those while still blocking private
 	// networks, cloud metadata, and other dangerous destinations.
-	if err := httputil.ValidateOAuthRedirectURI(body.RedirectURI); err != nil {
-		s.log.Warn("blocked suspicious redirect_uri", "uri", body.RedirectURI, "error", err)
+	if err := httputil.ValidateOAuthRedirectURI(redirectURI); err != nil {
+		s.log.Warn("blocked suspicious redirect_uri", "uri", redirectURI, "error", err)
 		writeError(w, http.StatusBadRequest, "invalid redirect_uri: URL blocked by security policy")
+		return
+	}
+	if err := s.ensureFixedOAuthCallbackServer(cfg); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 
@@ -95,19 +103,20 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 	if cfg.Flow == oauth.FlowAuthCodePKCE {
 		challenge = pkce.Challenge
 	}
-	authURL := cfg.AuthURL(body.RedirectURI, pkce.State, challenge)
+	authURL := cfg.AuthURL(redirectURI, pkce.State, challenge)
 
 	s.oauthSessions.Put(pkce.State, &oauth.Session{
 		Provider:    provider,
 		Flow:        cfg.Flow,
 		State:       pkce.State,
 		Verifier:    pkce.Verifier,
-		RedirectURI: body.RedirectURI,
+		RedirectURI: redirectURI,
 	})
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"authorize_url": authURL,
 		"state":         pkce.State,
+		"redirect_uri":  redirectURI,
 	})
 }
 
@@ -159,7 +168,6 @@ func (s *Server) oauthExchange(w http.ResponseWriter, r *http.Request) {
 // authorizes. It exchanges the code for tokens and redirects the browser to a
 // frontend callback page that notifies the opener tab via postMessage.
 func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
-	code := r.URL.Query().Get("code")
 	state := r.URL.Query().Get("state")
 	provider := r.URL.Query().Get("provider")
 
@@ -171,7 +179,7 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, u, http.StatusFound)
 	}
 
-	if code == "" || state == "" {
+	if state == "" {
 		frontendRedirect("error", "missing code or state parameter")
 		return
 	}
@@ -190,28 +198,13 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, ok := oauth.ConfigFor(provider)
-	if !ok {
-		frontendRedirect("error", "unknown provider: "+provider)
+	if err := s.completeOAuthCallback(r, provider); err != nil {
+		s.log.Warn("oauth callback failed", "provider", provider, "error", err)
+		frontendRedirect("error", err.Error())
 		return
 	}
 
-	tokens, err := cfg.ExchangeCode(r.Context(), code, sess.RedirectURI, sess.Verifier)
-	if err != nil {
-		s.log.Warn("oauth callback exchange failed", "provider", provider, "error", err)
-		frontendRedirect("error", "token exchange failed: "+err.Error())
-		return
-	}
-	s.oauthSessions.Delete(state)
-
-	id, perr := s.persistOAuthAccount(r, provider, "", tokens)
-	if perr != nil {
-		s.log.Warn("oauth callback persist failed", "provider", provider, "error", perr)
-		frontendRedirect("error", "failed to save account: "+perr.Error())
-		return
-	}
-
-	s.log.Info("oauth callback success", "provider", provider, "account_id", id)
+	s.log.Info("oauth callback success", "provider", provider)
 	frontendRedirect("success", "")
 }
 

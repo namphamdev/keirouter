@@ -25,7 +25,7 @@ export function OAuthCallbackPage() {
     if (window.opener) {
       try {
         window.opener.postMessage(
-          { type: "oauth-callback", status, provider },
+          { type: "oauth-callback", status, provider, message },
           "*",
         );
       } catch {

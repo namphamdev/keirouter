@@ -147,6 +147,16 @@ func (c *OpenAICompatible) Validate(ctx context.Context, creds core.Credentials)
 	if err == nil {
 		return nil
 	}
+	if c.id == "xai" {
+		pe := core.AsProviderError(err)
+		if pe.StatusCode == http.StatusForbidden {
+			return nil
+		}
+		return fmt.Errorf("validation failed for %s: %w", c.id, err)
+	}
+	if strictModelsValidation(c.id) {
+		return fmt.Errorf("validation failed for %s: %w", c.id, err)
+	}
 	if validationAuthError(err) || !validationReachedUpstream(err) {
 		return fmt.Errorf("validation failed for %s: %w", c.id, err)
 	}
@@ -196,6 +206,18 @@ func firstCatalogModel(provider string) string {
 		}
 	}
 	return "test"
+}
+
+func strictModelsValidation(provider string) bool {
+	switch provider {
+	case "openai", "openrouter", "vercel-ai-gateway",
+		"deepseek", "groq", "mistral", "perplexity", "together",
+		"fireworks", "cerebras", "cohere", "nebius", "siliconflow",
+		"hyperbolic", "chutes", "nvidia", "xiaomi-mimo", "xiaomi-tokenplan":
+		return true
+	default:
+		return false
+	}
 }
 
 // OpenAICompatibleModelSource implements LiveModelSource by fetching the
