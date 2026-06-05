@@ -43,6 +43,14 @@ It's built with Go, which means it’s incredibly lightweight (using barely ~20M
 - 📊 **Track Everything:** Wondering where your money is going? The dashboard gives you beautiful charts showing your token usage, costs, and latency.
 - ⚡ **Lightning Fast Caching:** Ask the same question twice? The semantic cache remembers the answer and gives it back to you instantly, for exactly $0.00.
 
+<p align="center">
+  <img src="assets/keirouter-providers-banner.png" alt="Manage AI Providers" width="800">
+</p>
+
+<p align="center">
+  <img src="assets/keirouter-usage-banner.png" alt="Intelligent Routing & Topology" width="800">
+</p>
+
 ## 🚀 Let's get started!
 
 ### 1. Install KeiRouter

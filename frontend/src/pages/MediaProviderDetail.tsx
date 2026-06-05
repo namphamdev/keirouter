@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -49,6 +49,31 @@ export function MediaProviderDetailPage() {
   const [azureAPIVersion, setAzureAPIVersion] = useState("2024-10-01-preview");
   const [azureOrganization, setAzureOrganization] = useState("");
   const [error, setError] = useState("");
+
+  // Model search and pagination
+  const [modelSearchQuery, setModelSearchQuery] = useState("");
+  const [modelPage, setModelPage] = useState(1);
+  const MODELS_PER_PAGE = 12;
+
+  const filteredModels = useMemo(() => {
+    if (!models.data?.models) return [];
+    if (!modelSearchQuery.trim()) return models.data.models;
+    const lowerQ = modelSearchQuery.toLowerCase();
+    return models.data.models.filter(m => 
+      m.id.toLowerCase().includes(lowerQ) || 
+      (m.name && m.name.toLowerCase().includes(lowerQ))
+    );
+  }, [models.data?.models, modelSearchQuery]);
+
+  useEffect(() => {
+    setModelPage(1);
+  }, [modelSearchQuery]);
+
+  const totalModelPages = Math.ceil(filteredModels.length / MODELS_PER_PAGE);
+  const paginatedModels = filteredModels.slice(
+    (modelPage - 1) * MODELS_PER_PAGE, 
+    modelPage * MODELS_PER_PAGE
+  );
 
   const create = useMutation({
     mutationFn: () => api.createAccount({
@@ -238,13 +263,58 @@ export function MediaProviderDetailPage() {
       {kind !== "search" && kind !== "fetch" && models.data?.models && models.data.models.length > 0 && (
         <Card>
           <CardHeader title="Available Models" description={`${models.data.models.length} models`} />
-          <div className="grid grid-cols-1 gap-px overflow-hidden rounded-b-2xl bg-[var(--border)] sm:grid-cols-2 md:grid-cols-3">
-            {models.data.models.map((m) => (
-              <div key={m.id} className="flex items-center gap-2 bg-[var(--bg-elevated)] px-4 py-2.5">
-                <span className="font-mono text-xs">{m.id}</span>
-              </div>
-            ))}
+          <div className="flex flex-col gap-3 border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-3 sm:flex-row sm:items-center">
+            <div className="relative w-full max-w-sm">
+              <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+              <Input
+                placeholder="Search models..."
+                value={modelSearchQuery}
+                onChange={(e) => setModelSearchQuery(e.target.value)}
+                className="pl-9 h-8 text-sm"
+              />
+            </div>
           </div>
+          {filteredModels.length === 0 ? (
+            <div className="px-6 py-12 text-center text-sm text-[var(--text-muted)] border-t border-[var(--border)]">
+              No models found matching "{modelSearchQuery}"
+            </div>
+          ) : (
+            <div className={`grid grid-cols-1 gap-px overflow-hidden border-t border-[var(--border)] bg-[var(--border)] sm:grid-cols-2 md:grid-cols-3 ${totalModelPages <= 1 ? "rounded-b-2xl" : ""}`}>
+              {paginatedModels.map((m) => (
+                <div key={m.id} className="flex flex-col justify-center gap-1 bg-[var(--bg-elevated)] px-4 py-2.5 transition-colors hover:bg-[var(--bg-subtle)]">
+                  <span className="font-mono text-xs truncate" title={m.id}>{m.id}</span>
+                  {m.name && m.name !== m.id && (
+                    <span className="text-[10px] text-[var(--text-muted)] truncate" title={m.name}>{m.name}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {totalModelPages > 0 && (
+            <div className="flex items-center justify-between rounded-b-2xl border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-3">
+              <span className="text-xs text-[var(--text-muted)]">
+                Showing {(modelPage - 1) * MODELS_PER_PAGE + 1} to {Math.min(modelPage * MODELS_PER_PAGE, filteredModels.length)} of {filteredModels.length} models
+              </span>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  className="h-8 px-2 text-xs"
+                  disabled={modelPage === 1}
+                  onClick={() => setModelPage((p) => p - 1)}
+                >
+                  Previous
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="h-8 px-2 text-xs"
+                  disabled={modelPage === totalModelPages}
+                  onClick={() => setModelPage((p) => p + 1)}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          )}
         </Card>
       )}
 

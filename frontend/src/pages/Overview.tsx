@@ -16,7 +16,7 @@ import {
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
 import { api, type UsageInsights, type RecentActivity, type ProviderUsage } from "../lib/api";
 import { PageHeader } from "../components/Layout";
-import { Card, SectionHeader, Spinner, StatCard, ErrorCard, Badge } from "../components/ui";
+import { Card, SectionHeader, Spinner, StatCard, ErrorCard } from "../components/ui";
 
 const periods = [
   { value: "today", label: "Today" },

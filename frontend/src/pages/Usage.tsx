@@ -1,16 +1,16 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Activity, DollarSign, Zap, RefreshCw, TrendingUp, Clock, Search, ArrowUpDown, ArrowUp, ArrowDown, ShieldCheck, Scissors, Box, TerminalSquare
+  Activity, DollarSign, Zap, RefreshCw, TrendingUp, Clock, Box, TerminalSquare, ArrowUpDown, ArrowUp, ArrowDown, Search
 } from "lucide-react";
 import {
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell,
+  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
 } from "recharts";
-import { api, connectUsageStream, type ProviderUsage, type RecentActivity, type SeriesPoint, type ModelUsage, type TokenSavings, type UsageInsights } from "../lib/api";
+import { api, connectUsageStream, type ProviderUsage, type RecentActivity, type ModelUsage, type SeriesPoint } from "../lib/api";
 import { PageHeader } from "../components/Layout";
-import { Card, Spinner, ErrorCard, StatCard } from "../components/ui";
+import { Spinner, ErrorCard, StatCard } from "../components/ui";
 import { useToast } from "../components/Toast";
-import { SavingsCardShareButton } from "../components/SavingsCard";
+import { TokenSavingsBreakdown } from "../components/SavingsBreakdown";
 
 const periods = [
   { value: "today", label: "Today" },
@@ -180,7 +180,7 @@ function UsageContent({ data, models, period }: { data: any; models: ModelUsage[
       </div>
 
       {/* Token Savings breakdown */}
-      {savings && savings.rules && savings.rules.length > 0 && (
+      {savings && (
         <TokenSavingsBreakdown savings={savings} totalRequests={summary.total_requests} insights={data} period={period} />
       )}
 
@@ -476,77 +476,7 @@ function ProviderIcon({ provider, className = "h-5 w-5" }: { provider: string, c
   return <img src={`/providers/${provider}.png`} alt={provider} onError={() => setErrored(true)} className={`shrink-0 rounded object-contain grayscale opacity-80 mix-blend-multiply dark:mix-blend-screen ${className}`} />;
 }
 
-// ─── Token Savings Breakdown ────────────────────────────────────────────────
-
-function TokenSavingsBreakdown({ savings, totalRequests, insights, period }: { savings: TokenSavings; totalRequests: number; insights: UsageInsights; period: string }) {
-  const maxBytes = Math.max(...savings.rules.map((r) => r.bytes_saved), 1);
-  const totalCavemanPct = totalRequests > 0 ? ((savings.caveman_requests / totalRequests) * 100).toFixed(1) : "0";
-  const totalTersePct = totalRequests > 0 ? ((savings.terse_requests / totalRequests) * 100).toFixed(0) : "0";
-
-  return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)] shadow-sm overflow-hidden">
-      <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3 bg-[var(--bg-subtle)]">
-        <div className="flex items-center gap-2">
-          <Scissors className="h-4 w-4 text-[var(--text-muted)]" />
-          <h3 className="text-sm font-semibold tracking-tight">Optimization Engine</h3>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-3 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
-          {savings.caveman_requests > 0 && (
-            <span className="flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-purple-500" />
-              CVMN {totalCavemanPct}%
-            </span>
-          )}
-          {savings.terse_requests > 0 && (
-            <span className="flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
-              TRSE {totalTersePct}%
-            </span>
-          )}
-          </div>
-          <SavingsCardShareButton insights={insights} period={period} />
-        </div>
-      </div>
-      <div className="p-5">
-        <div className="space-y-4">
-          {savings.rules.map((r) => (
-            <div key={r.rule} className="flex items-center gap-4">
-              <div className="w-32 shrink-0 text-xs font-mono font-medium text-[var(--text)]">{r.rule}</div>
-              <div className="flex-1">
-                <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--bg-subtle)]">
-                  <div
-                    className="h-full rounded-full bg-[var(--text)] transition-all"
-                    style={{ width: `${Math.max(2, (r.bytes_saved / maxBytes) * 100)}%` }}
-                  />
-                </div>
-              </div>
-              <div className="w-24 text-right text-xs font-medium tabular-nums text-[var(--text)]">
-                {fmtBytes(r.bytes_saved)}
-              </div>
-              <div className="w-20 text-right text-[10px] font-medium tabular-nums text-[var(--text-muted)] uppercase">
-                {fmtNum(r.tokens_saved)} tok
-              </div>
-              <div className="w-12 text-right text-[10px] font-medium tabular-nums text-[var(--text-muted)]">
-                {r.count}×
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="mt-6 flex items-center justify-between border-t border-[var(--border)] pt-4">
-          <div className="flex flex-col">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">Total Savings</span>
-            <span className="text-lg font-light text-[var(--text)] tabular-nums">{fmtBytes(savings.slim_bytes_saved)} <span className="text-xs text-[var(--text-muted)] font-medium ml-1">({fmtNum(savings.slim_tokens_saved)} tokens)</span></span>
-          </div>
-          <div className="flex flex-col text-right">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] mb-1">Est. Value</span>
-            <span className="text-lg font-light text-[var(--text)] tabular-nums">${((savings.slim_tokens_saved / 1_000_000) * 3).toFixed(4)}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+// ─── Token Savings Breakdown moved to ../components/SavingsBreakdown.tsx ──
 
 // ─── Model Usage Table ──────────────────────────────────────────────────────
 

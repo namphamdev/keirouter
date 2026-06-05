@@ -9,7 +9,6 @@ import {
   Sparkles,
   Search,
   ChevronDown,
-  Power,
   LogOut,
   Network,
   BarChart3,
@@ -21,10 +20,7 @@ import {
   Zap,
   Menu,
   X,
-  Settings,
   Key,
-  CreditCard,
-  User,
   type LucideIcon,
 } from "lucide-react";
 import { api } from "../lib/api";

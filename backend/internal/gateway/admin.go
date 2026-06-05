@@ -1710,6 +1710,10 @@ func (s *Server) validateAccountCredentials(ctx context.Context, acc store.Accou
 	if s.conns == nil || s.vault == nil {
 		return nil // can't validate without registry + vault
 	}
+	// Skip validation for providers behind WAF/CDN that block probes.
+	if spec, ok := connectors.SpecByID(acc.Provider); ok && spec.SkipValidation {
+		return nil
+	}
 	conn, err := s.conns.Get(acc.Provider)
 	if err != nil {
 		return nil // provider has no connector; skip validation

@@ -18,18 +18,18 @@ const periodLabels: Record<string, string> = {
   month: "Last 30 Days",
 };
 
-// App light palette
+// Premium Minimalist Dark Palette (Anti-Slop)
 const C = {
-  bg: "#faf9f7",
-  border: "rgba(0,0,0,0.06)",
-  borderLight: "rgba(0,0,0,0.04)",
-  text: "#1c1b18",
-  textSecondary: "#43413a",
-  textMuted: "#a8a59a",
-  textCaption: "#656259",
-  accent: "#C45F3A",
-  accentLight: "#d98a6a",
-  statValue: "#2d2b27",
+  bg: "#0A0A0B",
+  surface: "#121214",
+  border: "#27272A",
+  borderLight: "#18181B",
+  text: "#FAFAFA",
+  textSecondary: "#A1A1AA",
+  textMuted: "#71717A",
+  accent: "#E4E4E7", // Sharp white for main numbers
+  accentSecondary: "#38BDF8", // Refined sharp blue for secondary tone
+  positive: "#10B981", // Emerald for reductions
 };
 
 // ─── Hidden Card (rendered off-screen for capture) ───────────────────────────
@@ -60,9 +60,9 @@ function SavingsCardContent({ data }: { data: SavingsCardData }) {
   } = data;
 
   const optimizers = [
-    rtkActive && { name: "RTK", desc: "Token Slimming" },
-    cavemanActive && { name: "Caveman", desc: "Output Compression" },
-    terseActive && { name: "Terse", desc: "Output Compression" },
+    rtkActive && { name: "RTK", desc: "Tokenizer" },
+    cavemanActive && { name: "Caveman", desc: "Compression" },
+    terseActive && { name: "Terse", desc: "Compression" },
   ].filter(Boolean) as { name: string; desc: string }[];
 
   return (
@@ -71,268 +71,242 @@ function SavingsCardContent({ data }: { data: SavingsCardData }) {
         width: 1200,
         height: 630,
         position: "relative",
-        overflow: "hidden",
+        boxSizing: "border-box",
         fontFamily:
-          "'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+          "'-apple-system', 'BlinkMacSystemFont', 'SF Pro Display', 'Inter', sans-serif",
         background: C.bg,
+        color: C.text,
+        padding: "40px",
       }}
     >
-      {/* Subtle texture */}
+      {/* Outer Border Frame */}
       <div
         style={{
-          position: "absolute",
-          inset: 0,
-          backgroundImage:
-            "linear-gradient(rgba(0,0,0,0.018) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.018) 1px, transparent 1px)",
-          backgroundSize: "60px 60px",
-        }}
-      />
-
-      {/* Content */}
-      <div
-        style={{
-          position: "relative",
-          zIndex: 1,
+          width: "100%",
+          height: "100%",
+          border: `1px solid ${C.border}`,
+          borderRadius: 12,
           display: "flex",
           flexDirection: "column",
-          height: "100%",
-          padding: "56px 64px",
+          overflow: "hidden",
         }}
       >
-        {/* Header */}
+        {/* Header Bar */}
         <div
           style={{
+            height: 80,
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
+            padding: "0 40px",
+            borderBottom: `1px solid ${C.border}`,
+            background: C.surface,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             <img
               src="/keirouter-logo.png"
               alt="KeiRouter"
-              style={{ width: 32, height: 32, objectFit: "contain" }}
+              style={{ width: 28, height: 28, objectFit: "contain" }}
               crossOrigin="anonymous"
             />
             <span
               style={{
-                fontSize: 18,
+                fontSize: 20,
                 fontWeight: 600,
-                color: C.text,
                 letterSpacing: "-0.01em",
               }}
             >
               KeiRouter
             </span>
+            <div style={{ width: 1, height: 16, background: C.border, margin: "0 8px" }} />
             <span
               style={{
-                fontSize: 11,
-                fontWeight: 600,
-                color: C.textCaption,
-                letterSpacing: "0.06em",
+                fontSize: 13,
+                fontWeight: 500,
+                color: C.textSecondary,
+                letterSpacing: "0.1em",
                 textTransform: "uppercase",
-                marginLeft: 8,
               }}
             >
               Savings Report
             </span>
           </div>
-          <span
-            style={{
-              fontSize: 13,
-              fontWeight: 500,
-              color: C.textMuted,
-            }}
-          >
-            {periodLabels[period] || period}
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 14, fontWeight: 500, color: C.textMuted }}>Period</span>
+            <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{periodLabels[period] || period}</span>
+          </div>
         </div>
 
-        {/* Divider */}
-        <div
-          style={{
-            height: 1,
-            background: C.border,
-            margin: "28px 0",
-          }}
-        />
-
-        {/* Main content */}
-        <div
-          style={{
-            flex: 1,
-            display: "flex",
-            gap: 80,
-            alignItems: "center",
-          }}
-        >
-          {/* Left: hero */}
-          <div style={{ flex: "0 0 auto" }}>
+        {/* Main Split Content */}
+        <div style={{ flex: 1, display: "flex" }}>
+          
+          {/* Left Panel: Primary Metric */}
+          <div
+            style={{
+              flex: "0 0 55%",
+              padding: "60px 40px",
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+              borderRight: `1px solid ${C.border}`,
+            }}
+          >
             <span
               style={{
-                display: "block",
-                fontSize: 13,
+                fontSize: 16,
                 fontWeight: 500,
-                color: C.textMuted,
-                marginBottom: 12,
+                color: C.textSecondary,
+                marginBottom: 24,
                 letterSpacing: "0.02em",
               }}
             >
-              Total cost saved
+              Total Cost Saved
             </span>
             <span
               style={{
-                display: "block",
-                fontSize: 64,
+                fontSize: 140,
                 fontWeight: 700,
                 color: C.accent,
                 lineHeight: 1,
-                letterSpacing: "-0.03em",
+                letterSpacing: "-0.04em",
+                marginBottom: 24,
               }}
             >
               ${costSaved.toFixed(2)}
             </span>
-            <span
-              style={{
-                display: "block",
-                fontSize: 15,
-                fontWeight: 500,
-                color: C.accentLight,
-                marginTop: 12,
+            
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{
+                background: "rgba(16, 185, 129, 0.1)",
+                color: C.positive,
+                padding: "8px 16px",
+                borderRadius: 6,
+                fontSize: 16,
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
               }}
-            >
-              {savingsPct.toFixed(1)}% reduction
-            </span>
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <polyline points="19 12 12 19 5 12"></polyline>
+                </svg>
+                {savingsPct.toFixed(1)}% Cost Reduction
+              </div>
+            </div>
           </div>
 
-          {/* Right: stats */}
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              flexDirection: "column",
-              gap: 20,
-            }}
-          >
-            {/* Stat rows */}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 16,
-              }}
-            >
-              <StatRow label="Tokens saved" value={fmtNum(tokensSaved)} />
-              <StatRow label="Total requests" value={fmtNum(totalRequests)} />
-              <StatRow
-                label="Cost with KeiRouter"
-                value={`$${actualCost.toFixed(2)}`}
-              />
-              <StatRow label="Period" value={periodLabels[period] || period} />
-            </div>
+          {/* Right Panel: Data Grid */}
+          <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+              
+              {/* Stat Row 1 */}
+              <div style={{ flex: 1, display: "flex", borderBottom: `1px solid ${C.border}` }}>
+                <StatBox label="Tokens Saved" value={fmtNum(tokensSaved)} borderRight />
+                <StatBox label="Total Requests" value={fmtNum(totalRequests)} />
+              </div>
 
-            {/* Optimizers */}
-            {optimizers.length > 0 && (
-              <div>
+              {/* Stat Row 2 */}
+              <div style={{ flex: 1, display: "flex", borderBottom: `1px solid ${C.border}` }}>
+                <StatBox label="Cost With KeiRouter" value={`$${actualCost.toFixed(2)}`} borderRight />
+                <StatBox label="Original Cost (Est.)" value={`$${(actualCost + costSaved).toFixed(2)}`} muted />
+              </div>
+
+              {/* Optimizers Row */}
+              <div style={{ padding: "32px 40px", flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", background: C.surface }}>
                 <span
                   style={{
-                    display: "block",
-                    fontSize: 11,
+                    fontSize: 12,
                     fontWeight: 600,
                     color: C.textMuted,
                     textTransform: "uppercase",
-                    letterSpacing: "0.06em",
-                    marginBottom: 10,
+                    letterSpacing: "0.1em",
+                    marginBottom: 16,
                   }}
                 >
                   Active Optimizers
                 </span>
-                <div style={{ display: "flex", gap: 10 }}>
-                  {optimizers.map((opt) => (
+                <div style={{ display: "flex", gap: 12 }}>
+                  {optimizers.length > 0 ? optimizers.map((opt) => (
                     <div
                       key={opt.name}
                       style={{
+                        padding: "6px 12px",
+                        border: `1px solid ${C.border}`,
+                        borderRadius: 6,
+                        background: C.bg,
                         display: "flex",
                         alignItems: "center",
                         gap: 8,
-                        background: "rgba(0,0,0,0.025)",
-                        borderRadius: 8,
-                        padding: "8px 14px",
-                        border: `1px solid ${C.border}`,
                       }}
                     >
-                      <span
-                        style={{
-                          fontSize: 13,
-                          fontWeight: 600,
-                          color: C.textSecondary,
-                        }}
-                      >
-                        {opt.name}
-                      </span>
-                      <span
-                        style={{
-                          fontSize: 11,
-                          color: C.textCaption,
-                        }}
-                      >
-                        {opt.desc}
-                      </span>
+                      <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.accentSecondary }} />
+                      <span style={{ fontSize: 14, fontWeight: 500, color: C.text }}>{opt.name}</span>
                     </div>
-                  ))}
+                  )) : (
+                    <span style={{ fontSize: 14, color: C.textMuted }}>None</span>
+                  )}
                 </div>
               </div>
-            )}
+
+            </div>
           </div>
+
         </div>
 
-        {/* Footer */}
+        {/* Footer Bar */}
         <div
           style={{
+            height: 60,
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
+            padding: "0 40px",
             borderTop: `1px solid ${C.border}`,
-            paddingTop: 20,
+            background: C.surface,
           }}
         >
-          <span style={{ fontSize: 12, color: C.textMuted }}>
+          <span style={{ fontSize: 13, fontWeight: 500, color: C.textSecondary, letterSpacing: "0.02em" }}>
             keirouter.dev
           </span>
-          <span style={{ fontSize: 12, color: C.textMuted }}>
-            AI routing, optimized.
+          <span style={{ fontSize: 13, fontWeight: 500, color: C.textSecondary, letterSpacing: "0.02em" }}>
+            AI Routing, Optimized.
           </span>
         </div>
+
       </div>
     </div>
   );
 }
 
-function StatRow({ label, value }: { label: string; value: string }) {
+function StatBox({ label, value, muted, borderRight }: { label: string; value: string, muted?: boolean, borderRight?: boolean }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "baseline",
-        justifyContent: "space-between",
-        padding: "10px 0",
-        borderBottom: `1px solid ${C.borderLight}`,
-      }}
-    >
+    <div style={{ 
+      flex: 1, 
+      padding: "32px 40px", 
+      display: "flex", 
+      flexDirection: "column", 
+      justifyContent: "center",
+      borderRight: borderRight ? `1px solid ${C.border}` : "none"
+    }}>
       <span
         style={{
           fontSize: 13,
-          color: C.textCaption,
+          fontWeight: 500,
+          color: C.textMuted,
+          marginBottom: 12,
         }}
       >
         {label}
       </span>
       <span
         style={{
-          fontSize: 18,
+          fontSize: 36,
           fontWeight: 600,
-          color: C.statValue,
-          letterSpacing: "-0.01em",
+          color: muted ? C.textSecondary : C.text,
+          letterSpacing: "-0.02em",
         }}
       >
         {value}
@@ -386,7 +360,6 @@ export function SavingsCardShareButton({
         height: 630,
         pixelRatio: 2,
         cacheBust: true,
-        crossOriginLoading: "anonymous",
       });
 
       const link = document.createElement("a");

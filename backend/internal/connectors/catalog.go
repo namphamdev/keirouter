@@ -38,6 +38,9 @@ type ProviderSpec struct {
 	Deprecated bool
 	// Hidden hides the provider from the default dashboard listing.
 	Hidden bool
+	// SkipValidation skips upstream credential probing during account creation.
+	// Used for providers behind WAF/CDN that block server-side requests.
+	SkipValidation bool
 	// Notice is a short human-readable note shown in the dashboard.
 	Notice string
 	// Pricing (USD per million tokens) used for cost estimation. Zero means
@@ -289,7 +292,7 @@ func apiKeyProviders() []ProviderSpec {
 			Color: "#0052D9", Website: "https://copilot.tencent.com"},
 		{ID: "agentrouter", DisplayName: "AgentRouter", Alias: "ar", Dialect: core.DialectOpenAI,
 			BaseURL: "https://agentrouter.org/v1", AuthKind: "api_key", ServiceKinds: llm(),
-			Color: "#10B981", Website: "https://agentrouter.org"},
+			Color: "#10B981", Website: "https://agentrouter.org", SkipValidation: true},
 		{ID: "aimlapi", DisplayName: "AIML API", Alias: "aimlapi", Dialect: core.DialectOpenAI,
 			BaseURL: "https://api.aimlapi.com/v1", AuthKind: "api_key", ServiceKinds: llm(),
 			Color: "#6366F1", Website: "https://aimlapi.com", APIKeyURL: "https://aimlapi.com/api-keys"},

@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Trash2, Plug, X, Zap, ArrowUp, ArrowDown, CheckCircle, ToggleLeft, ToggleRight } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Plug, X, Zap, ArrowUp, ArrowDown, CheckCircle, ToggleLeft, ToggleRight, Search } from "lucide-react";
 import { api, type DeviceCode, type OAuthProvider, type Provider, type Account, type ProxyPool, type UpstreamQuota } from "../lib/api";
 import { KiroConnectModal } from "../components/KiroConnectModal";
 import { useToast } from "../components/Toast";
@@ -68,6 +68,32 @@ export function ProviderDetailPage() {
   const [oauthOpen, setOauthOpen] = useState(false);
   const [kiroOpen, setKiroOpen] = useState(false);
   const [addKeyOpen, setAddKeyOpen] = useState(false);
+
+  // Model search and pagination
+  const [modelSearchQuery, setModelSearchQuery] = useState("");
+  const [modelPage, setModelPage] = useState(1);
+  const MODELS_PER_PAGE = 12;
+
+  const filteredModels = useMemo(() => {
+    if (!models.data?.models) return [];
+    if (!modelSearchQuery.trim()) return models.data.models;
+    const lowerQ = modelSearchQuery.toLowerCase();
+    return models.data.models.filter(m => 
+      m.id.toLowerCase().includes(lowerQ) || 
+      (m.name && m.name.toLowerCase().includes(lowerQ)) ||
+      (m.kind && m.kind.toLowerCase().includes(lowerQ))
+    );
+  }, [models.data?.models, modelSearchQuery]);
+
+  useEffect(() => {
+    setModelPage(1);
+  }, [modelSearchQuery]);
+
+  const totalModelPages = Math.ceil(filteredModels.length / MODELS_PER_PAGE);
+  const paginatedModels = filteredModels.slice(
+    (modelPage - 1) * MODELS_PER_PAGE, 
+    modelPage * MODELS_PER_PAGE
+  );
 
   // Set default region when provider loads.
   useEffect(() => {
@@ -280,46 +306,85 @@ export function ProviderDetailPage() {
               title="Available Models"
               description={`${models.data.models.length} model${models.data.models.length === 1 ? "" : "s"} configured for this provider.`}
             />
-            <div className="flex items-center justify-between border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-3">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">Batch Actions</span>
+            <div className="flex flex-col gap-3 border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="relative w-full max-w-sm">
+                <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+                <Input
+                  placeholder="Search models..."
+                  value={modelSearchQuery}
+                  onChange={(e) => setModelSearchQuery(e.target.value)}
+                  className="pl-9 h-8 text-sm"
+                />
+              </div>
               <div className="flex items-center gap-2">
                 <Button
                   variant="ghost"
                   className="h-8 px-3 text-xs"
-                  onClick={() => enableModelsMut.mutate((models.data?.models ?? []).map((m) => m.id))}
-                  disabled={enableModelsMut.isPending}
+                  onClick={() => enableModelsMut.mutate(paginatedModels.map((m) => m.id))}
+                  disabled={enableModelsMut.isPending || paginatedModels.length === 0}
                 >
                   <ToggleRight className="h-3.5 w-3.5 text-accent-500" />
-                  Enable all
+                  Enable page
                 </Button>
                 <Button
                   variant="ghost"
                   className="h-8 px-3 text-xs"
-                  onClick={() => disableModelsMut.mutate((models.data?.models ?? []).map((m) => m.id))}
-                  disabled={disableModelsMut.isPending}
+                  onClick={() => disableModelsMut.mutate(paginatedModels.map((m) => m.id))}
+                  disabled={disableModelsMut.isPending || paginatedModels.length === 0}
                 >
                   <ToggleLeft className="h-3.5 w-3.5 text-[var(--text-muted)]" />
-                  Disable all
+                  Disable page
                 </Button>
               </div>
             </div>
-            <div className="grid grid-cols-1 gap-px overflow-hidden rounded-b-2xl border-t border-[var(--border)] bg-[var(--border)] sm:grid-cols-2 lg:grid-cols-3">
-              {models.data.models.map((m) => (
-                <ModelCell
-                  key={m.id}
-                  model={m}
-                  provider={provider}
-                  disabled={disabledModelIds.has(m.id)}
-                  onToggleDisable={() => {
-                    if (disabledModelIds.has(m.id)) {
-                      enableModelsMut.mutate([m.id]);
-                    } else {
-                      disableModelsMut.mutate([m.id]);
-                    }
-                  }}
-                />
-              ))}
-            </div>
+            {filteredModels.length === 0 ? (
+              <div className="px-6 py-12 text-center text-sm text-[var(--text-muted)] border-t border-[var(--border)]">
+                No models found matching "{modelSearchQuery}"
+              </div>
+            ) : (
+              <div className={`grid grid-cols-1 gap-px overflow-hidden border-t border-[var(--border)] bg-[var(--border)] sm:grid-cols-2 lg:grid-cols-3 ${totalModelPages <= 1 ? "rounded-b-2xl" : ""}`}>
+                {paginatedModels.map((m) => (
+                  <ModelCell
+                    key={m.id}
+                    model={m}
+                    provider={provider}
+                    disabled={disabledModelIds.has(m.id)}
+                    onToggleDisable={() => {
+                      if (disabledModelIds.has(m.id)) {
+                        enableModelsMut.mutate([m.id]);
+                      } else {
+                        disableModelsMut.mutate([m.id]);
+                      }
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+            {totalModelPages > 0 && (
+              <div className="flex items-center justify-between rounded-b-2xl border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-3">
+                <span className="text-xs text-[var(--text-muted)]">
+                  Showing {(modelPage - 1) * MODELS_PER_PAGE + 1} to {Math.min(modelPage * MODELS_PER_PAGE, filteredModels.length)} of {filteredModels.length} models
+                </span>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    className="h-8 px-2 text-xs"
+                    disabled={modelPage === 1}
+                    onClick={() => setModelPage((p) => p - 1)}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="h-8 px-2 text-xs"
+                    disabled={modelPage === totalModelPages}
+                    onClick={() => setModelPage((p) => p + 1)}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
           </Card>
         )}
       </div>
