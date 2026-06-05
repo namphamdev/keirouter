@@ -62,7 +62,7 @@ jobs:
           mkdir -p dist/keirouter/frontend
           cp keirouter dist/keirouter/
           cp -R frontend/dist dist/keirouter/frontend/
-          tar -czf "${ARCHIVE}" -C dist keirouter
+          cd dist && tar -czf "../${ARCHIVE}" keirouter
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
         env:
           MATRIX_GOOS: ${{ matrix.goos }}
@@ -142,7 +142,7 @@ jobs:
 
             def install
               bin.install "keirouter"
-              share.install "frontend" => "keirouter/frontend"
+              (share/"keirouter").install "frontend"
             end
 
             def caveats
