@@ -55,7 +55,22 @@ It's built with Go, which means it’s incredibly lightweight (using barely ~20M
 
 ## 🚀 Let's get started!
 
-### 1. Install & Run (One Line!)
+### 1. Install & Run
+
+**Homebrew (macOS & Linux):**
+```bash
+brew tap mydisha/keirouter https://github.com/mydisha/keirouter
+brew install keirouter
+```
+
+Then:
+```bash
+keirouter -bootstrap   # create your first API key
+keirouter              # start server on :20180
+```
+
+**One-Line (from source):**
+
 Make sure you have Go 1.24+ and Node.js 20+, then paste this:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mydisha/keirouter/main/scripts/quickstart.sh | bash
