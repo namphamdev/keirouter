@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Boxes } from "lucide-react";
+import { Boxes, Search, X } from "lucide-react";
 import { api, type Provider, type Account } from "../lib/api";
 import { PageHeader } from "../components/Layout";
 import { Card, CardHeader, Badge, Spinner, EmptyState, StatusDot } from "../components/ui";
@@ -22,6 +22,7 @@ export function ProvidersPage() {
   const providers = useQuery({ queryKey: ["providers"], queryFn: () => api.providers() });
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: () => api.listAccounts() });
   const [filter, setFilter] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Count accounts per provider id so we can split connected vs available.
   const accountsByProvider = useMemo(() => {
@@ -38,8 +39,17 @@ export function ProvidersPage() {
     const all = providers.data?.providers ?? [];
     return all
       .filter((p) => !p.hidden)
-      .filter((p) => filter === "all" || p.service_kinds.includes(filter));
-  }, [providers.data, filter]);
+      .filter((p) => filter === "all" || p.service_kinds.includes(filter))
+      .filter((p) => {
+        if (!searchQuery.trim()) return true;
+        const q = searchQuery.toLowerCase();
+        return (
+          p.display_name.toLowerCase().includes(q) ||
+          p.id.toLowerCase().includes(q) ||
+          p.alias.toLowerCase().includes(q)
+        );
+      });
+  }, [providers.data, filter, searchQuery]);
 
   const connected = visible.filter((p) => accountsByProvider.has(p.id));
   const available = visible.filter((p) => !accountsByProvider.has(p.id));
@@ -52,20 +62,41 @@ export function ProvidersPage() {
         description="Connect and manage AI providers to power your routing."
       />
 
-      <div className="mb-5 flex flex-wrap gap-1.5">
-        {kindFilters.map((k) => (
-          <button
-            key={k.id}
-            onClick={() => setFilter(k.id)}
-            className={`rounded-xl px-3.5 py-2 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/60 ${
-              filter === k.id
-                ? "bg-accent-600 text-white shadow-sm"
-                : "border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:bg-ink-100 dark:hover:bg-ink-800"
-            }`}
-          >
-            {k.label}
-          </button>
-        ))}
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="flex flex-wrap gap-1.5">
+          {kindFilters.map((k) => (
+            <button
+              key={k.id}
+              onClick={() => setFilter(k.id)}
+              className={`rounded-xl px-3.5 py-2 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/60 ${
+                filter === k.id
+                  ? "bg-accent-600 text-white shadow-sm"
+                  : "border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:bg-ink-100 dark:hover:bg-ink-800"
+              }`}
+            >
+              {k.label}
+            </button>
+          ))}
+        </div>
+        <div className="relative max-w-sm flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search providers…"
+            className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] py-2 pl-9 pr-9 text-sm placeholder:text-[var(--text-muted)] focus:border-accent-400 focus:outline-none focus:ring-2 focus:ring-accent-400/40"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--text-muted)] hover:text-[var(--text)]"
+              aria-label="Clear search"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       </div>
 
       {providers.isLoading ? (
@@ -80,8 +111,8 @@ export function ProvidersPage() {
             />
             {!connected.length ? (
               <EmptyState
-                title="No connected providers yet"
-                hint="Pick a provider below to add your first account."
+                title={searchQuery ? `No connected providers match "${searchQuery}"` : "No connected providers yet"}
+                hint={searchQuery ? "Try a different search term." : "Pick a provider below to add your first account."}
               />
             ) : (
               <div className="grid grid-cols-2 gap-px overflow-hidden rounded-b-2xl bg-[var(--border)] sm:grid-cols-3 lg:grid-cols-4">
@@ -103,7 +134,9 @@ export function ProvidersPage() {
               action={<Badge tone="neutral">{available.length}</Badge>}
             />
             {!available.length ? (
-              <EmptyState title="No providers for this capability" />
+              <EmptyState
+                title={searchQuery ? `No providers match "${searchQuery}"` : "No providers for this capability"}
+              />
             ) : (
               <div className="grid grid-cols-2 gap-px overflow-hidden rounded-b-2xl bg-[var(--border)] sm:grid-cols-3 lg:grid-cols-4">
                 {available.map((p) => (
