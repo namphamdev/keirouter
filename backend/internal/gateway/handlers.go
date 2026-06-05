@@ -483,10 +483,10 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get current period summary.
+	// Get current period summary scoped to this specific key.
 	now := time.Now()
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-	summary, err := s.usage.Summarize(ctx, tenantOf(key), periodStart)
+	summary, err := s.usage.SummarizeByKey(ctx, key.ID, periodStart)
 	if err != nil {
 		s.log.Error("key usage: summarize failed", "err", err)
 	}
@@ -588,9 +588,10 @@ func (s *Server) handlePortalKeyUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get current period summary scoped to this specific key.
 	now := time.Now()
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-	summary, err := s.usage.Summarize(ctx, tenantOf(key), periodStart)
+	summary, err := s.usage.SummarizeByKey(ctx, key.ID, periodStart)
 	if err != nil {
 		s.log.Error("key usage: summarize failed", "err", err)
 	}

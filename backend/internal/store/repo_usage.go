@@ -137,6 +137,39 @@ func (r *UsageRepo) Summarize(ctx context.Context, tenantID string, since time.T
 	return s, nil
 }
 
+// SummarizeByKey returns aggregate usage for a specific API key since the given
+// time. This scopes stats to the individual key rather than the whole tenant.
+func (r *UsageRepo) SummarizeByKey(ctx context.Context, keyID string, since time.Time) (Summary, error) {
+	q := r.db.rebind(`
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(prompt_tokens), 0),
+			COALESCE(SUM(completion_tokens), 0),
+			COALESCE(SUM(cached_tokens), 0),
+			COALESCE(SUM(cache_write_tokens), 0),
+			COALESCE(SUM(cost_micros), 0),
+			COALESCE(SUM(cache_hit), 0),
+			COALESCE(CAST(AVG(CASE WHEN ttft_ms > 0 THEN ttft_ms END) AS INTEGER), 0),
+			COALESCE(CAST(AVG(CASE WHEN latency_ms > 0 THEN latency_ms END) AS INTEGER), 0),
+			COUNT(CASE WHEN latency_ms > 0 OR cache_hit = 1 THEN 1 END),
+			COALESCE(SUM(slim_bytes_saved), 0),
+			COALESCE(SUM(slim_tokens_saved), 0),
+			COALESCE(SUM(caveman_active), 0),
+			COALESCE(SUM(terse_active), 0)
+		FROM usage_records
+		WHERE api_key_id = ? AND created_at >= ?`)
+	var s Summary
+	err := r.db.sql.QueryRowContext(ctx, q, keyID, formatTime(since)).Scan(
+		&s.TotalRequests, &s.PromptTokens, &s.CompletionTokens,
+		&s.CachedTokens, &s.CacheWriteTokens, &s.CostMicros, &s.CacheHits, &s.AvgTTFTMS,
+		&s.AvgLatencyMS, &s.SuccessCount,
+		&s.SlimBytesSaved, &s.SlimTokensSaved, &s.CavemanRequests, &s.TerseRequests)
+	if err != nil {
+		return Summary{}, fmt.Errorf("store: summarize usage by key: %w", err)
+	}
+	return s, nil
+}
+
 // ProviderUsage aggregates usage for a single upstream provider. It powers the
 // routing-activity map and per-provider breakdown on the Usage page.
 type ProviderUsage struct {
