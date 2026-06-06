@@ -18,7 +18,6 @@ import {
   Image,
   Waypoints,
   ScrollText,
-  Zap,
   Menu,
   X,
   Key,
