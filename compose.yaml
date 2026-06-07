@@ -5,6 +5,14 @@ services:
     build:
       context: .
       dockerfile: deploy/Dockerfile
+      args:
+        # Stamp the binary with a real version. Set KEIROUTER_VERSION to your
+        # release tag (e.g. v0.1.6) when building; defaults to "dev" otherwise.
+        VERSION: ${KEIROUTER_VERSION:-dev}
+        # Coolify auto-injects SOURCE_COMMIT (deployed git SHA). When no explicit
+        # VERSION is given, the Dockerfile falls back to this so the dashboard
+        # shows the commit instead of "dev".
+        SOURCE_COMMIT: ${SOURCE_COMMIT:-}
     image: ${KEIROUTER_IMAGE:-keirouter:latest}
     restart: unless-stopped
     ports:

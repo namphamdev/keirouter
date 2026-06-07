@@ -15,10 +15,13 @@ import (
 
 	"github.com/mydisha/keirouter/backend/internal/app"
 	"github.com/mydisha/keirouter/backend/internal/config"
+	"github.com/mydisha/keirouter/backend/internal/version"
 )
 
 // Version is set at build time via -ldflags "-X main.Version=...".
-// Defaults to "dev" for local builds.
+// Defaults to "dev" for local builds. When ldflags are not injected (e.g. a
+// Docker/PaaS build with no git), version.Resolve falls back to the committed
+// VERSION file so the dashboard still reports a real version.
 var Version = "dev"
 
 func main() {
@@ -36,8 +39,10 @@ func run() error {
 	keyName := flag.String("key-name", "default", "name for the bootstrapped API key")
 	flag.Parse()
 
+	resolvedVersion := version.Resolve(Version)
+
 	if *showVersion {
-		fmt.Println("keirouter", Version)
+		fmt.Println("keirouter", resolvedVersion)
 		return nil
 	}
 
@@ -67,7 +72,7 @@ func run() error {
 		return nil
 	}
 
-	application, err := app.Build(ctx, cfg, log, Version)
+	application, err := app.Build(ctx, cfg, log, resolvedVersion)
 	if err != nil {
 		return fmt.Errorf("build app: %w", err)
 	}

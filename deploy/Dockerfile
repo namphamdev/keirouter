@@ -11,12 +11,26 @@ RUN npm run build
 # ---- backend build stage ----
 FROM golang:1.24-alpine AS backend
 WORKDIR /src/backend
+# VERSION is injected into the binary via -ldflags so the dashboard reports a
+# real version instead of the "dev" default. The .git dir is excluded from the
+# build context, so git describe cannot run here — the value must come in as a
+# build arg. Resolution order:
+#   1. VERSION        — explicit (e.g. compose passes a release tag like v0.1.6)
+#   2. SOURCE_COMMIT  — auto-injected by Coolify with the deployed git SHA
+#   3. "dev"          — local/unstamped fallback
+ARG VERSION=dev
+ARG SOURCE_COMMIT=
 COPY backend/go.mod backend/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY backend/ .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
+    VER="${VERSION}"; \
+    if [ -z "${VER}" ] || [ "${VER}" = "dev" ]; then \
+      if [ -n "${SOURCE_COMMIT}" ]; then VER="${SOURCE_COMMIT}"; else VER="dev"; fi; \
+    fi; \
+    echo "Building keirouter version: ${VER}"; \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.Version=${VER}" \
     -o /out/keirouter ./cmd/keirouter
 RUN mkdir -p /out/data
 
