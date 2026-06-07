@@ -276,9 +276,16 @@ func (s *Server) routes() chi.Router {
 	if s.frontendDir != "" {
 		fs := http.FileServer(http.Dir(s.frontendDir))
 		r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+			// Only intercept the raw provider redirect (carries code/error). The
+			// post-exchange result redirect (status/message only) falls through to
+			// the SPA so the React callback page can render and postMessage the
+			// opener tab.
 			if r.URL.Path == "/oauth/callback" || r.URL.Path == "/auth/callback" {
-				s.oauthCallback(w, r)
-				return
+				q := r.URL.Query()
+				if q.Get("code") != "" || q.Get("error") != "" {
+					s.oauthCallback(w, r)
+					return
+				}
 			}
 			path := r.URL.Path
 			if path == "/" {

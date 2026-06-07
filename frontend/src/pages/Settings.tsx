@@ -2,14 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Sparkles, Zap, MessageSquare, Layers, Route, Wifi, Monitor, Database, Clock,
-  ArrowUpCircle, CheckCircle2, ExternalLink,
+  ArrowUpCircle, CheckCircle2, ExternalLink, Lock, Eye, EyeOff, Shield, ShieldOff, Download, Upload,
+  Gauge, Network, Settings2,
 } from "lucide-react";
 import { api, type EndpointSettings } from "../lib/api";
 import { PageHeader } from "../components/Layout";
 import { useUpdateInfo } from "../components/UpdateNotification";
 import { useToast } from "../components/Toast";
 import {
-  Card, SectionHeader, Spinner, Toggle, SegmentedControl, ErrorBanner, Button, Input, Field,
+  Card, SectionHeader, Spinner, Toggle, SegmentedControl, ErrorBanner, Button, Input, Field, Modal,
+  SettingsSection,
 } from "../components/ui";
 
 // Caveman compression maps to a Gentle / Balanced / Strong segmented control.
@@ -73,101 +75,107 @@ export function SettingsPage() {
       {settings.isLoading || !local ? (
         <Spinner />
       ) : (
-        <div className="space-y-6">
-          {/* Token Saving */}
-          <Card>
-            <SectionHeader
-              title="RTK input compression"
-              description="Compresses bulky tool outputs (diffs, greps, listings, build logs) before they reach the model. Saves input tokens. Safe by design — never corrupts content."
-              icon={Zap}
-            />
-            <div className="flex items-center justify-between border-t border-[var(--border)] px-6 py-4">
-              <span className="text-sm font-medium">Enable RTK token saver</span>
-              <Toggle checked={local.rtk_enabled} onChange={(v) => update({ rtk_enabled: v })} />
-            </div>
-          </Card>
-
-          <Card>
-            <SectionHeader
-              title="Caveman output compression"
-              description="Instructs the model to answer tersely (caveman style) — keeps all technical substance, drops filler. Cuts output tokens 65-75%."
-              icon={MessageSquare}
-            />
-            <div className="flex items-center justify-between border-t border-[var(--border)] px-6 py-4">
-              <span className="text-sm font-medium">Enable caveman mode</span>
-              <Toggle checked={local.caveman_enabled} onChange={(v) => update({ caveman_enabled: v, ...(v ? { terse_enabled: false } : {}) })} />
-            </div>
-            {local.caveman_enabled && (
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] px-6 py-4">
-                <div>
-                  <p className="text-sm font-medium">Compression level</p>
-                  <p className="mt-0.5 text-xs text-[var(--text-muted)]">{cavemanHints[local.caveman_level]}</p>
-                </div>
-                <SegmentedControl
-                  value={local.caveman_level}
-                  onChange={(v) => update({ caveman_level: v })}
-                  options={cavemanOptions}
-                />
-              </div>
-            )}
-          </Card>
-
-          <Card>
-            <SectionHeader
-              title="Terse mode (alternative)"
-              description="KeiRouter's own concise-output directive. An alternative to caveman; both inject a system instruction, so pick one."
-              icon={Layers}
-              iconTone="neutral"
-            />
-            <div className="flex items-center justify-between border-t border-[var(--border)] px-6 py-4">
-              <span className="text-sm font-medium">Enable terse mode</span>
-              <Toggle checked={local.terse_enabled} onChange={(v) => update({ terse_enabled: v, ...(v ? { caveman_enabled: false } : {}) })} />
-            </div>
-            {local.terse_enabled && (
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] px-6 py-4">
-                <div>
-                  <p className="text-sm font-medium">Terse level</p>
-                  <p className="mt-0.5 text-xs text-[var(--text-muted)]">{terseHints[local.terse_level]}</p>
-                </div>
-                <SegmentedControl
-                  value={local.terse_level}
-                  onChange={(v) => update({ terse_level: v })}
-                  options={terseOptions}
-                />
-              </div>
-            )}
-          </Card>
-
-          {/* Routing Strategy */}
-          <RoutingStrategy local={local} update={update} />
-
-          {/* Timeouts */}
-          <TimeoutSettings local={local} update={update} />
-
-          {/* Network */}
-          <NetworkSettings local={local} update={update} />
-
-          {/* Observability */}
-          <Card>
-            <SectionHeader
-              title="Observability"
-              description="Record request details for inspection in the logs view."
-              icon={Monitor}
-            />
-            <div className="flex items-center justify-between border-t border-[var(--border)] px-6 py-4">
-              <span className="text-sm font-medium">Enable request detail recording</span>
-              <Toggle
-                checked={local.observability_enabled !== false}
-                onChange={(v) => update({ observability_enabled: v })}
+        <div className="space-y-10">
+          {/* ── Token Saving ───────────────────────────────────────── */}
+          <SettingsSection title="Token Saving" icon={Zap}>
+            <Card>
+              <SectionHeader
+                title="RTK input compression"
+                description="Compresses bulky tool outputs (diffs, greps, listings, build logs) before they reach the model. Saves input tokens. Safe by design — never corrupts content."
+                icon={Zap}
               />
-            </div>
-          </Card>
+              <div className="flex items-center justify-between border-t border-[var(--border)] px-6 py-4">
+                <span className="text-sm font-medium">Enable RTK token saver</span>
+                <Toggle checked={local.rtk_enabled} onChange={(v) => update({ rtk_enabled: v })} />
+              </div>
+            </Card>
 
-          {/* Updates */}
-          <UpdatesSettings />
+            <Card>
+              <SectionHeader
+                title="Caveman output compression"
+                description="Instructs the model to answer tersely (caveman style) — keeps all technical substance, drops filler. Cuts output tokens 65-75%."
+                icon={MessageSquare}
+              />
+              <div className="flex items-center justify-between border-t border-[var(--border)] px-6 py-4">
+                <span className="text-sm font-medium">Enable caveman mode</span>
+                <Toggle checked={local.caveman_enabled} onChange={(v) => update({ caveman_enabled: v, ...(v ? { terse_enabled: false } : {}) })} />
+              </div>
+              {local.caveman_enabled && (
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] px-6 py-4">
+                  <div>
+                    <p className="text-sm font-medium">Compression level</p>
+                    <p className="mt-0.5 text-xs text-[var(--text-muted)]">{cavemanHints[local.caveman_level]}</p>
+                  </div>
+                  <SegmentedControl
+                    value={local.caveman_level}
+                    onChange={(v) => update({ caveman_level: v })}
+                    options={cavemanOptions}
+                  />
+                </div>
+              )}
+            </Card>
 
-          {/* Database */}
-          <DatabaseSettings />
+            <Card>
+              <SectionHeader
+                title="Terse mode (alternative)"
+                description="KeiRouter's own concise-output directive. An alternative to caveman; both inject a system instruction, so pick one."
+                icon={Layers}
+                iconTone="neutral"
+              />
+              <div className="flex items-center justify-between border-t border-[var(--border)] px-6 py-4">
+                <span className="text-sm font-medium">Enable terse mode</span>
+                <Toggle checked={local.terse_enabled} onChange={(v) => update({ terse_enabled: v, ...(v ? { caveman_enabled: false } : {}) })} />
+              </div>
+              {local.terse_enabled && (
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] px-6 py-4">
+                  <div>
+                    <p className="text-sm font-medium">Terse level</p>
+                    <p className="mt-0.5 text-xs text-[var(--text-muted)]">{terseHints[local.terse_level]}</p>
+                  </div>
+                  <SegmentedControl
+                    value={local.terse_level}
+                    onChange={(v) => update({ terse_level: v })}
+                    options={terseOptions}
+                  />
+                </div>
+              )}
+            </Card>
+          </SettingsSection>
+
+          {/* ── Routing ────────────────────────────────────────────── */}
+          <SettingsSection title="Routing" icon={Route}>
+            <RoutingStrategy local={local} update={update} />
+          </SettingsSection>
+
+          {/* ── Network & Timeouts ─────────────────────────────────── */}
+          <SettingsSection title="Network & Timeouts" icon={Gauge}>
+            <TimeoutSettings local={local} update={update} />
+            <NetworkSettings local={local} update={update} />
+          </SettingsSection>
+
+          {/* ── Observability ──────────────────────────────────────── */}
+          <SettingsSection title="Observability" icon={Monitor}>
+            <Card>
+              <SectionHeader
+                title="Request detail recording"
+                description="Record request details for inspection in the logs view."
+                icon={Monitor}
+              />
+              <div className="flex items-center justify-between border-t border-[var(--border)] px-6 py-4">
+                <span className="text-sm font-medium">Enable request detail recording</span>
+                <Toggle
+                  checked={local.observability_enabled !== false}
+                  onChange={(v) => update({ observability_enabled: v })}
+                />
+              </div>
+            </Card>
+          </SettingsSection>
+
+          {/* ── Data & Updates ─────────────────────────────────────── */}
+          <SettingsSection title="Data & Updates" icon={Database}>
+            <DatabaseSettings />
+            <UpdatesSettings />
+          </SettingsSection>
 
           {save.isError && <ErrorBanner message={`Failed to save: ${(save.error as Error)?.message ?? "unknown error"}`} />}
         </div>

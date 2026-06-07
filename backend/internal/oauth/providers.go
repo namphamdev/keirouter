@@ -153,6 +153,26 @@ var configs = map[string]ProviderConfig{
 		RefreshURL:   "https://api.cline.bot/api/v1/auth/refresh",
 		UserInfoURL:  "https://api.cline.bot/api/v1/auth/userinfo",
 	},
+	"iflow": {
+		Provider:     "iflow",
+		Flow:         FlowAuthCode,
+		ClientID:     "10009311001",
+		ClientSecret: "4Z3YjXycVsQvyGF1etiNlIBB4RsqSDtW",
+		AuthorizeURL: "https://iflow.cn/oauth",
+		TokenURL:     "https://iflow.cn/oauth/token",
+		UserInfoURL:  "https://iflow.cn/api/oauth/getUserInfo",
+		ExtraAuthParams: map[string]string{
+			"loginMethod": "phone",
+			"type":        "phone",
+		},
+	},
+	"kimi-coding": {
+		Provider:      "kimi-coding",
+		Flow:          FlowDeviceCode,
+		ClientID:      "17e5f671-d194-4dfb-9706-5516cb48c098",
+		DeviceCodeURL: "https://auth.kimi.com/api/oauth/device_authorization",
+		TokenURL:      "https://auth.kimi.com/api/oauth/token",
+	},
 }
 
 // ConfigFor returns the OAuth config for a provider id.

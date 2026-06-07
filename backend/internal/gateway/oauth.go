@@ -172,7 +172,9 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	provider := r.URL.Query().Get("provider")
 
 	frontendRedirect := func(status, msg string) {
-		u := fmt.Sprintf("/#/oauth/callback?status=%s&provider=%s", status, provider)
+		// Path-style redirect (no #) — the dashboard SPA uses BrowserRouter, so
+		// the callback page reads status/message from window.location.search.
+		u := fmt.Sprintf("/oauth/callback?status=%s&provider=%s", status, url.QueryEscape(provider))
 		if msg != "" {
 			u += "&message=" + url.QueryEscape(msg)
 		}

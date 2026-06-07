@@ -105,6 +105,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 
 	s.mountOAuth(r)
 	s.mountKiro(r)
+	s.mountCustomFlows(r)
 
 	s.mountCLITools(r)
 }

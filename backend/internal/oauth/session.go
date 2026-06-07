@@ -27,6 +27,10 @@ type Session struct {
 	KiroStartURL     string
 	KiroAuthMethod   string // builder-id | idc
 
+	// Extra carries custom-flow state (qoder nonce/verifier/machine id,
+	// codebuddy state, kilocode code, cursor machine id) between steps.
+	Extra map[string]string
+
 	ExpiresAt time.Time
 }
 

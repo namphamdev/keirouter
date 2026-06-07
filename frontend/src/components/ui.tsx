@@ -78,6 +78,37 @@ export function CardHeader({
   );
 }
 
+// SettingsSection groups related cards under a labeled heading with a subtle divider.
+// Improves scanability on long settings pages.
+export function SettingsSection({
+  title,
+  icon: Icon,
+  children,
+}: {
+  title: string;
+  icon?: LucideIcon;
+  children: ReactNode;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2.5 pt-2">
+        {Icon && (
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--bg-subtle)]">
+            <Icon className="h-4 w-4 text-[var(--text-muted)]" strokeWidth={2} />
+          </div>
+        )}
+        <h3 className="text-sm font-semibold uppercase tracking-widest text-[var(--text-muted)]">
+          {title}
+        </h3>
+        <div className="flex-1 border-t border-[var(--border)]" />
+      </div>
+      <div className="space-y-4">
+        {children}
+      </div>
+    </div>
+  );
+}
+
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "secondary" | "ghost" | "danger";
 };
@@ -216,29 +247,38 @@ export function StatCard({
 }) {
   const deltaColor =
     delta?.direction === "up"
-      ? "text-accent-600 dark:text-accent-400"
+      ? "text-emerald-600 dark:text-emerald-400"
       : delta?.direction === "down"
-        ? "text-[color:var(--color-danger)]"
+        ? "text-red-500 dark:text-red-400"
         : "text-[var(--text-muted)]";
   const arrow = delta?.direction === "up" ? "↑" : delta?.direction === "down" ? "↓" : "";
-  
-  const iconColor = iconTone === "accent" ? "text-accent-500" : iconTone === "warning" ? "text-amber-500" : "text-red-500";
+
+  const tone = iconTone === "accent"
+    ? { ring: "bg-accent-100 dark:bg-accent-900/40", icon: "text-accent-600 dark:text-accent-300", glow: "from-accent-500/8 dark:from-accent-400/12" }
+    : iconTone === "warning"
+      ? { ring: "bg-amber-100 dark:bg-amber-900/40", icon: "text-amber-600 dark:text-amber-300", glow: "from-amber-500/8 dark:from-amber-400/12" }
+      : { ring: "bg-red-100 dark:bg-red-900/40", icon: "text-red-600 dark:text-red-300", glow: "from-red-500/8 dark:from-red-400/12" };
 
   return (
-    <div className="flex flex-col justify-between p-5 rounded-xl border border-[var(--border)] bg-[var(--bg)] shadow-sm transition-colors hover:bg-[var(--bg-subtle)] relative overflow-hidden group">
-      {/* Subtle secondary tone gradient glow on hover */}
-      <div className="absolute inset-0 bg-gradient-to-br from-accent-500/5 to-transparent opacity-0 transition-opacity duration-500 group-hover:opacity-100 dark:from-accent-500/10" />
-      
-      <div className="relative flex items-center gap-2 text-[var(--text-muted)] mb-4">
-        <Icon className={`h-4 w-4 ${iconColor}`} />
-        <span className="text-xs font-medium tracking-wide uppercase">{label}</span>
+    <div className="relative flex flex-col justify-between rounded-xl border border-[var(--border)] bg-[var(--bg)] p-5 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 group overflow-hidden">
+      {/* Accent gradient glow */}
+      <div className={`absolute inset-0 bg-gradient-to-br ${tone.glow} to-transparent`} />
+
+      <div className="relative flex items-center justify-between mb-5">
+        <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">
+          {label}
+        </span>
+        <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${tone.ring}`}>
+          <Icon className={`h-[18px] w-[18px] ${tone.icon}`} strokeWidth={2} />
+        </div>
       </div>
+
       <div className="relative">
-        <div className="text-3xl font-light tracking-tight tabular-nums text-[var(--text)]">
+        <div className="text-[28px] font-semibold tracking-tight tabular-nums text-[var(--text)]">
           {value}
         </div>
         {delta && (
-          <p className={`mt-1.5 text-[11px] font-medium ${deltaColor}`}>
+          <p className={`mt-1 text-[11px] font-medium ${deltaColor}`}>
             {arrow} {delta.text}
           </p>
         )}

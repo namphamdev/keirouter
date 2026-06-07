@@ -18,22 +18,35 @@ import {
   SegmentedControl,
 } from "../components/ui";
 
-// defaultRedirectURI is the OAuth callback the provider redirects to after sign-in.
-// The backend intercepts this path, exchanges the code, and redirects to a
-// frontend callback page that notifies this tab via postMessage.
-//
-// We use the literal IPv4 loopback (127.0.0.1) rather than "localhost" because
-// the gateway binds to 127.0.0.1 (IPv4 only). On Windows, "localhost" often
-// resolves to the IPv6 ::1 first, so a callback to http://localhost would hit a
-// closed IPv6 port and the OAuth flow would hang after account selection.
-const defaultRedirectURI = "http://127.0.0.1:20180/oauth/callback";
+// isLocalhostHost reports whether the dashboard is being viewed on a loopback
+// host. On localhost the OAuth popup can redirect straight back to the gateway's
+// own callback handler; on a public host (tunnel/production) the provider's
+// loopback redirect can't reach the gateway, so we fall back to manual paste.
+function isLocalhostHost(): boolean {
+  const h = window.location.hostname;
+  return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1";
+}
 
+// redirectURIForProvider returns the OAuth callback the provider redirects to
+// after sign-in.
+//
+// We always use a localhost loopback redirect. Providers that use desktop /
+// installed-app OAuth clients (Google for gemini-cli & antigravity, etc.) only
+// whitelist loopback redirect URIs — a public dashboard URL would be rejected
+// with redirect_uri_mismatch. On localhost the gateway's own callback handler
+// catches the redirect; on a public host the redirect lands on the user's local
+// machine (nothing listening), and the user copies the resulting URL into the
+// manual-paste field instead.
+//
+// Fixed-port providers (Codex, xAI) mirror their CLI's loopback flow and require
+// an exact http://host:port/path redirect their OAuth client whitelists.
 function redirectURIForProvider(provider: OAuthProvider): string {
   if (provider.fixed_port && provider.callback_path) {
     const host = provider.loopback_host || "127.0.0.1";
     return `http://${host}:${provider.fixed_port}${provider.callback_path}`;
   }
-  return defaultRedirectURI;
+  const appPort = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
+  return `http://localhost:${appPort}/oauth/callback`;
 }
 
 export function ProviderDetailPage() {
@@ -1015,17 +1028,42 @@ function AuthCodeFlow({ provider, onClose }: { provider: OAuthProvider; onClose:
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
+  // Manual-paste mode is used on public hosts where the provider's loopback
+  // redirect can't reach the gateway. The user pastes the callback URL back.
+  const [manual, setManual] = useState(false);
+  const [pasted, setPasted] = useState("");
+  const [exchanging, setExchanging] = useState(false);
+  const stateRef = useRef("");
 
-  // Listen for the postMessage sent by the OAuth callback page.
+  const finishSuccess = () => {
+    setDone(true);
+    qc.invalidateQueries({ queryKey: ["accounts"] });
+    setTimeout(onClose, 1500);
+  };
+
+  // Listen for the postMessage from the gateway callback page. The popup may
+  // forward either a raw code (we exchange it here) or a server-side result
+  // status/message (embedded mode already exchanged).
   useEffect(() => {
     if (!waiting) return;
-    const handler = (e: MessageEvent) => {
+    const handler = async (e: MessageEvent) => {
       if (e.data?.type !== "oauth-callback") return;
       if (e.data.provider && e.data.provider !== provider.provider) return;
+      if (e.data.code) {
+        try {
+          await api.oauthExchange(provider.provider, {
+            code: e.data.code,
+            state: e.data.state || stateRef.current,
+          });
+          finishSuccess();
+        } catch (err) {
+          setError((err as Error).message);
+          setWaiting(false);
+        }
+        return;
+      }
       if (e.data.status === "success") {
-        setDone(true);
-        qc.invalidateQueries({ queryKey: ["accounts"] });
-        setTimeout(onClose, 1500);
+        finishSuccess();
       } else {
         setError(e.data.message || "Connection failed.");
         setWaiting(false);
@@ -1033,20 +1071,92 @@ function AuthCodeFlow({ provider, onClose }: { provider: OAuthProvider; onClose:
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [waiting, provider.provider, qc, onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waiting, provider.provider]);
 
   const start = async () => {
     setError("");
     try {
       const res = await api.oauthAuthorize(provider.provider, redirectURIForProvider(provider));
-      setWaiting(true);
+      stateRef.current = res.state;
       window.open(res.authorize_url, "_blank", "popup,width=560,height=760");
+      // On a public host the loopback callback can't reach the gateway, so the
+      // user must copy the resulting URL back. On localhost the gateway catches
+      // the redirect and notifies us via postMessage.
+      if (isLocalhostHost()) {
+        setWaiting(true);
+      } else {
+        setManual(true);
+      }
     } catch (e) {
       setError((e as Error).message);
     }
   };
 
+  const submitManual = async () => {
+    setError("");
+    const input = pasted.trim();
+    if (!input) {
+      setError("Paste the full callback URL (or the code) from the other tab.");
+      return;
+    }
+    let code = input;
+    let state = stateRef.current;
+    // Accept either a pasted callback URL or a bare code value.
+    if (input.includes("://") || input.includes("?") || input.includes("code=")) {
+      try {
+        const u = new URL(input.includes("://") ? input : `http://localhost/?${input.replace(/^\?/, "")}`);
+        const err = u.searchParams.get("error");
+        if (err) {
+          setError(u.searchParams.get("error_description") || err);
+          return;
+        }
+        code = u.searchParams.get("code") || "";
+        state = u.searchParams.get("state") || state;
+      } catch {
+        setError("Could not parse the callback URL. Paste the full URL from the address bar.");
+        return;
+      }
+    }
+    if (!code) {
+      setError("No authorization code found. Paste the full callback URL.");
+      return;
+    }
+    setExchanging(true);
+    try {
+      await api.oauthExchange(provider.provider, { code, state });
+      finishSuccess();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setExchanging(false);
+    }
+  };
+
   if (done) return <div className="px-6 py-6 text-sm">Connected. Refreshing accounts…</div>;
+
+  if (manual) {
+    return (
+      <div className="space-y-4 px-6 py-5">
+        <p className="text-sm text-[var(--text-muted)]">
+          Sign in with {provider.display_name} in the other tab. After approving,
+          your browser lands on a <code>localhost</code> page that can't load —
+          copy that page's full URL from the address bar and paste it here.
+        </p>
+        <Field label="Callback URL">
+          <Input
+            value={pasted}
+            onChange={(e) => { setPasted(e.target.value); setError(""); }}
+            placeholder="http://localhost:.../oauth/callback?code=...&state=..."
+          />
+        </Field>
+        <Button onClick={submitManual} disabled={exchanging} className="w-full">
+          {exchanging ? "Connecting…" : "Complete connection"}
+        </Button>
+        {error && <p className="text-xs text-[color:var(--color-danger)]">{error}</p>}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4 px-6 py-5">

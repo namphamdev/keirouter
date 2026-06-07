@@ -24,6 +24,7 @@ const (
 	DialectCursor      Dialect = "cursor"       // Cursor connect-proto
 	DialectAntigravity Dialect = "antigravity"  // Antigravity CloudCode
 	DialectCommandCode Dialect = "command_code" // Command Code generate API
+	DialectWebCookie   Dialect = "web_cookie"    // browser-session cookie providers
 )
 
 // ChatRequest is the canonical, dialect-independent representation of a chat
