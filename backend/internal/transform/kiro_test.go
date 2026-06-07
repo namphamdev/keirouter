@@ -361,6 +361,331 @@ func TestKiro_RenderRequest_EmptyToolInputIsObject(t *testing.T) {
 	}
 }
 
+// TestKiro_RenderRequest_ClaudeCodeScenario reproduces the exact conversation
+// shape captured from a KIRO_DEBUG dump of Claude Code talking to Kiro Opus 4.8
+// (thinking): several alternating turns, a final assistant turn carrying a
+// toolUse (Bash), and a trailing tool result promoted to the current message,
+// with the client's full tool set attached. It asserts the rendered payload is
+// structurally valid (alternation, current message tools + tool result), so we
+// can distinguish a codec defect from an upstream model-policy rejection.
+func TestKiro_RenderRequest_ClaudeCodeScenario(t *testing.T) {
+	build := func(model string) *core.ChatRequest {
+		return &core.ChatRequest{
+			Model:  model,
+			System: "You are Claude Code.",
+			Messages: []core.Message{
+				{Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "bro"}}},
+				{Role: core.RoleAssistant, Content: []core.ContentPart{{Type: core.PartText, Text: "Yo. What we building?"}}},
+				{Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "improve UI/UX for passphrase import/export"}}},
+				{Role: core.RoleAssistant, Content: []core.ContentPart{
+					{Type: core.PartText, Text: "Need find export/import passphrase UI first. Let me locate it."},
+					{Type: core.PartToolCall, ToolCall: &core.ToolCall{ID: "tooluse_abc", Name: "Bash", Arguments: json.RawMessage(`{"command":"grep -rln passphrase frontend/src","description":"find passphrase UI"}`)}},
+				}},
+				{Role: core.RoleTool, Content: []core.ContentPart{
+					{Type: core.PartToolResult, ToolResult: &core.ToolResult{CallID: "tooluse_abc", Content: "frontend/src/pages/Settings.tsx"}},
+				}},
+			},
+			Tools: []core.Tool{
+				{Name: "Bash", Description: "run a shell command", Parameters: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}}}`)},
+				{Name: "Read", Description: "read a file", Parameters: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`)},
+			},
+		}
+	}
+
+	render := func(model string) map[string]any {
+		body, err := KiroCodec{}.RenderRequest(build(model))
+		if err != nil {
+			t.Fatalf("render %s: %v", model, err)
+		}
+		var env map[string]any
+		if err := json.Unmarshal(body, &env); err != nil {
+			t.Fatalf("unmarshal %s: %v", model, err)
+		}
+		return env
+	}
+
+	env := render("claude-opus-4.8-thinking")
+	cs := env["conversationState"].(map[string]any)
+
+	// History must alternate strictly and end with an assistant turn (the
+	// trailing user tool-result is promoted to currentMessage).
+	hist := cs["history"].([]any)
+	if len(hist) == 0 {
+		t.Fatal("expected non-empty history")
+	}
+	prevUser := false
+	for i, h := range hist {
+		hm := h.(map[string]any)
+		_, isUser := hm["userInputMessage"]
+		_, isAsst := hm["assistantResponseMessage"]
+		if !isUser && !isAsst {
+			t.Fatalf("history[%d] is neither user nor assistant: %v", i, hm)
+		}
+		if i == 0 && !isUser {
+			t.Fatalf("history must start with a user turn, got %v", hm)
+		}
+		if i > 0 && isUser == prevUser {
+			t.Fatalf("history[%d] breaks alternation (consecutive %s)", i, map[bool]string{true: "user", false: "assistant"}[isUser])
+		}
+		prevUser = isUser
+	}
+	if _, lastIsAsst := hist[len(hist)-1].(map[string]any)["assistantResponseMessage"]; !lastIsAsst {
+		t.Fatalf("history should end with an assistant turn, got %v", hist[len(hist)-1])
+	}
+
+	// Current message must carry the tools array and the tool result.
+	cm := cs["currentMessage"].(map[string]any)["userInputMessage"].(map[string]any)
+	ctx, ok := cm["userInputMessageContext"].(map[string]any)
+	if !ok {
+		t.Fatalf("current message missing userInputMessageContext: %v", cm)
+	}
+	if ctx["tools"] == nil {
+		t.Errorf("current message must carry tools array: %v", ctx)
+	}
+	trs := asAnySlice(ctx["toolResults"])
+	if len(trs) == 0 {
+		t.Errorf("current message must carry the trailing tool result: %v", ctx)
+	} else if id, _ := trs[0].(map[string]any)["toolUseId"].(string); id != "tooluse_abc" {
+		t.Errorf("tool result should reference tooluse_abc, got %q", id)
+	}
+
+	// The assistant toolUse in history must have a non-null object input.
+	var sawToolUse bool
+	for _, h := range hist {
+		if arm, ok := h.(map[string]any)["assistantResponseMessage"].(map[string]any); ok {
+			for _, tu := range asAnySlice(arm["toolUses"]) {
+				sawToolUse = true
+				if _, ok := tu.(map[string]any)["input"].(map[string]any); !ok {
+					t.Errorf("toolUse input must be an object, got %T", tu.(map[string]any)["input"])
+				}
+			}
+		}
+	}
+	if !sawToolUse {
+		t.Error("expected an assistant toolUse in history")
+	}
+
+	// The only difference between Opus 4.8 and a known-good model must be the
+	// modelId string — proving the codec treats them identically and any 400 is
+	// an upstream model-policy decision, not a rendering defect.
+	opus := render("claude-opus-4.8-thinking")
+	sonnet := render("claude-sonnet-4.5-thinking")
+	normalizeKiroModelIds(opus)
+	normalizeKiroModelIds(sonnet)
+	stripVolatile(opus)
+	stripVolatile(sonnet)
+	ob, _ := json.Marshal(opus)
+	sb, _ := json.Marshal(sonnet)
+	if string(ob) != string(sb) {
+		t.Errorf("Opus and Sonnet payloads differ beyond modelId:\nopus:   %s\nsonnet: %s", ob, sb)
+	}
+}
+
+// asAnySlice coerces a JSON-decoded value into []any (nil-safe).
+func asAnySlice(v any) []any {
+	s, _ := v.([]any)
+	return s
+}
+
+// normalizeKiroModelIds rewrites every modelId in a decoded payload to a fixed
+// sentinel so two payloads can be compared independent of model name.
+func normalizeKiroModelIds(v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if k == "modelId" {
+				t[k] = "MODEL"
+				continue
+			}
+			normalizeKiroModelIds(val)
+		}
+	case []any:
+		for _, e := range t {
+			normalizeKiroModelIds(e)
+		}
+	}
+}
+
+// stripVolatile removes fields that vary per render (conversationId, the
+// time-context marker) so structural comparison is stable.
+func stripVolatile(env map[string]any) {
+	cs, ok := env["conversationState"].(map[string]any)
+	if !ok {
+		return
+	}
+	delete(cs, "conversationId")
+	cm, ok := cs["currentMessage"].(map[string]any)["userInputMessage"].(map[string]any)
+	if ok {
+		if content, ok := cm["content"].(string); ok {
+			cm["content"] = stripTimeContext(content)
+		}
+	}
+}
+
+func stripTimeContext(s string) string {
+	start := strings.Index(s, "[Context: Current time")
+	if start < 0 {
+		return s
+	}
+	end := strings.Index(s[start:], "]")
+	if end < 0 {
+		return s
+	}
+	return s[:start] + s[start+end+1:]
+}
+
+// TestKiro_RenderRequest_SanitizesToolSchema reproduces the real failure: Claude
+// Code sends tool parameter schemas as full JSON-Schema draft documents with a
+// "$schema" meta key and object-valued "additionalProperties". CodeWhisperer's
+// inputSchema.json validator rejects both, returning "Improperly formed request"
+// (HTTP 400) for EVERY model. The rendered payload must carry no "$"-prefixed
+// schema keys and only boolean additionalProperties.
+func TestKiro_RenderRequest_SanitizesToolSchema(t *testing.T) {
+	req := &core.ChatRequest{
+		Model: "claude-opus-4.8-thinking",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "go"}}},
+		},
+		Tools: []core.Tool{
+			{
+				Name:        "EnterPlanMode",
+				Description: "plan",
+				Parameters: json.RawMessage(`{
+					"$schema":"https://json-schema.org/draft/2020-12/schema",
+					"additionalProperties":false,
+					"properties":{},
+					"type":"object"
+				}`),
+			},
+			{
+				Name:        "ExitPlanMode",
+				Description: "exit",
+				Parameters: json.RawMessage(`{
+					"$schema":"https://json-schema.org/draft/2020-12/schema",
+					"additionalProperties":{},
+					"properties":{
+						"nested":{"type":"object","additionalProperties":{"type":"string"}}
+					},
+					"type":"object"
+				}`),
+			},
+		},
+	}
+	body, err := KiroCodec{}.RenderRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No "$schema" (or any "$"-prefixed meta key) may survive anywhere.
+	raw := string(body)
+	if strings.Contains(raw, `"$schema"`) {
+		t.Errorf("rendered payload must not contain $schema: %s", raw)
+	}
+
+	// Every additionalProperties value must be a boolean, never an object.
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatal(err)
+	}
+	var checkAdditional func(v any)
+	checkAdditional = func(v any) {
+		switch node := v.(type) {
+		case map[string]any:
+			for k, val := range node {
+				if k == "additionalProperties" {
+					if _, ok := val.(bool); !ok {
+						t.Errorf("additionalProperties must be bool, got %T (%v)", val, val)
+					}
+				}
+				if strings.HasPrefix(k, "$") {
+					t.Errorf("schema meta key %q must be stripped", k)
+				}
+				checkAdditional(val)
+			}
+		case []any:
+			for _, e := range node {
+				checkAdditional(e)
+			}
+		}
+	}
+	checkAdditional(env)
+
+	// The tools array must still be present and well formed.
+	cs := env["conversationState"].(map[string]any)
+	cm := cs["currentMessage"].(map[string]any)["userInputMessage"].(map[string]any)
+	ctx := cm["userInputMessageContext"].(map[string]any)
+	tools := asAnySlice(ctx["tools"])
+	if len(tools) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(tools))
+	}
+	for _, tt := range tools {
+		spec := tt.(map[string]any)["toolSpecification"].(map[string]any)
+		js := spec["inputSchema"].(map[string]any)["json"].(map[string]any)
+		if js["type"] != "object" {
+			t.Errorf("tool schema should preserve type=object, got %v", js["type"])
+		}
+	}
+}
+
+// TestKiro_RenderRequest_StripsBracketSuffix reproduces the documented 9router
+// issue #1503: Claude Code appends a "[1m]" annotation (1M-context marker) to
+// the model name. Kiro (AWS CodeWhisperer/Bedrock) has no such axis, so the
+// literal bracket segment must be stripped from the upstream modelId — leaving
+// it makes CodeWhisperer reject the request with "Improperly formed request"
+// (HTTP 400) for every model.
+func TestKiro_RenderRequest_StripsBracketSuffix(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"claude-opus-4.8-thinking[1m]", "claude-opus-4.8"},
+		{"claude-sonnet-4.5[1m]", "claude-sonnet-4.5"},
+		{"claude-opus-4.7-thinking-agentic[1m]", "claude-opus-4.7"},
+		{"claude-sonnet-4.5", "claude-sonnet-4.5"},
+	}
+	for _, tc := range cases {
+		req := &core.ChatRequest{
+			Model: tc.in,
+			Messages: []core.Message{
+				{Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "hi"}}},
+			},
+		}
+		body, err := KiroCodec{}.RenderRequest(req)
+		if err != nil {
+			t.Fatalf("render %q: %v", tc.in, err)
+		}
+		var env map[string]any
+		if err := json.Unmarshal(body, &env); err != nil {
+			t.Fatalf("unmarshal %q: %v", tc.in, err)
+		}
+		cm := env["conversationState"].(map[string]any)["currentMessage"].(map[string]any)["userInputMessage"].(map[string]any)
+		if got := cm["modelId"]; got != tc.want {
+			t.Errorf("model %q -> modelId %v, want %q", tc.in, got, tc.want)
+		}
+		// The bracket segment must not survive anywhere in the payload.
+		if strings.Contains(string(body), "[1m]") {
+			t.Errorf("payload for %q still contains [1m]: %s", tc.in, body)
+		}
+	}
+}
+
+func TestStripKiroBracketSuffix(t *testing.T) {
+	cases := map[string]string{
+		"claude-opus-4.8[1m]":                  "claude-opus-4.8",
+		"claude-opus-4.8-thinking[1m]":         "claude-opus-4.8-thinking",
+		"claude-opus-4.8-thinking-agentic[1m]": "claude-opus-4.8-thinking-agentic",
+		"claude-sonnet-4.5":                    "claude-sonnet-4.5",
+		"model[200k]":                          "model",
+		"model[1m] ":                           "model",
+		"":                                     "",
+	}
+	for in, want := range cases {
+		if got := stripKiroBracketSuffix(in); got != want {
+			t.Errorf("stripKiroBracketSuffix(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestSanitizeKiroToolName(t *testing.T) {
 	cases := map[string]string{
 		"Read":                 "Read",

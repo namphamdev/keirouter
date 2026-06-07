@@ -32,7 +32,30 @@ const (
 	kiroThinkingBudgetDefault = 16000
 	kiroAgenticSuffix         = "-agentic"
 	kiroThinkingSuffix        = "-thinking"
+
+	// kiroMaxTokensDefault is the output cap used when the client did not
+	// request one. kiroMaxTokensCeiling bounds any client-supplied value so an
+	// oversized max_tokens cannot exceed what CodeWhisperer accepts (an
+	// out-of-range value returns "Improperly formed request", HTTP 400).
+	kiroMaxTokensDefault = 32000
+	kiroMaxTokensCeiling = 32000
 )
+
+// kiroMaxTokens resolves the output token cap for the inferenceConfig. It
+// honours the client's requested max_tokens when present, clamps it into the
+// accepted range, and falls back to the default otherwise. RenderRequest
+// previously hardcoded 32000 regardless of the request, which both ignored the
+// caller's intent and risked an upstream 400 when the value was out of range.
+func kiroMaxTokens(req *core.ChatRequest) int {
+	if req == nil || req.MaxTokens == nil || *req.MaxTokens <= 0 {
+		return kiroMaxTokensDefault
+	}
+	v := *req.MaxTokens
+	if v > kiroMaxTokensCeiling {
+		return kiroMaxTokensCeiling
+	}
+	return v
+}
 
 // kiroAgenticSystemPrompt mirrors KIRO_AGENTIC_SYSTEM_PROMPT (chunked-write
 // protocol) injected for synthetic "-agentic" model variants.
@@ -66,6 +89,13 @@ func buildKiroThinkingPrefix(budget int) string {
 // resolveKiroModel strips synthetic suffixes and reports the implied behaviours.
 func resolveKiroModel(model string) (upstream string, agentic, thinking bool) {
 	upstream = model
+	// Strip any trailing bracketed annotation such as "[1m]" (the 1M-context
+	// marker some clients, e.g. Claude Code, append to the model name). Kiro is
+	// AWS CodeWhisperer/Bedrock-backed and has no [1m] axis; the literal bracket
+	// segment otherwise travels untouched into userInputMessage.modelId and the
+	// upstream rejects the malformed id with "Improperly formed request" (HTTP
+	// 400) — for every model, since the suffix is unrelated to the base id.
+	upstream = stripKiroBracketSuffix(upstream)
 	if strings.HasSuffix(upstream, kiroAgenticSuffix) {
 		agentic = true
 		upstream = strings.TrimSuffix(upstream, kiroAgenticSuffix)
@@ -75,6 +105,23 @@ func resolveKiroModel(model string) (upstream string, agentic, thinking bool) {
 		upstream = strings.TrimSuffix(upstream, kiroThinkingSuffix)
 	}
 	return upstream, agentic, thinking
+}
+
+// stripKiroBracketSuffix removes a trailing bracketed annotation like "[1m]"
+// from a model name. Clients such as Claude Code append "[1m]" to request
+// Anthropic's 1M-context beta; Kiro (AWS CodeWhisperer/Bedrock) has no such
+// axis and rejects the literal bracket segment as a malformed modelId with
+// "Improperly formed request" (HTTP 400). Only a trailing "[...]" group is
+// removed; bracket characters elsewhere are left intact.
+func stripKiroBracketSuffix(model string) string {
+	model = strings.TrimSpace(model)
+	if !strings.HasSuffix(model, "]") {
+		return model
+	}
+	if open := strings.LastIndexByte(model, '['); open >= 0 {
+		return strings.TrimSpace(model[:open])
+	}
+	return model
 }
 
 // kiroThinkingEnabled detects reasoning intent from the canonical request,
@@ -162,7 +209,7 @@ func (KiroCodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
 		},
 	}
 
-	infer := map[string]any{"maxTokens": 32000}
+	infer := map[string]any{"maxTokens": kiroMaxTokens(req)}
 	if req.Temperature != nil {
 		infer["temperature"] = *req.Temperature
 	}
@@ -318,7 +365,7 @@ func buildKiroHistory(req *core.ChatRequest, upstream string) ([]map[string]any,
 	if len(req.Tools) > 0 {
 		var tools []map[string]any
 		for _, t := range req.Tools {
-			schema := rawToAny(t.Parameters)
+			schema := sanitizeKiroToolSchema(rawToAny(t.Parameters))
 			if schema == nil {
 				schema = map[string]any{"type": "object", "properties": map[string]any{}, "required": []any{}}
 			}
@@ -675,6 +722,72 @@ func sanitizeKiroToolName(name string) string {
 	// Truncate to the 64-character limit.
 	if len(out) > 64 {
 		out = out[:64]
+	}
+	return out
+}
+
+// kiroSchemaAllowedKeys is the set of JSON-Schema keywords CodeWhisperer's
+// toolSpecification.inputSchema.json validator accepts. Anything outside this
+// set (meta keys like "$schema"/"$ref", combinators like "anyOf"/"oneOf"/
+// "allOf"/"const", and constraints like "format"/"propertyNames"/
+// "additionalProperties"/"exclusiveMinimum"/"maximum"/"minLength") makes Kiro
+// reject the whole request with "Improperly formed request" (HTTP 400).
+var kiroSchemaAllowedKeys = map[string]bool{
+	"type":        true,
+	"description":  true,
+	"enum":         true,
+	"properties":   true,
+	"required":     true,
+	"items":        true,
+}
+
+// sanitizeKiroToolSchema rebuilds a tool parameter schema as the minimal,
+// CodeWhisperer-conformant subset. Clients like Claude Code emit full
+// JSON-Schema draft documents (with "$schema", "additionalProperties": {},
+// "anyOf", "const", "format", "propertyNames", numeric bounds, etc.); Kiro's
+// validator accepts only a plain constrained schema and rejects the entire
+// request — for EVERY model, since the tool spec is shared — when any
+// unsupported keyword is present. Rather than denylist each offending construct
+// (a moving target), this keeps only the allowlisted keywords and recurses into
+// "properties" and "items". A node left empty after filtering (e.g. a property
+// described solely by "anyOf") becomes an unconstrained {}, which is valid.
+func sanitizeKiroToolSchema(v any) any {
+	node, ok := v.(map[string]any)
+	if !ok {
+		// Non-object schema fragment (rare at this position) — pass through.
+		return v
+	}
+	out := make(map[string]any, len(node))
+	for k, val := range node {
+		if !kiroSchemaAllowedKeys[k] {
+			continue
+		}
+		switch k {
+		case "properties":
+			// Recurse into each named property's subschema.
+			if props, ok := val.(map[string]any); ok {
+				cleaned := make(map[string]any, len(props))
+				for name, sub := range props {
+					cleaned[name] = sanitizeKiroToolSchema(sub)
+				}
+				out[k] = cleaned
+			}
+		case "items":
+			// items may be a single schema or an array of schemas.
+			switch items := val.(type) {
+			case map[string]any:
+				out[k] = sanitizeKiroToolSchema(items)
+			case []any:
+				arr := make([]any, 0, len(items))
+				for _, it := range items {
+					arr = append(arr, sanitizeKiroToolSchema(it))
+				}
+				out[k] = arr
+			}
+		default:
+			// type/description/enum/required: copy verbatim.
+			out[k] = val
+		}
 	}
 	return out
 }
