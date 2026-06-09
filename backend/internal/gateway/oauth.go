@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -343,7 +344,25 @@ func (s *Server) persistOAuthAccount(r *http.Request, provider, label string, to
 	if err := s.accounts.Create(r.Context(), acc); err != nil {
 		return "", err
 	}
+
+	// Clear stale cooldowns on other accounts for the same provider/tenant.
+	// When a user reconnects a provider, any previously-stuck accounts
+	// should not block future requests.
+	s.clearStaleProviderCooldowns(r.Context(), adminTenant, provider)
+
 	return acc.ID, nil
+}
+
+// clearStaleProviderCooldowns removes expired cooldowns on all accounts for a
+// provider within a tenant. Called after a successful reconnect so the dispatch
+// layer can immediately use any previously-stuck accounts.
+func (s *Server) clearStaleProviderCooldowns(ctx context.Context, tenantID, provider string) {
+	if s.accounts == nil {
+		return
+	}
+	if err := s.accounts.ClearProviderCooldowns(ctx, tenantID, provider); err != nil {
+		s.log.Warn("failed to clear stale provider cooldowns", "provider", provider, "err", err)
+	}
 }
 
 // oauthLabel derives a human label for an OAuth account.

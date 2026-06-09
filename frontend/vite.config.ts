@@ -60,5 +60,18 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
+    rollupOptions: {
+      output: {
+        // Split heavy, rarely-changing vendor libs into their own chunks so the
+        // browser caches them across deploys and they load only with the pages
+        // that import them (recharts -> chart pages, @xyflow -> Chains).
+        manualChunks: {
+          react: ["react", "react-dom", "react-router-dom"],
+          query: ["@tanstack/react-query"],
+          recharts: ["recharts"],
+          xyflow: ["@xyflow/react"],
+        },
+      },
+    },
   },
 });

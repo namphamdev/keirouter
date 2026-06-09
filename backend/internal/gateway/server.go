@@ -68,6 +68,7 @@ type Server struct {
 	refresher       dispatch.TokenRefresher
 	version         string
 	updates         *update.Checker
+	insightsCache   *ttlCache
 	router          chi.Router
 }
 
@@ -153,8 +154,10 @@ func New(d Deps) *Server {
 		refresher:       d.Refresher,
 		version:         d.Version,
 		updates:         d.Updates,
+		insightsCache:   newTTLCache(insightsCacheTTL),
 	}
 	s.router = s.routes()
+	startSystemCollector()
 	return s
 }
 

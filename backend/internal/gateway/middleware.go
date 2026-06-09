@@ -45,7 +45,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			writeError(w, http.StatusInternalServerError, "authentication error")
 			return
 		}
-		s.consoleLog.Logf("DEBUG", "auth ok: key=%s · %s %s", key.ID, r.Method, r.URL.Path)
+		s.consoleLog.Logf("DEBUG", "auth ok: key=%s (%s) · %s %s", key.Name, key.ID, r.Method, r.URL.Path)
 
 		ctx := context.WithValue(r.Context(), apiKeyCtxKey, key)
 		next.ServeHTTP(w, r.WithContext(ctx))

@@ -1,11 +1,14 @@
 package gateway
 
 import (
+	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/mydisha/keirouter/backend/internal/oauth"
+	"github.com/mydisha/keirouter/backend/internal/store"
 )
 
 // mountKiro registers the Kiro-specific connect endpoints. Kiro authenticates
@@ -18,6 +21,7 @@ func (s *Server) mountKiro(r chi.Router) {
 	r.Post("/kiro/device-start", s.kiroDeviceStart)
 	r.Post("/kiro/device-poll", s.kiroDevicePoll)
 	r.Post("/kiro/import", s.kiroImport)
+	r.Get("/kiro/health", s.kiroHealth)
 }
 
 // kiroDeviceStart registers an SSO OIDC client and begins device authorization
@@ -177,6 +181,60 @@ func (s *Server) kiroImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "provider": "kiro"})
+}
+
+// kiroHealth reports the connection status of all Kiro accounts. The dashboard
+// uses this to show a "Reconnect" prompt when the SSO session has expired.
+func (s *Server) kiroHealth(w http.ResponseWriter, r *http.Request) {
+	tenantID := store.DefaultTenantID
+	accs, err := s.accounts.ListByProvider(r.Context(), tenantID, "kiro")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	type accountHealth struct {
+		ID         string  `json:"id"`
+		Label      string  `json:"label"`
+		Status     string  `json:"status"` // connected | needs_reauth
+		ExpiresAt  *string `json:"expires_at,omitempty"`
+		AuthMethod string  `json:"auth_method"`
+	}
+
+	var results []accountHealth
+	for _, acc := range accs {
+		if acc.Disabled {
+			continue
+		}
+		meta := map[string]string{}
+		if acc.Metadata != "" {
+			_ = json.Unmarshal([]byte(acc.Metadata), &meta)
+		}
+
+		h := accountHealth{
+			ID:         acc.ID,
+			Label:      acc.Label,
+			Status:     "connected",
+			AuthMethod: meta["kiro_auth_method"],
+		}
+
+		if acc.TokenExpiresAt != nil {
+			t := acc.TokenExpiresAt.UTC().Format(time.RFC3339)
+			h.ExpiresAt = &t
+			if acc.TokenExpiresAt.Before(time.Now()) {
+				if s.refresher != nil {
+					if _, ferr := s.refresher.EnsureFresh(r.Context(), acc); ferr != nil {
+						h.Status = "needs_reauth"
+					}
+				} else {
+					h.Status = "needs_reauth"
+				}
+			}
+		}
+		results = append(results, h)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"accounts": results})
 }
 
 // kiroLabel produces a human label for a Kiro account by auth method.

@@ -9,7 +9,10 @@ import { ThemeProvider } from "./components/ThemeProvider";
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { retry: 1, refetchOnWindowFocus: false },
+    // staleTime keeps data fresh across page navigations so revisiting a page
+    // serves instantly from cache instead of refetching. gcTime holds the
+    // cached data long enough to survive a round-trip away and back.
+    queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 30_000, gcTime: 300_000 },
   },
 });
 

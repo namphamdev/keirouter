@@ -25,7 +25,7 @@ import (
 const maxBodyBytes = 32 << 20 // 32 MiB
 
 // logRequest logs a completed request to the console log buffer.
-func (s *Server) logRequest(provider, model string, tokens int, costMicros int64, latencyMs int, cacheHit bool, err error) {
+func (s *Server) logRequest(keyName, provider, model string, tokens int, costMicros int64, latencyMs int, cacheHit bool, err error) {
 	if s.consoleLog == nil {
 		return
 	}
@@ -40,8 +40,8 @@ func (s *Server) logRequest(provider, model string, tokens int, costMicros int64
 	if cacheHit {
 		cache = " · cache"
 	}
-	s.consoleLog.Logf(level, "%s · %s · %d tok · $%.4f · %dms%s",
-		provider, model, tokens, cost, latencyMs, cache)
+	s.consoleLog.Logf(level, "[%s] %s · %s · %d tok · $%.4f · %dms%s",
+		keyName, provider, model, tokens, cost, latencyMs, cache)
 	if err != nil {
 		s.consoleLog.Logf("ERROR", "  └─ %v", err)
 	}
@@ -131,8 +131,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 	tenantID := tenantOf(key)
 	client := detectClient(r)
 
-	s.consoleLog.Logf("DEBUG", "→ %s %s · dialect=%s · client=%s · key=%s",
-		r.Method, r.URL.Path, dialect, client, key.ID)
+	s.consoleLog.Logf("DEBUG", "→ %s %s · dialect=%s · client=%s · key=%s (%s)",
+		r.Method, r.URL.Path, dialect, client, key.Name, key.ID)
 
 	codec, err := s.codecs.Codec(dialect)
 	if err != nil {
@@ -165,8 +165,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 		ProjectID:     key.ProjectID,
 	}
 
-	s.consoleLog.Logf("DEBUG", "  model=%s · stream=%v · messages=%d · tenant=%s",
-		req.Model, req.Stream, len(req.Messages), tenantID)
+	s.consoleLog.Logf("DEBUG", "  model=%s · stream=%v · messages=%d · tenant=%s · key=%s (%s)",
+		req.Model, req.Stream, len(req.Messages), tenantID, key.Name, key.ID)
 
 	resolved, err := resolveTargets(r.Context(), s.chains, s.aliases, tenantID, req.Model)
 	if err != nil {
@@ -191,7 +191,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 			return
 		}
 		if len(filtered) == 0 {
-			s.consoleLog.Logf("WARN", "model access denied: key=%s model=%s", key.ID, req.Model)
+			s.consoleLog.Logf("WARN", "model access denied: key=%s (%s) model=%s", key.Name, key.ID, req.Model)
 			writeError(w, http.StatusForbidden, "access denied: this API key is not permitted to use model "+req.Model)
 			return
 		}
@@ -213,22 +213,22 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 
 	if req.Stream {
 		s.consoleLog.Logf("DEBUG", "  entering stream path")
-		s.streamChat(w, r, codec, req, opts)
+		s.streamChat(w, r, codec, req, opts, key.Name)
 		return
 	}
 	s.consoleLog.Logf("DEBUG", "  entering unary path")
-	s.unaryChat(w, r, codec, req, opts)
+	s.unaryChat(w, r, codec, req, opts, key.Name)
 }
 
 // unaryChat runs a non-streaming request and renders the response.
-func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transform.Codec, req *core.ChatRequest, opts pipeline.Options) {
+func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transform.Codec, req *core.ChatRequest, opts pipeline.Options, keyName string) {
 	start := time.Now()
 	s.consoleLog.Logf("DEBUG", "  ▶ pipeline.Chat() start")
 	result, err := s.pipeline.Chat(r.Context(), req, opts)
 	latency := int(time.Since(start).Milliseconds())
 	if err != nil {
 		s.consoleLog.Logf("ERROR", "  ✖ pipeline.Chat() failed after %dms: %v", latency, err)
-		s.logRequest(req.Model, req.Model, 0, 0, latency, false, err)
+		s.logRequest(keyName, req.Model, req.Model, 0, 0, latency, false, err)
 		s.writeProviderError(w, err)
 		return
 	}
@@ -240,9 +240,9 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transfo
 		return
 	}
 	tokens := result.Response.Usage.PromptTokens + result.Response.Usage.CompletionTokens
-	s.consoleLog.Logf("DEBUG", "  ✔ %s/%s · %d tok · acct=%s · cache=%v · %dms",
-		result.Provider, result.Model, tokens, result.AccountID, result.CacheHit, latency)
-	s.logRequest(result.Provider, result.Model, tokens, result.CostMicros, latency, result.CacheHit, nil)
+	s.consoleLog.Logf("DEBUG", "  ✔ [%s] %s/%s · %d tok · acct=%s · cache=%v · %dms",
+		keyName, result.Provider, result.Model, tokens, result.AccountID, result.CacheHit, latency)
+	s.logRequest(keyName, result.Provider, result.Model, tokens, result.CostMicros, latency, result.CacheHit, nil)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-KeiRouter-Provider", result.Provider)
 	w.Header().Set("X-KeiRouter-Model", result.Model)
@@ -255,7 +255,7 @@ func (s *Server) unaryChat(w http.ResponseWriter, r *http.Request, codec transfo
 
 // streamChat runs a streaming request and relays SSE events in the client's
 // dialect, honoring client disconnects and the configured stall timeout.
-func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transform.Codec, req *core.ChatRequest, opts pipeline.Options) {
+func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transform.Codec, req *core.ChatRequest, opts pipeline.Options, keyName string) {
 	streamCodec, ok := codec.(transform.StreamCodec)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "dialect does not support streaming")
@@ -274,12 +274,12 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 	if err != nil {
 		latency := int(time.Since(start).Milliseconds())
 		s.consoleLog.Logf("ERROR", "  ✖ pipeline.Stream() failed after %dms: %v", latency, err)
-		s.logRequest(req.Model, req.Model, 0, 0, latency, false, err)
+		s.logRequest(keyName, req.Model, req.Model, 0, 0, latency, false, err)
 		s.writeProviderError(w, err)
 		return
 	}
-	s.consoleLog.Logf("DEBUG", "  ✔ stream connected: %s/%s · acct=%s",
-		result.Provider, result.Model, result.AccountID)
+	s.consoleLog.Logf("DEBUG", "  ✔ [%s] stream connected: %s/%s · acct=%s",
+		keyName, result.Provider, result.Model, result.AccountID)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -308,8 +308,8 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 			result.DirectUsageFunc()
 		}
 		latency := int(time.Since(start).Milliseconds())
-		s.consoleLog.Logf("DEBUG", "  ✔ direct pipe done: %d bytes · %dms", n, latency)
-		s.logRequest(result.Provider, result.Model, 0, 0, latency, false, nil)
+		s.consoleLog.Logf("DEBUG", "  ✔ [%s] direct pipe done: %d bytes · %dms", keyName, n, latency)
+		s.logRequest(keyName, result.Provider, result.Model, 0, 0, latency, false, nil)
 		return
 	}
 
@@ -407,8 +407,8 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, codec transf
 	flusher.Flush()
 
 	latency := int(time.Since(streamStart).Milliseconds())
-	s.consoleLog.Logf("DEBUG", "  ✔ stream done: %d chunks · %d tok · %dms", chunkCount, totalTokens, latency)
-	s.logRequest(result.Provider, result.Model, totalTokens, 0, latency, false, nil)
+	s.consoleLog.Logf("DEBUG", "  ✔ [%s] stream done: %d chunks · %d tok · %dms", keyName, chunkCount, totalTokens, latency)
+	s.logRequest(keyName, result.Provider, result.Model, totalTokens, 0, latency, false, nil)
 }
 
 // writeProviderError maps a structured provider error to an HTTP status.

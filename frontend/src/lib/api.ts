@@ -407,6 +407,50 @@ export interface AuthStatus {
   onboarding_complete: boolean;
 }
 
+export interface SystemSnapshot {
+  cpu_pct: number;
+  cpu_per_core: number[];
+  mem_total_mb: number;
+  mem_used_mb: number;
+  mem_available_mb: number;
+  mem_pct: number;
+  disk_total_gb: number;
+  disk_used_gb: number;
+  disk_free_gb: number;
+  disk_pct: number;
+  goroutines: number;
+  heap_alloc_mb: number;
+  heap_sys_mb: number;
+  heap_inuse_mb: number;
+  heap_idle_mb: number;
+  gc_pause_total_ms: number;
+  gc_pause_last_ms: number;
+  gc_cycles: number;
+  open_fds: number;
+  uptime_s: number;
+  pid: number;
+  host: string;
+  os: string;
+  arch: string;
+}
+
+export interface SystemSample {
+  ts: number;
+  cpu_pct: number;
+  mem_pct: number;
+  goroutines: number;
+  heap_mb: number;
+  cpu_spike?: boolean;
+  mem_spike?: boolean;
+}
+
+export interface SystemHistory {
+  interval_sec: number;
+  max_size: number;
+  spikes: SystemSample[];
+  samples: SystemSample[];
+}
+
 export interface UpdateInfo {
   current: string;
   latest: string;
@@ -674,6 +718,10 @@ export const api = {
       refresh_token: refreshToken,
       label,
     }),
+
+  // System monitoring.
+  systemMonitor: () => request<SystemSnapshot>("GET", "/system"),
+  systemHistory: () => request<SystemHistory>("GET", "/system/history"),
 };
 
 // ---- SSE usage stream --------------------------------------------------------

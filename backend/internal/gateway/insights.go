@@ -53,6 +53,10 @@ func sinceForPeriod(period, tz string) time.Time {
 func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 	period := r.URL.Query().Get("period")
 	tz := r.URL.Query().Get("tz")
+	cacheKey := "insights|" + period + "|" + tz
+	if s.cacheHit(w, cacheKey) {
+		return
+	}
 	since := sinceForPeriod(period, tz)
 	ctx := r.Context()
 
@@ -178,7 +182,7 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSONCached(w, s.insightsCache, cacheKey, map[string]any{
 		"summary": map[string]any{
 			"total_requests":     sum.TotalRequests,
 			"prompt_tokens":      sum.PromptTokens,
@@ -211,6 +215,10 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminModelUsage(w http.ResponseWriter, r *http.Request) {
 	period := r.URL.Query().Get("period")
 	tz := r.URL.Query().Get("tz")
+	cacheKey := "models|" + period + "|" + tz
+	if s.cacheHit(w, cacheKey) {
+		return
+	}
 	since := sinceForPeriod(period, tz)
 	ctx := r.Context()
 
@@ -243,7 +251,7 @@ func (s *Server) adminModelUsage(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, entry)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"models": out})
+	writeJSONCached(w, s.insightsCache, cacheKey, map[string]any{"models": out})
 }
 
 type timeBucket struct {

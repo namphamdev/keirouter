@@ -114,6 +114,32 @@ func (r *AccountRepo) Update(ctx context.Context, a Account) error {
 	return err
 }
 
+// ClearExpiredCooldowns resets cooldown and backoff for all accounts whose
+// cooldown has already expired. Called on startup so stale cooldowns from a
+// previous session don't block fresh requests.
+func (r *AccountRepo) ClearExpiredCooldowns(ctx context.Context) (int64, error) {
+	q := r.db.rebind(`UPDATE accounts SET cooldown_until = NULL, backoff_level = 0, updated_at = ? WHERE cooldown_until IS NOT NULL AND cooldown_until < ?`)
+	res, err := r.db.sql.ExecContext(ctx, q, formatTime(time.Now()), formatTime(time.Now()))
+	if err != nil {
+		return 0, fmt.Errorf("store: clear expired cooldowns: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// ClearProviderCooldowns clears cooldown and backoff for all accounts of a
+// given provider within a tenant. Called when a user reconnects a provider so
+// stale cooldowns from a previous session don't block the fresh account.
+func (r *AccountRepo) ClearProviderCooldowns(ctx context.Context, tenantID, provider string) error {
+	q := r.db.rebind(`UPDATE accounts SET cooldown_until = NULL, backoff_level = 0, updated_at = ?
+		WHERE tenant_id = ? AND provider = ? AND cooldown_until IS NOT NULL`)
+	_, err := r.db.sql.ExecContext(ctx, q, formatTime(time.Now()), tenantID, provider)
+	if err != nil {
+		return fmt.Errorf("store: clear provider cooldowns: %w", err)
+	}
+	return nil
+}
+
 // Delete removes an account.
 func (r *AccountRepo) Delete(ctx context.Context, id string) error {
 	q := r.db.rebind(`DELETE FROM accounts WHERE id = ?`)

@@ -289,10 +289,21 @@ type StreamResult struct {
 	DirectUsageFunc func()
 }
 
+// maxRateLimitRetries is how many times the pipeline will re-plan and retry
+// after a rate-limit (429) error, waiting for the per-account cooldown to
+// expire between attempts. With a single account this avoids giving up
+// immediately on a transient 429.
+const maxRateLimitRetries = 3
+
 // Stream runs a streaming request with fallback. Fallback applies only to the
 // connection-establishment phase; once the first attempt's channel is returned,
 // errors surface as ChunkError on that channel. Usage metering happens in a
 // goroutine that observes the final usage chunk.
+//
+// When all attempts fail with a rate-limit (429) and the error is fallbackable,
+// the pipeline re-plans after a short wait (letting the account cooldown
+// expire) and retries up to maxRateLimitRetries times. This prevents transient
+// 429s from being fatal when only a single account is configured.
 func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Options) (*StreamResult, error) {
 	if err := p.preflight(ctx, req, opts); err != nil {
 		p.log.Debug("stream preflight rejected", "err", err)
@@ -310,6 +321,60 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 		return nil, err
 	}
 	p.log.Debug("stream dispatcher planned", "attempts", len(attempts))
+
+	// Outer rate-limit retry loop: re-plan and retry when all attempts hit 429.
+	rlRetries := 0
+	for {
+		sr, sErr, budgetReleased := p.streamExec(ctx, req, opts, attempts, slimStats, save, required, scope)
+		if sErr == nil {
+			return sr, nil
+		}
+
+		// Only retry on rate-limit errors that are still fallbackable.
+		pe := core.AsProviderError(sErr)
+		if pe.Kind != core.ErrRateLimit || !pe.Fallbackable() || rlRetries >= maxRateLimitRetries {
+			if !budgetReleased {
+				p.budgetRelease(scope)
+			}
+			return nil, sErr
+		}
+		rlRetries++
+		// Wait for the cooldown to expire before re-planning. The dispatcher
+		// set TransientCooldown (2s-30s) via NoteFailure; give it a moment.
+		wait := time.Duration(rlRetries) * 2 * time.Second
+		p.log.Warn("all stream attempts hit rate-limit, waiting to retry",
+			"wait", wait, "retry", rlRetries, "of", maxRateLimitRetries)
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			if !budgetReleased {
+				p.budgetRelease(scope)
+			}
+			return nil, ctx.Err()
+		}
+		// Re-reserve budget if it was released by streamExec (not-fallbackable path).
+		if budgetReleased {
+			if rerr := p.budget.Reserve(ctx, scope, 0); rerr != nil {
+				return nil, rerr
+			}
+		}
+		attempts, err = p.planWithCooldownRetry(ctx, req.Metadata.TenantID, opts.Targets, required, opts.PlanOpts)
+		if err != nil {
+			p.log.Debug("stream re-plan after rate-limit failed", "err", err)
+			p.budgetRelease(scope)
+			return nil, sErr
+		}
+		p.log.Debug("stream re-planned after rate-limit", "attempts", len(attempts))
+	} // end outer rate-limit retry loop
+}
+
+// streamExec executes one round of attempts (the original Stream logic).
+// Returns (result, nil, false) on success, (nil, err, false) for most errors
+// where budget is NOT released yet, or (nil, err, true) when budget was
+// released inside (non-fallbackable errors).
+func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts Options,
+	attempts []dispatch.Attempt, slimStats *slimmer.Stats, save *saveState,
+	required core.CapabilitySet, scope budget.Scope) (*StreamResult, error, bool) {
 
 	var lastErr error
 	for i, attempt := range attempts {
@@ -345,7 +410,7 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 					}
 				if !pe.Fallbackable() {
 					p.budgetRelease(scope)
-					return nil, pe
+					return nil, pe, true
 				}
 				if p.metrics != nil {
 					p.metrics.RecordFallback(string(pe.Kind))
@@ -386,7 +451,7 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 					Model:           attempt.Target.Model,
 					AccountID:       attempt.Account.ID,
 					DirectUsageFunc: usageFunc,
-				}, nil
+				}, nil, false
 			}
 		}
 
@@ -403,7 +468,7 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 		if !pe.Fallbackable() {
 			p.log.Debug("stream attempt not fallbackable, aborting", "kind", pe.Kind)
 			p.budgetRelease(scope)
-			return nil, pe
+			return nil, pe, true
 		}
 			if p.metrics != nil {
 				p.metrics.RecordFallback(string(pe.Kind))
@@ -429,14 +494,14 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 			Provider:  attempt.Target.Provider,
 			Model:     attempt.Target.Model,
 			AccountID: attempt.Account.ID,
-		}, nil
+		}, nil, false
 	}
 
 	if lastErr == nil {
 		lastErr = &core.ProviderError{Kind: core.ErrInternal, Message: "pipeline: no attempts executed"}
 	}
 	p.budgetRelease(scope)
-	return nil, lastErr
+	return nil, lastErr, true
 }
 
 // pumpStream forwards chunks to the client channel while capturing usage for

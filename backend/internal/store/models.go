@@ -205,3 +205,66 @@ type AccountAffinity struct {
 	ExpiresAt time.Time
 	UpdatedAt time.Time
 }
+
+// ResourceSample is one resource_samples row. Nullable fields use pointers so
+// platform-unsupported signals (open FDs, load average) round-trip as NULL.
+type ResourceSample struct {
+	TenantID  string
+	CreatedAt time.Time
+
+	Goroutines     int64
+	HeapAllocBytes int64
+	HeapSysBytes   int64
+	GCPauseNS      int64
+	NextGCBytes    int64
+	NumGC          int64
+
+	ProcCPUPercent float64
+	ProcRSSBytes   int64
+	ProcThreads    int64
+	ProcOpenFDs    *int64
+
+	HostCPUPercent     float64
+	HostMemUsedBytes   int64
+	HostMemTotalBytes  int64
+	HostDiskUsedBytes  int64
+	HostDiskTotalBytes int64
+	HostNetSentBytes   int64
+	HostNetRecvBytes   int64
+	HostLoad1          *float64
+	HostLoad5          *float64
+	HostLoad15         *float64
+
+	InflightRequests int64
+}
+
+// ResourceBucket is one aggregated time slice for the resources timeline.
+// Each metric carries an average and a max so spikes survive bucketing.
+// Network bytes are reported as a within-bucket delta (MAX-MIN of cumulative).
+type ResourceBucket struct {
+	Bucket int
+
+	ProcCPUAvg float64
+	ProcCPUMax float64
+	HostCPUAvg float64
+	HostCPUMax float64
+
+	ProcRSSAvg     float64
+	ProcRSSMax     int64
+	HostMemUsedAvg float64
+	HostMemUsedMax int64
+
+	GoroutinesAvg float64
+	GoroutinesMax int64
+	HeapAllocAvg  float64
+	HeapAllocMax  int64
+
+	NetSentDelta int64
+	NetRecvDelta int64
+
+	GCPauseAvg float64
+	GCPauseMax int64
+
+	InflightAvg float64
+	InflightMax int64
+}

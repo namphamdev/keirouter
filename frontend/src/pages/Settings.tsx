@@ -505,7 +505,7 @@ function DatabaseSettings() {
 
   // Import modal state
   const [importOpen, setImportOpen] = useState(false);
-  const [pendingPayload, setPendingPayload] = useState<unknown>(null);
+  const [pendingPayload, setPendingPayload] = useState<Record<string, unknown> | null>(null);
   const [importPass, setImportPass] = useState("");
   const [showImportPass, setShowImportPass] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
@@ -600,6 +600,10 @@ function DatabaseSettings() {
     const p = importPass.trim();
     if (!p) {
       setImportError("Passphrase required for portable backups.");
+      return;
+    }
+    if (!pendingPayload) {
+      setImportError("No backup loaded. Select a file first.");
       return;
     }
     setImportError(null);

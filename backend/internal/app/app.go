@@ -38,10 +38,12 @@ import (
 
 // App is the assembled application, ready to serve.
 type App struct {
-	cfg    config.Config
-	log    *slog.Logger
-	db     *store.DB
-	server *http.Server
+	cfg       config.Config
+	log       *slog.Logger
+	db        *store.DB
+	accounts  *store.AccountRepo
+	server    *http.Server
+	keepAlive *oauth.KeepAlive
 }
 
 // Build constructs the application from configuration. It opens the database,
@@ -61,6 +63,14 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}
 	if err := db.Tenants().EnsureDefault(ctx); err != nil {
 		return nil, fmt.Errorf("app: ensure default tenant: %w", err)
+	}
+
+	// Clear stale cooldowns left over from a previous session so accounts
+	// are immediately usable after a restart.
+	if cleared, cerr := db.Accounts().ClearExpiredCooldowns(ctx); cerr != nil {
+		log.Warn("failed to clear expired cooldowns", "err", cerr)
+	} else if cleared > 0 {
+		log.Info("cleared stale account cooldowns from previous session", "count", cleared)
 	}
 
 	masterKey, err := loadOrCreateMasterKey(cfg, dataDir, log)
@@ -181,6 +191,10 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	cfManager := cloudflare.NewManager(dataDir, cfg.Server.Port, log)
 	tsManager := tailscale.NewManager(dataDir, cfg.Server.Port, log)
 
+	// Background OAuth token keepalive. Proactively refreshes near-expiry
+	// tokens every 30 minutes so requests never hit a stale token.
+	keepAlive := oauth.NewKeepAlive(tokenRefresher, db.Accounts(), store.DefaultTenantID, log)
+
 	gw := gateway.New(gateway.Deps{
 		Config:      cfg,
 		Logger:      log,
@@ -218,12 +232,23 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		// timeout is enforced per-stream inside the connectors instead.
 	}
 
-	return &App{cfg: cfg, log: log, db: db, server: srv}, nil
+	return &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive}, nil
 }
 
 // Run starts the HTTP server and blocks until ctx is cancelled, then shuts down
 // gracefully.
 func (a *App) Run(ctx context.Context) error {
+	// Launch the OAuth keepalive loop so tokens stay fresh between requests.
+	if a.keepAlive != nil {
+		go a.keepAlive.Run(ctx)
+	}
+
+	// Background cooldown sweeper: periodically clears expired cooldowns so
+	// accounts recover automatically without a restart.
+	if a.accounts != nil {
+		go a.runCooldownSweeper(ctx)
+	}
+
 	errCh := make(chan error, 1)
 
 	listeners, err := a.loopbackListeners()
@@ -390,6 +415,30 @@ func buildPricing() map[string]meter.Price {
 		prices = append(prices, meter.SpecPrice{ID: s.ID, InputPerM: s.InputPerM, OutputPerM: s.OutputPerM})
 	}
 	return meter.PricingFromCatalog(prices)
+}
+
+// cooldownSweepInterval is how often the background sweeper checks for expired
+// cooldowns. Short enough to recover within seconds; long enough to be trivial.
+const cooldownSweepInterval = 15 * time.Second
+
+// runCooldownSweeper periodically clears expired cooldowns so accounts auto-
+// recover after rate-limit / auth errors without requiring a restart.
+func (a *App) runCooldownSweeper(ctx context.Context) {
+	ticker := time.NewTicker(cooldownSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := a.accounts.ClearExpiredCooldowns(ctx)
+			if err != nil {
+				a.log.Debug("cooldown sweep failed", "err", err)
+			} else if n > 0 {
+				a.log.Info("sweeper cleared expired cooldowns", "count", n)
+			}
+		}
+	}
 }
 
 // buildModelPrices builds the per-model pricing table from the connector model prices.

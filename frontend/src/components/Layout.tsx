@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, type ReactNode } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   LayoutGrid,
@@ -21,6 +21,7 @@ import {
   Menu,
   X,
   Key,
+  Activity,
   type LucideIcon,
 } from "lucide-react";
 import { api } from "../lib/api";
@@ -68,6 +69,7 @@ const navGroups: NavGroup[] = [
       { to: "/usage", label: "Usage", icon: BarChart3 },
       { to: "/budgets", label: "Budgets", icon: Wallet },
       { to: "/quota", label: "Quota Tracker", icon: Clock },
+      { to: "/system", label: "System", icon: Activity },
       { to: "/settings", label: "Settings", icon: Settings },
     ],
   },
@@ -81,7 +83,41 @@ const navGroups: NavGroup[] = [
   },
 ];
 
+const TITLE_BY_PATH: Record<string, string> = {
+  "/": "Overview",
+  "/endpoints": "Endpoints",
+  "/chains": "Chains",
+  "/skills": "Skills",
+  "/providers": "Providers",
+  "/media": "Media",
+  "/proxy-pools": "Proxy Pools",
+  "/usage": "Usage",
+  "/budgets": "Budgets",
+  "/quota": "Quota Tracker",
+  "/settings": "Settings",
+  "/keys": "API Keys",
+  "/console": "Console Log",
+  "/cli-tools": "CLI Tools",
+  "/system": "System",
+};
+
+const TITLE_BY_PREFIX: [string, string][] = [
+  ["/providers/", "Provider"],
+  ["/cli-tools/", "CLI Tool"],
+  ["/media/", "Media"],
+];
+
+function titleForPath(pathname: string): string {
+  const exact = TITLE_BY_PATH[pathname];
+  if (exact) return exact;
+  for (const [prefix, label] of TITLE_BY_PREFIX) {
+    if (pathname.startsWith(prefix)) return label;
+  }
+  return "";
+}
+
 export function Layout() {
+  const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -109,6 +145,12 @@ export function Layout() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
+
+  // Set browser tab title from current route.
+  useEffect(() => {
+    const label = titleForPath(location.pathname);
+    document.title = label ? `KeiRouter - ${label}` : "KeiRouter";
+  }, [location.pathname]);
 
   // Lock body scroll when mobile sidebar is open.
   useEffect(() => {

@@ -108,6 +108,10 @@ func (s *Server) mountAdmin(r chi.Router) {
 	s.mountCustomFlows(r)
 
 	s.mountCLITools(r)
+
+	// System monitoring (CPU, memory, disk, Go runtime).
+	r.Get("/system", s.adminSystem)
+	r.Get("/system/history", s.adminSystemHistory)
 }
 
 const adminTenant = store.DefaultTenantID
