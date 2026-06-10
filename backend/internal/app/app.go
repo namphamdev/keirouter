@@ -21,6 +21,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/crypto"
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
 	"github.com/mydisha/keirouter/backend/internal/gateway"
+	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/identity"
 	"github.com/mydisha/keirouter/backend/internal/meter"
 	"github.com/mydisha/keirouter/backend/internal/oauth"
@@ -49,6 +50,8 @@ type App struct {
 // Build constructs the application from configuration. It opens the database,
 // applies migrations, initializes the crypto root, and wires the gateway.
 func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version string) (*App, error) {
+	httputil.SetAllowPrivateBaseURL(cfg.Security.AllowPrivateBaseURL)
+
 	dataDir, err := resolveDataDir(cfg)
 	if err != nil {
 		return nil, err

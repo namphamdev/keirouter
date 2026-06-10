@@ -935,14 +935,19 @@ function AddApiKeyModal({
   const [checkStatus, setCheckStatus] = useState<"idle" | "ok" | "error">("idle");
   const [checkMsg, setCheckMsg] = useState("");
   const [checking, setChecking] = useState(false);
-  const isNoAuth = provider.auth_kind === "none" || provider.auth_modes.includes("none");
+  const supportsApiKey = provider.auth_modes.includes("api_key") || provider.auth_kind === "api_key";
+  const supportsNone = provider.auth_modes.includes("none") || provider.auth_kind === "none";
+  // Hide the API-key field only when API key auth is not supported at all.
+  const isNoAuth = supportsNone && !supportsApiKey;
+  // When both modes are offered, the API key is optional.
+  const apiKeyOptional = supportsNone && supportsApiKey;
   const isAzure = provider.id === "azure";
   const isCloudflare = provider.id === "cloudflare-ai";
   const requiresBaseURL = provider.id === "custom-openai" || provider.id === "custom-anthropic";
-  const credentialLabel = isNoAuth ? "Connection" : "API key";
+  const credentialLabel = isNoAuth ? "Connection" : apiKeyOptional ? "API key (optional)" : "API key";
   const canSubmit =
     !pending &&
-    (isNoAuth || !!apiKey.trim()) &&
+    (isNoAuth || apiKeyOptional || !!apiKey.trim()) &&
     (!isCloudflare || !!accountID.trim()) &&
     (!isAzure || (!!azureEndpoint.trim() && !!azureDeployment.trim())) &&
     (!requiresBaseURL || !!baseURL.trim());
@@ -1010,7 +1015,7 @@ function AddApiKeyModal({
                 value={apiKey}
                 onChange={(e) => { onApiKey(e.target.value); setCheckStatus("idle"); }}
                 placeholder={provider.id === "xai" ? "xai-..." : "sk-..."}
-                required
+                required={!apiKeyOptional}
               />
             </Field>
           )}

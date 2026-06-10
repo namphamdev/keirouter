@@ -6,7 +6,20 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync/atomic"
 )
+
+// allowPrivateBaseURL, when true, relaxes ValidateOutboundURL/ValidateBaseURL
+// so loopback and RFC1918 hosts pass. Cloud metadata, link-local, unspecified,
+// multicast, and non-http(s) schemes are still blocked. Set at startup via
+// SetAllowPrivateBaseURL.
+var allowPrivateBaseURL atomic.Bool
+
+// SetAllowPrivateBaseURL toggles the private-network allowlist for base/outbound
+// URL validation. Off by default.
+func SetAllowPrivateBaseURL(allow bool) {
+	allowPrivateBaseURL.Store(allow)
+}
 
 // ErrSSRFBlocked is returned when a URL is blocked by SSRF protection.
 type ErrSSRFBlocked struct {
@@ -91,13 +104,15 @@ func ValidateOutboundURL(rawURL string) error {
 
 // validateIP checks if an IP address is safe for outbound requests.
 func validateIP(ip net.IP) error {
-	// Block loopback
-	if ip.IsLoopback() {
+	relaxed := allowPrivateBaseURL.Load()
+
+	// Block loopback (unless explicitly allowed)
+	if ip.IsLoopback() && !relaxed {
 		return &ErrSSRFBlocked{Reason: "loopback address blocked"}
 	}
 
-	// Block private addresses
-	if ip.IsPrivate() {
+	// Block private addresses (unless explicitly allowed)
+	if ip.IsPrivate() && !relaxed {
 		return &ErrSSRFBlocked{Reason: "private network address blocked"}
 	}
 
@@ -123,8 +138,8 @@ func validateIP(ip net.IP) error {
 
 	// Additional checks for IPv6
 	if ip.To4() == nil {
-		// Block IPv6 loopback (::1)
-		if ip.Equal(net.IPv6loopback) {
+		// Block IPv6 loopback (::1) unless explicitly allowed
+		if ip.Equal(net.IPv6loopback) && !relaxed {
 			return &ErrSSRFBlocked{Reason: "IPv6 loopback blocked"}
 		}
 

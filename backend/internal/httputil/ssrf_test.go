@@ -2,6 +2,50 @@ package httputil
 
 import "testing"
 
+func TestValidateBaseURL_AllowPrivate(t *testing.T) {
+	// Default: loopback/private blocked.
+	if err := ValidateBaseURL("http://127.0.0.1:11434/v1"); err == nil {
+		t.Fatalf("expected loopback to be blocked by default")
+	}
+	if err := ValidateBaseURL("http://192.168.1.10:8080"); err == nil {
+		t.Fatalf("expected RFC1918 to be blocked by default")
+	}
+	if err := ValidateBaseURL("http://172.16.21.122:18000"); err == nil {
+		t.Fatalf("expected RFC1918 172.16/12 to be blocked by default")
+	}
+
+	SetAllowPrivateBaseURL(true)
+	t.Cleanup(func() { SetAllowPrivateBaseURL(false) })
+
+	// Loopback + private now permitted.
+	if err := ValidateBaseURL("http://127.0.0.1:11434/v1"); err != nil {
+		t.Errorf("loopback should pass with allow flag: %v", err)
+	}
+	if err := ValidateBaseURL("http://192.168.1.10:8080"); err != nil {
+		t.Errorf("RFC1918 should pass with allow flag: %v", err)
+	}
+	if err := ValidateBaseURL("http://172.16.21.122:18000"); err != nil {
+		t.Errorf("RFC1918 172.16/12 should pass with allow flag: %v", err)
+	}
+	if err := ValidateBaseURL("http://[::1]:8080"); err != nil {
+		t.Errorf("IPv6 loopback should pass with allow flag: %v", err)
+	}
+
+	// Cloud metadata + link-local + unspecified + bad scheme stay blocked.
+	for _, bad := range []string{
+		"http://169.254.169.254/latest/meta-data",
+		"http://metadata.google.internal/",
+		"http://169.254.1.1/",
+		"http://0.0.0.0/",
+		"file:///etc/passwd",
+		"http://0x7f000001/",
+	} {
+		if err := ValidateBaseURL(bad); err == nil {
+			t.Errorf("expected %q to remain blocked with allow flag", bad)
+		}
+	}
+}
+
 func TestValidateOAuthRedirectURI(t *testing.T) {
 	tests := []struct {
 		name    string

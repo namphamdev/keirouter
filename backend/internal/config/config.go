@@ -64,6 +64,12 @@ type SecurityConfig struct {
 	SessionTTL time.Duration `koanf:"session_ttl"`
 	// BindLoopbackOnly rejects non-loopback dashboard/API access when true.
 	BindLoopbackOnly bool `koanf:"bind_loopback_only"`
+	// AllowPrivateBaseURL relaxes the SSRF guard on provider account base URLs
+	// (and other ValidateOutboundURL callers) to permit loopback and RFC1918
+	// addresses. Cloud metadata, link-local, unspecified, multicast, and
+	// non-http(s) schemes remain blocked. Intended for self-hosted/LAN setups
+	// pointing at on-network LLM endpoints. Default false.
+	AllowPrivateBaseURL bool `koanf:"allow_private_base_url"`
 }
 
 // CacheConfig configures the semantic response cache.
@@ -162,7 +168,11 @@ func Load(filePath string) (Config, error) {
 	envProvider := env.Provider("KEIROUTER_", ".", func(s string) string {
 		s = strings.TrimPrefix(s, "KEIROUTER_")
 		s = strings.ReplaceAll(s, "__", ".")
-		return strings.ToLower(s)
+		s = strings.ToLower(s)
+		if s == "security.allow_private_baseurl" {
+			return "security.allow_private_base_url"
+		}
+		return s
 	})
 	if err := k.Load(envProvider, nil); err != nil {
 		return Config{}, fmt.Errorf("load env: %w", err)

@@ -39,6 +39,10 @@ security:
   # Reject non-loopback access to the dashboard/admin API. Set false only when
   # the admin API is protected by a reverse proxy or network policy.
   bind_loopback_only: true
+  # Allow provider base URLs on loopback/private networks for local or LAN LLMs
+  # such as vLLM, Ollama, or LM Studio. Cloud metadata and link-local addresses
+  # remain blocked.
+  allow_private_base_url: false
 
 cache:
   # Semantic response cache. Off by default. When enabled, repeated or
