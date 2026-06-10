@@ -264,6 +264,59 @@ func mediaToDataURL(m *core.MediaPayload) string {
 
 // ---- request rendering ------------------------------------------------------
 
+// needsJSONSchemaFallback checks if response_format uses json_schema and the
+// provider doesn't support native structured output. Providers that support
+// json_schema natively (like OpenAI, Azure) are excluded.
+func needsJSONSchemaFallback(providerID string, responseFormat json.RawMessage) bool {
+	if len(responseFormat) == 0 {
+		return false
+	}
+	var rf struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(responseFormat, &rf); err != nil || rf.Type != "json_schema" {
+		return false
+	}
+	// Providers that support native json_schema.
+	switch providerID {
+	case "openai", "azure":
+		return false
+	}
+	return true
+}
+
+// fallbackResponseFormat converts json_schema to json_object for providers
+// that don't support native structured output.
+func fallbackResponseFormat(responseFormat json.RawMessage) json.RawMessage {
+	if len(responseFormat) == 0 {
+		return responseFormat
+	}
+	var rf struct {
+		Type       string `json:"type"`
+		JSONSchema any    `json:"json_schema"`
+	}
+	if err := json.Unmarshal(responseFormat, &rf); err != nil {
+		return responseFormat
+	}
+	if rf.Type != "json_schema" {
+		return responseFormat
+	}
+	// Fall back to plain json_object mode.
+	out, _ := json.Marshal(map[string]string{"type": "json_object"})
+	return out
+}
+
+// RenderRequestForProvider renders an OpenAI request for a specific provider,
+// applying provider-specific fallbacks (e.g. json_schema → json_object).
+func (c OpenAICodec) RenderRequestForProvider(req *core.ChatRequest, providerID string) ([]byte, error) {
+	if needsJSONSchemaFallback(providerID, req.ResponseFormat) {
+		clone := *req
+		clone.ResponseFormat = fallbackResponseFormat(req.ResponseFormat)
+		return c.RenderRequest(&clone)
+	}
+	return c.RenderRequest(req)
+}
+
 func (OpenAICodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
 	out := oaiRequest{
 		Model:       req.Model,

@@ -95,7 +95,7 @@ func (c *OpenAICompatible) chatCompletionsURL(creds core.Credentials, model stri
 // Chat performs a non-streaming completion.
 func (c *OpenAICompatible) Chat(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (*core.ChatResponse, error) {
 	req.Stream = false
-	body, err := c.codec.RenderRequest(req)
+	body, err := c.codec.RenderRequestForProvider(req, c.id)
 	if err != nil {
 		return nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
 	}
@@ -293,7 +293,7 @@ func (s *OpenAICompatibleModelSource) ListModels(ctx context.Context, creds core
 // for zero-copy same-dialect piping. The caller must close body when done.
 func (c *OpenAICompatible) StreamRaw(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (io.ReadCloser, http.Header, error) {
 	req.Stream = true
-	body, err := c.codec.RenderRequest(req)
+	body, err := c.codec.RenderRequestForProvider(req, c.id)
 	if err != nil {
 		return nil, nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
 	}
@@ -309,7 +309,7 @@ func (c *OpenAICompatible) StreamRaw(ctx context.Context, req *core.ChatRequest,
 // Stream performs a streaming completion, emitting canonical chunks.
 func (c *OpenAICompatible) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
 	req.Stream = true
-	body, err := c.codec.RenderRequest(req)
+	body, err := c.codec.RenderRequestForProvider(req, c.id)
 	if err != nil {
 		return nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
 	}

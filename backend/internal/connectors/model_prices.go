@@ -127,6 +127,9 @@ func openaiModelPrices() []ModelPrice {
 		{Provider: "openai", Model: "gpt-5", InputPerM: 2.5, OutputPerM: 10, CachedInputPerM: 1.25, CacheWritePerM: 2.5},
 		{Provider: "openai", Model: "gpt-5-mini", InputPerM: 0.4, OutputPerM: 1.6, CachedInputPerM: 0.2, CacheWritePerM: 0.4},
 		{Provider: "openai", Model: "gpt-5-nano", InputPerM: 0.1, OutputPerM: 0.4, CachedInputPerM: 0.05, CacheWritePerM: 0.1},
+		{Provider: "openai", Model: "gpt-5.4", InputPerM: 2.5, OutputPerM: 10, CachedInputPerM: 1.25, CacheWritePerM: 2.5},
+		{Provider: "openai", Model: "gpt-5.4-mini", InputPerM: 0.4, OutputPerM: 1.6, CachedInputPerM: 0.2, CacheWritePerM: 0.4},
+		{Provider: "openai", Model: "gpt-5.3-codex", InputPerM: 2.5, OutputPerM: 10, CachedInputPerM: 1.25, CacheWritePerM: 2.5},
 		// GPT-4o family
 		{Provider: "openai", Model: "gpt-4o", InputPerM: 2.5, OutputPerM: 10, CachedInputPerM: 1.25, CacheWritePerM: 2.5},
 		{Provider: "openai", Model: "gpt-4o-2024-11-20", InputPerM: 2.5, OutputPerM: 10, CachedInputPerM: 1.25, CacheWritePerM: 2.5},
@@ -300,6 +303,8 @@ func minimaxModelPrices() []ModelPrice {
 	return []ModelPrice{
 		{Provider: "minimax", Model: "MiniMax-Text-01", InputPerM: 0.2, OutputPerM: 1.1},
 		{Provider: "minimax", Model: "MiniMax-M1", InputPerM: 0.2, OutputPerM: 1.1, ReasoningPerM: 1.1},
+		{Provider: "minimax", Model: "MiniMax-M2.5", InputPerM: 0.3, OutputPerM: 1.1},
+		{Provider: "minimax", Model: "MiniMax-M3", InputPerM: 0.4, OutputPerM: 1.6, ReasoningPerM: 1.6},
 	}
 }
 
