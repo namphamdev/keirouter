@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { Routes, Route } from "react-router-dom";
 import { AuthGate } from "./components/AuthGate";
 import { Layout } from "./components/Layout";
+import { AdminBrandingProvider, PortalBrandingProvider } from "./contexts/BrandingContext";
 
 // Routes are code-split: each page is a separate chunk loaded on demand. Heavy
 // deps (recharts, @xyflow/react) ride along only with the pages that use them,
@@ -42,9 +43,14 @@ export function App() {
   return (
     <Suspense fallback={<PageFallback />}>
       <Routes>
-        <Route path="portal" element={<KeyPortalPage />} />
+        <Route path="portal" element={
+          <PortalBrandingProvider>
+            <KeyPortalPage />
+          </PortalBrandingProvider>
+        } />
         <Route path="*" element={
           <AuthGate>
+            <AdminBrandingProvider>
             <Routes>
               {/* OAuth callback — standalone page, no sidebar layout */}
               <Route path="oauth/callback" element={<OAuthCallbackPage />} />
@@ -71,6 +77,7 @@ export function App() {
                 <Route path="settings" element={<SettingsPage />} />
               </Route>
             </Routes>
+            </AdminBrandingProvider>
           </AuthGate>
         } />
       </Routes>

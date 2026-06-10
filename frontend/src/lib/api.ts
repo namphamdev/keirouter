@@ -29,6 +29,13 @@ export interface Provider {
   default_region?: string;
 }
 
+export interface BrandingSettings {
+  name: string;
+  logo_url: string;
+  favicon_url: string;
+  tagline: string;
+}
+
 export interface EndpointSettings {
   rtk_enabled: boolean;
   caveman_enabled: boolean;
@@ -551,6 +558,25 @@ export interface KeyUsageData {
     completion_tokens: number;
     cost_usd: number;
   }[];
+  models?: {
+    provider: string;
+    model: string;
+    total_requests: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    cost_usd: number;
+  }[];
+}
+
+/**
+ * Fetch branding settings for the public portal (no auth required)
+ */
+export async function fetchPortalBranding(): Promise<BrandingSettings> {
+  const resp = await fetch("/v1/portal/branding");
+  if (!resp.ok) {
+    return { name: "KeiRouter", logo_url: "", favicon_url: "", tagline: "" };
+  }
+  return resp.json();
 }
 
 /**
@@ -685,6 +711,11 @@ export const api = {
   accessSettings: () => request<AccessSettings>("GET", "/settings/access"),
   updateAccessSettings: (patch: Partial<Omit<AccessSettings, "endpoint_url">>) =>
     request<AccessSettings>("POST", "/settings/access", patch),
+
+  // Branding / white-label settings.
+  branding: () => request<BrandingSettings>("GET", "/settings/branding"),
+  updateBranding: (patch: Partial<BrandingSettings>) =>
+    request<BrandingSettings>("POST", "/settings/branding", patch),
 
   // Tunnel management.
   tunnelStatus: () => request<TunnelCombinedStatus>("GET", "/tunnel/status"),

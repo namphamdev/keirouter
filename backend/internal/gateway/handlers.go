@@ -671,6 +671,20 @@ func (s *Server) handlePortalKeyUsage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Per-model breakdown for this key (last 30 days).
+	models, _ := s.usage.ByModelByKey(ctx, key.ID, now.AddDate(0, 0, -30))
+	var modelOut []map[string]any
+	for _, m := range models {
+		modelOut = append(modelOut, map[string]any{
+			"provider":          m.Provider,
+			"model":             m.Model,
+			"total_requests":    m.TotalRequests,
+			"prompt_tokens":     m.PromptTokens,
+			"completion_tokens": m.CompletionTokens,
+			"cost_usd":          float64(m.CostMicros) / 1_000_000,
+		})
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"key_id":         key.ID,
 		"key_name":       key.Name,
@@ -682,7 +696,8 @@ func (s *Server) handlePortalKeyUsage(w http.ResponseWriter, r *http.Request) {
 			"total_requests":    summary.TotalRequests,
 			"cost_usd":          float64(summary.CostMicros) / 1_000_000,
 		},
-		"daily": dailyOut,
+		"daily":  dailyOut,
+		"models": modelOut,
 	})
 }
 

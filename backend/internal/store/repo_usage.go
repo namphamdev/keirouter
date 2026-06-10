@@ -363,6 +363,39 @@ func (r *UsageRepo) ByModel(ctx context.Context, tenantID string, since time.Tim
 	return out, rows.Err()
 }
 
+// ByModelByKey returns per-model aggregate usage for a specific API key since
+// the given time, ordered by request volume (busiest first). Used by the portal
+// to show per-model breakdown.
+func (r *UsageRepo) ByModelByKey(ctx context.Context, keyID string, since time.Time) ([]ModelUsage, error) {
+	q := r.db.rebind(`
+		SELECT
+			provider,
+			model,
+			COUNT(*),
+			COALESCE(SUM(prompt_tokens), 0),
+			COALESCE(SUM(completion_tokens), 0),
+			COALESCE(SUM(cost_micros), 0)
+		FROM usage_records
+		WHERE api_key_id = ? AND created_at >= ?
+		GROUP BY provider, model
+		ORDER BY COUNT(*) DESC`)
+	rows, err := r.db.sql.QueryContext(ctx, q, keyID, formatTime(since))
+	if err != nil {
+		return nil, fmt.Errorf("store: usage by model for key: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ModelUsage
+	for rows.Next() {
+		var m ModelUsage
+		if err := rows.Scan(&m.Provider, &m.Model, &m.TotalRequests, &m.PromptTokens, &m.CompletionTokens, &m.CostMicros); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // TimePoint is the created_at + cost of a single record, used to build the
 // activity-over-time series in the handler (bucketed in Go for engine
 // portability).

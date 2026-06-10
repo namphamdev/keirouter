@@ -25,6 +25,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { api } from "../lib/api";
+import { useBranding } from "../contexts/BrandingContext";
 import { ThemeToggle } from "./ThemeToggle";
 import { CommandPalette } from "./CommandPalette";
 import { UpdateNotification } from "./UpdateNotification";
@@ -119,6 +120,7 @@ function titleForPath(pathname: string): string {
 
 export function Layout() {
   const location = useLocation();
+  const { branding } = useBranding();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -150,8 +152,9 @@ export function Layout() {
   // Set browser tab title from current route.
   useEffect(() => {
     const label = titleForPath(location.pathname);
-    document.title = label ? `KeiRouter - ${label}` : "KeiRouter";
-  }, [location.pathname]);
+    const appName = branding.name || "KeiRouter";
+    document.title = label ? `${appName} - ${label}` : appName;
+  }, [location.pathname, branding.name]);
 
   // Lock body scroll when mobile sidebar is open.
   useEffect(() => {
@@ -202,10 +205,11 @@ export function Layout() {
 }
 
 function SidebarContent({ onNavigate }: { onNavigate: () => void }) {
+  const { branding, logoSrc } = useBranding();
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-[var(--border)] bg-[var(--bg-elevated)]">
       <div className="flex items-center justify-between px-5 py-5">
-        <img src="/keirouter-logo.png" alt="KeiRouter" className="h-14 w-full object-contain object-left" />
+        <img src={logoSrc} alt={branding.name || "KeiRouter"} className="h-14 w-full object-contain object-left" />
         {/* Close button — only visible on mobile when rendered inside the drawer. */}
         <button
           onClick={onNavigate}
@@ -260,6 +264,7 @@ function SidebarContent({ onNavigate }: { onNavigate: () => void }) {
 }
 
 function TopBar({ onMenuToggle, onSearchOpen }: { onMenuToggle: () => void; onSearchOpen: () => void }) {
+  const { branding } = useBranding();
   return (
     <header className="flex h-16 shrink-0 items-center justify-center border-b border-[var(--border)] bg-[var(--bg-elevated)]">
       <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 sm:px-8">
@@ -281,7 +286,7 @@ function TopBar({ onMenuToggle, onSearchOpen }: { onMenuToggle: () => void; onSe
         <div className="hidden sm:block">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
           <span className="block w-full rounded-xl border border-[var(--border)] bg-[var(--bg)] py-2 pl-9 pr-12 text-sm text-[var(--text-muted)]">
-            Search KeiRouter…
+            Search {branding.name || "KeiRouter"}…
           </span>
           <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border border-[var(--border)] bg-[var(--bg-elevated)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-muted)]">
             ⌘K

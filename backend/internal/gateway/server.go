@@ -252,8 +252,9 @@ func (s *Server) routes() chi.Router {
 		r.Get("/v1/keys/me/usage", s.handleKeyUsage)
 	})
 
-	// Public portal endpoint for tracking key usage by ID (no auth required)
+	// Public portal endpoints (no auth required)
 	r.Get("/v1/portal/keys/{id}/usage", s.handlePortalKeyUsage)
+	r.Get("/v1/portal/branding", s.portalBranding)
 
 	// Dashboard auth endpoints (login/logout/status) are loopback-guarded but
 	// do not require a session — they are how a session is obtained.

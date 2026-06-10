@@ -109,6 +109,10 @@ func (s *Server) mountAdmin(r chi.Router) {
 
 	s.mountCLITools(r)
 
+	// Branding / white-label settings.
+	r.Get("/settings/branding", s.adminGetBranding)
+	r.Post("/settings/branding", s.adminUpdateBranding)
+
 	// System monitoring (CPU, memory, disk, Go runtime).
 	r.Get("/system", s.adminSystem)
 	r.Get("/system/history", s.adminSystemHistory)

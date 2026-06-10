@@ -4,8 +4,9 @@ import {
   Sparkles, Zap, MessageSquare, Layers, Route, Wifi, Monitor, Database, Clock,
   ArrowUpCircle, CheckCircle2, ExternalLink,
   Gauge, Eye, EyeOff, KeyRound, Download, Upload, ShieldCheck, Info,
+  Palette,
 } from "lucide-react";
-import { api, type EndpointSettings } from "../lib/api";
+import { api, type EndpointSettings, type BrandingSettings } from "../lib/api";
 import { PageHeader } from "../components/Layout";
 import { useUpdateInfo } from "../components/UpdateNotification";
 import { useToast } from "../components/Toast";
@@ -169,6 +170,11 @@ export function SettingsPage() {
                 />
               </div>
             </Card>
+          </SettingsSection>
+
+          {/* ── Branding ──────────────────────────────────────────── */}
+          <SettingsSection title="Branding" icon={Palette}>
+            <BrandingSettingsPanel />
           </SettingsSection>
 
           {/* ── Data & Updates ─────────────────────────────────────── */}
@@ -816,6 +822,121 @@ function DatabaseSettings() {
         </div>
       </Modal>
     </>
+  );
+}
+
+function BrandingSettingsPanel() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const branding = useQuery({ queryKey: ["branding"], queryFn: () => api.branding() });
+  const [local, setLocal] = useState<BrandingSettings | null>(null);
+
+  useEffect(() => {
+    if (branding.data) setLocal(branding.data);
+  }, [branding.data]);
+
+  const save = useMutation({
+    mutationFn: (patch: Partial<BrandingSettings>) => api.updateBranding(patch),
+    onSuccess: (data) => {
+      setLocal(data);
+      qc.setQueryData(["branding"], data);
+      qc.invalidateQueries({ queryKey: ["portal-branding"] });
+      toast.success("Branding updated", `Display name set to "${data.name}". Refresh to see changes.`);
+    },
+    onError: (e) => toast.error("Branding save failed", (e as Error).message),
+  });
+
+  const update = (patch: Partial<BrandingSettings>) => {
+    if (local) setLocal({ ...local, ...patch });
+  };
+
+  const handleSave = () => {
+    if (local) save.mutate(local);
+  };
+
+  if (branding.isLoading || !local) return <Spinner />;
+
+  const previewLogo = local.logo_url || "/keirouter-logo.png";
+
+  return (
+    <Card>
+      <SectionHeader
+        title="White-Label Branding"
+        description="Customize the dashboard name, logo, and favicon. Changes apply to both the admin dashboard and the public Usage Dashboard."
+        icon={Palette}
+      />
+      <div className="divide-y divide-[var(--border)] border-t border-[var(--border)]">
+        <div className="px-6 py-4">
+          <Field label="Display Name">
+            <Input
+              value={local.name}
+              onChange={(e) => update({ name: e.target.value })}
+              placeholder="KeiRouter"
+            />
+            <p className="mt-1 text-xs text-[var(--text-muted)]">
+              Shown in the sidebar, browser tab title, login screen, and Usage Dashboard.
+            </p>
+          </Field>
+        </div>
+        <div className="px-6 py-4">
+          <Field label="Logo URL">
+            <Input
+              value={local.logo_url}
+              onChange={(e) => update({ logo_url: e.target.value })}
+              placeholder="https://example.com/logo.svg"
+            />
+            <p className="mt-1 text-xs text-[var(--text-muted)]">
+              Public URL to your logo image (SVG, PNG). Leave empty for the default logo.
+            </p>
+          </Field>
+        </div>
+        <div className="px-6 py-4">
+          <Field label="Favicon URL">
+            <Input
+              value={local.favicon_url}
+              onChange={(e) => update({ favicon_url: e.target.value })}
+              placeholder="https://example.com/favicon.png"
+            />
+            <p className="mt-1 text-xs text-[var(--text-muted)]">
+              Public URL to a favicon (PNG/ICO). Leave empty for the default favicon.
+            </p>
+          </Field>
+        </div>
+        <div className="px-6 py-4">
+          <Field label="Portal Tagline">
+            <Input
+              value={local.tagline}
+              onChange={(e) => update({ tagline: e.target.value })}
+              placeholder="Enter your API Key to view usage and budget constraints."
+            />
+            <p className="mt-1 text-xs text-[var(--text-muted)]">
+              Optional message shown on the Usage Dashboard login screen.
+            </p>
+          </Field>
+        </div>
+
+        {/* Preview */}
+        <div className="px-6 py-4">
+          <p className="text-xs font-medium text-[var(--text-muted)] mb-3">Preview</p>
+          <div className="flex items-center gap-4 rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)] p-4">
+            <img src={previewLogo} alt={local.name || "Logo"} className="h-10 w-10 object-contain" />
+            <div>
+              <p className="text-sm font-semibold text-[var(--text)]">{local.name || "KeiRouter"}</p>
+              {local.tagline && <p className="text-xs text-[var(--text-muted)]">{local.tagline}</p>}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-3 px-6 py-4">
+          {save.isError && (
+            <span className="text-xs text-[color:var(--color-danger)]">{(save.error as Error)?.message}</span>
+          )}
+          <Button onClick={handleSave} disabled={save.isPending}>
+            {save.isPending ? "Saving…" : "Save Branding"}
+          </Button>
+        </div>
+      </div>
+    </Card>
   );
 }
 

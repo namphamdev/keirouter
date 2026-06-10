@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { WifiOff } from "lucide-react";
-import { api } from "../lib/api";
+import { api, fetchPortalBranding } from "../lib/api";
 import { Card, Button, Input, Field, Spinner } from "./ui";
 
 // AuthGate gates the dashboard behind a login, and surfaces a one-time
@@ -23,8 +23,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[color:var(--color-danger)]/10">
             <WifiOff className="h-7 w-7 text-[color:var(--color-danger)]" strokeWidth={1.75} />
           </div>
-          <img src="/keirouter-logo.png" alt="KeiRouter" className="mx-auto h-10 object-contain opacity-60" />
-          <h1 className="mt-4 text-base font-semibold tracking-tight">Cannot reach KeiRouter</h1>
+          <AuthGateLogo className="mx-auto h-10 object-contain opacity-60" />
+          <h1 className="mt-4 text-base font-semibold tracking-tight">Cannot reach <AuthGateName /></h1>
           <p className="mt-1.5 text-sm text-[var(--text-muted)]">
             Is the backend running on <code className="rounded-md bg-[var(--bg-subtle)] px-1.5 py-0.5 font-mono text-xs">:20180</code>?
           </p>
@@ -49,6 +49,27 @@ export function AuthGate({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+function AuthGateLogo({ className }: { className?: string }) {
+  const { data } = useQuery({
+    queryKey: ["portal-branding"],
+    queryFn: fetchPortalBranding,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const src = data?.logo_url || "/keirouter-logo.png";
+  return <img src={src} alt={data?.name || "KeiRouter"} className={className} />;
+}
+
+function AuthGateName() {
+  const { data } = useQuery({
+    queryKey: ["portal-branding"],
+    queryFn: fetchPortalBranding,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  return <>{data?.name || "KeiRouter"}</>;
+}
+
 function LoginScreen() {
   const qc = useQueryClient();
   const [password, setPassword] = useState("");
@@ -67,7 +88,7 @@ function LoginScreen() {
     <div className="flex h-full items-center justify-center px-4">
       <Card className="w-full max-w-sm p-8 shadow-[var(--shadow-pop)]">
         <div className="mb-6 flex flex-col items-center text-center">
-          <img src="/keirouter-logo.png" alt="KeiRouter" className="h-16 object-contain" />
+          <AuthGateLogo className="h-16 object-contain" />
           <h1 className="mt-4 text-lg font-semibold tracking-tight">Sign in to your dashboard</h1>
           <p className="mt-1 text-sm text-[var(--text-muted)]">Enter your dashboard password to continue.</p>
         </div>
@@ -129,8 +150,8 @@ function OnboardingScreen() {
   return (
     <div className="flex h-full items-center justify-center px-4">
       <Card className="w-full max-w-md p-8 shadow-[var(--shadow-pop)]">
-        <img src="/keirouter-logo.png" alt="KeiRouter" className="mb-4 h-16 object-contain" />
-        <h1 className="text-lg font-semibold tracking-tight">Welcome to KeiRouter</h1>
+        <AuthGateLogo className="mb-4 h-16 object-contain" />
+        <h1 className="text-lg font-semibold tracking-tight">Welcome to <AuthGateName /></h1>
         <p className="mt-2 text-sm text-[var(--text-muted)]">
           You're signed in with the default password. Set a new one to secure your dashboard.
         </p>

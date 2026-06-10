@@ -1,11 +1,16 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import {
+  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
+} from "recharts";
 import { fetchKeyUsage, fetchKeyUsageById, APIError } from "../lib/api";
-import { KeyRound, AlertTriangle, CheckCircle2, Activity, Hash, DollarSign, LogOut } from "lucide-react";
+import { useBranding } from "../contexts/BrandingContext";
+import { KeyRound, AlertTriangle, CheckCircle2, Activity, Hash, DollarSign, LogOut, TrendingUp, Layers } from "lucide-react";
 import { Card, Button, Input, Spinner, ErrorCard, StatCard, Badge } from "../components/ui";
 
 export function KeyPortalPage() {
+  const { branding, logoSrc } = useBranding();
   const [params, setParams] = useSearchParams();
   const activeId = params.get("id") || "";
   const activeKey = params.get("key") || "";
@@ -44,13 +49,17 @@ export function KeyPortalPage() {
       <div className="flex min-h-screen items-center justify-center bg-[var(--bg)] p-4">
         <Card className="w-full max-w-md p-8">
           <div className="mb-8 flex flex-col items-center text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-100 text-accent-700 dark:bg-accent-800/40 dark:text-accent-200 mb-5">
-              <KeyRound size={24} />
+            <div className="mb-5">
+              <img src={logoSrc} alt={branding.name || "KeiRouter"} className="h-12 object-contain" />
             </div>
-            <h1 className="text-xl font-display text-[var(--text)]">Telemetry Portal</h1>
-            <p className="mt-2 text-sm text-[var(--text-muted)]">
-              Enter your API Key or secure Portal ID to view live usage and budget constraints.
-            </p>
+            <h1 className="text-xl font-display text-[var(--text)]">Usage Dashboard</h1>
+            {branding.tagline ? (
+              <p className="mt-2 text-sm text-[var(--text-muted)]">{branding.tagline}</p>
+            ) : (
+              <p className="mt-2 text-sm text-[var(--text-muted)]">
+                Enter your API Key or secure Portal ID to view live usage and budget constraints.
+              </p>
+            )}
           </div>
 
           <form onSubmit={handleLogin} className="space-y-5">
@@ -112,11 +121,9 @@ export function KeyPortalPage() {
         <header className="flex flex-col gap-4 md:flex-row md:items-end justify-between border-b border-[var(--border)] pb-6">
           <div>
             <div className="flex items-center gap-3 mb-2">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-100 text-accent-700 dark:bg-accent-800/40 dark:text-accent-200">
-                <Activity size={20} />
-              </div>
+              <img src={logoSrc} alt={branding.name || "KeiRouter"} className="h-8 object-contain" />
               <div>
-                <h1 className="text-2xl font-display text-[var(--text)]">Key Telemetry</h1>
+                <h1 className="text-2xl font-display text-[var(--text)]">Usage Dashboard</h1>
                 <p className="text-sm text-[var(--text-muted)]">
                   Monitoring usage for <span className="font-medium text-[var(--text)]">{d.key_name}</span>
                 </p>
@@ -230,6 +237,78 @@ export function KeyPortalPage() {
             />
           </div>
         </section>
+
+        {/* ── Daily Usage Chart ─────────────────────────────────────── */}
+        {d.daily && d.daily.length > 0 && (
+          <section className="space-y-4">
+            <h2 className="text-sm font-semibold tracking-tight text-[var(--text)]">Usage Trend (30 Days)</h2>
+            <Card className="p-4">
+              <div className="h-[260px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={d.daily.map(dp => ({ ...dp, label: dp.date.slice(5) }))} margin={{ top: 10, right: 0, left: -20, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="portalUsageFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="var(--color-chart-1)" stopOpacity={0.15} />
+                        <stop offset="95%" stopColor="var(--color-chart-1)" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid vertical={false} stroke="var(--border)" opacity={0.3} />
+                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: "var(--text-muted)", fontWeight: 500 }} tickLine={false} axisLine={false} dy={10} />
+                    <YAxis tick={{ fontSize: 10, fill: "var(--text-muted)", fontWeight: 500 }} tickLine={false} axisLine={false} tickFormatter={formatTokens} width={60} />
+                    <Tooltip
+                      contentStyle={{ fontSize: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 6, boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)" }}
+                      formatter={(value: number, name: string) => [formatTokens(value), name === "prompt_tokens" ? "Input" : name === "completion_tokens" ? "Output" : name]}
+                      labelStyle={{ color: "var(--text-muted)", marginBottom: 4 }}
+                    />
+                    <Area type="monotone" dataKey="prompt_tokens" stackId="1" stroke="var(--color-chart-1)" strokeWidth={2} fill="var(--color-chart-1)" fillOpacity={0.2} name="Input Tokens" />
+                    <Area type="monotone" dataKey="completion_tokens" stackId="1" stroke="var(--color-chart-2)" strokeWidth={2} fill="var(--color-chart-2)" fillOpacity={0.2} name="Output Tokens" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
+          </section>
+        )}
+
+        {/* ── Per-Model Breakdown ────────────────────────────────────── */}
+        {d.models && d.models.length > 0 && (
+          <section className="space-y-4">
+            <h2 className="text-sm font-semibold tracking-tight text-[var(--text)] flex items-center gap-2">
+              <Layers size={16} className="text-[var(--text-muted)]" />
+              Model Usage Breakdown
+            </h2>
+            <Card className="overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-[var(--bg-subtle)]">
+                    <tr className="border-b border-[var(--border)]">
+                      <th className="px-4 py-3 text-left font-semibold uppercase tracking-wider text-[10px] text-[var(--text-muted)]">Model</th>
+                      <th className="px-4 py-3 text-right font-semibold uppercase tracking-wider text-[10px] text-[var(--text-muted)]">Requests</th>
+                      <th className="px-4 py-3 text-right font-semibold uppercase tracking-wider text-[10px] text-[var(--text-muted)]">Input</th>
+                      <th className="px-4 py-3 text-right font-semibold uppercase tracking-wider text-[10px] text-[var(--text-muted)]">Output</th>
+                      <th className="px-4 py-3 text-right font-semibold uppercase tracking-wider text-[10px] text-[var(--text-muted)]">Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--border)]">
+                    {d.models.map((m, i) => (
+                      <tr key={i} className="transition-colors hover:bg-[var(--bg-subtle)]">
+                        <td className="px-4 py-3">
+                          <div className="flex flex-col">
+                            <span className="font-mono text-[11px] font-semibold text-[var(--text)]">{m.model}</span>
+                            <span className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">{m.provider}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums font-medium text-[var(--text)]">{m.total_requests.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-right tabular-nums text-[var(--text-muted)]">{formatTokens(m.prompt_tokens)}</td>
+                        <td className="px-4 py-3 text-right tabular-nums text-[var(--text-muted)]">{formatTokens(m.completion_tokens)}</td>
+                        <td className="px-4 py-3 text-right tabular-nums font-medium text-[var(--text)]">${m.cost_usd.toFixed(4)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </section>
+        )}
 
         {/* ── Allowed Models Panel ──────────────────────────────────── */}
         {d.allowed_models && d.allowed_models.length > 0 && (
