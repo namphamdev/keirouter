@@ -106,6 +106,12 @@ jobs:
         env:
           OUTPUT: CHANGES.md
 
+      - name: Bump VERSION file
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "${VERSION}" > backend/internal/version/VERSION
+          echo "VERSION file updated to ${VERSION}"
+
       - name: Update CHANGELOG.md
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
@@ -130,12 +136,12 @@ jobs:
           echo "CHANGELOG.md updated for ${VERSION}"
           head -20 CHANGELOG.md
 
-      - name: Commit CHANGELOG.md
+      - name: Commit CHANGELOG.md and VERSION
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           branch: main
-          commit_message: "docs: update CHANGELOG.md for ${{ github.ref_name }}"
-          file_pattern: CHANGELOG.md
+          commit_message: "docs: update CHANGELOG.md and VERSION for ${{ github.ref_name }}"
+          file_pattern: CHANGELOG.md backend/internal/version/VERSION
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

@@ -26,6 +26,7 @@ func TestIsNewer(t *testing.T) {
 		{"empty current", "", "v0.1.0", false},
 		{"garbage candidate", "v0.1.6", "not-a-version", false},
 		{"two-part version", "v1.0", "v1.1", true},
+		{"double-digit patch bump", "v0.1.6", "v0.1.11", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
