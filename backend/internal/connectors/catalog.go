@@ -62,8 +62,8 @@ func llm(extra ...core.ServiceKind) []core.ServiceKind {
 	return append([]core.ServiceKind{core.ServiceLLM}, extra...)
 }
 
-// Catalog returns the built-in provider specs. It mirrors the upstream 9router
-// catalog: free OAuth providers, free-tier providers, OAuth providers, the
+// Catalog returns the built-in provider specs. It covers: free OAuth
+// providers, free-tier providers, OAuth providers, the
 // large API-key provider set, and dedicated media providers (image, STT, TTS,
 // web search, web fetch, embeddings).
 //
@@ -104,7 +104,7 @@ func freeProviders() []ProviderSpec {
 			BaseURL:  "https://cloudcode-pa.googleapis.com/v1internal",
 			AuthKind: "oauth", AuthModes: []string{"oauth"}, ServiceKinds: llm(),
 			Color: "#4285F4", Website: "https://github.com/google-gemini/gemini-cli", Deprecated: true, Notice: risk},
-		{ID: "qoder", DisplayName: "Qoder", Alias: "qd", Dialect: core.DialectOpenAI,
+		{ID: "qoder", DisplayName: "Qoder", Alias: "qd", Dialect: core.DialectQoder,
 			BaseURL:  "https://api3.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation",
 			AuthKind: "oauth", AuthModes: []string{"oauth"}, ServiceKinds: llm(),
 			Color: "#EC4899", Website: "https://qoder.com", Deprecated: true, Notice: risk},
@@ -133,7 +133,7 @@ func freeTierProviders() []ProviderSpec {
 			BaseURL: "http://localhost:8000/v1", AuthKind: "none", AuthModes: []string{"none", "api_key"},
 			ServiceKinds: llm(core.ServiceEmbedding), Color: "#FA5C1D",
 			Website: "https://docs.vllm.ai",
-			Notice: "Self-hosted vLLM OpenAI-compatible server. Set base URL to your vLLM endpoint; provide an API key only if you started vLLM with --api-key. Requires KEIROUTER_SECURITY__ALLOW_PRIVATE_BASE_URL=true when pointing at loopback or LAN hosts."},
+			Notice:  "Self-hosted vLLM OpenAI-compatible server. Set base URL to your vLLM endpoint; provide an API key only if you started vLLM with --api-key. Requires KEIROUTER_SECURITY__ALLOW_PRIVATE_BASE_URL=true when pointing at loopback or LAN hosts."},
 		{ID: "gemini", DisplayName: "Gemini", Alias: "gemini", Dialect: core.DialectGemini,
 			BaseURL: "https://generativelanguage.googleapis.com/v1beta", AuthKind: "api_key",
 			ServiceKinds: llm(core.ServiceEmbedding, core.ServiceImage, core.ServiceSearch, core.ServiceTTS, core.ServiceSTT),
@@ -305,7 +305,7 @@ func apiKeyProviders() []ProviderSpec {
 		{ID: "opencode-go", DisplayName: "OpenCode Go", Alias: "ocg", Dialect: core.DialectOpenAI,
 			BaseURL: "https://opencode.ai/zen/go/v1", AuthKind: "api_key", ServiceKinds: llm(),
 			Color: "#E87040", Website: "https://opencode.ai/auth", Hidden: true},
-		// --- Providers synced from 9router ---
+		// --- Additional providers ---
 		{ID: "gitlab", DisplayName: "GitLab Duo", Alias: "gitlab", Dialect: core.DialectOpenAI,
 			BaseURL: "https://gitlab.com/api/v4", AuthKind: "api_key", ServiceKinds: llm(),
 			Color: "#FC6D26", Website: "https://gitlab.com"},

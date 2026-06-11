@@ -103,6 +103,10 @@ func DefaultRegistry() *Registry {
 			conns = append(conns, NewKiro(p.ID, p.BaseURL))
 		case p.Dialect == core.DialectCursor:
 			conns = append(conns, NewCursor(p.ID, p.BaseURL))
+		case p.Dialect == core.DialectQoder:
+			qc := NewQoder(p.ID, p.BaseURL)
+			conns = append(conns, qc)
+			RegisterLiveModelSource(p.ID, NewQoderModelSource(qc))
 		default:
 			// Dialect not yet drivable; skip connector creation.
 		}
@@ -116,7 +120,7 @@ func DrivableDialect(d core.Dialect) bool {
 	switch d {
 	case core.DialectOpenAI, core.DialectAnthropic, core.DialectGemini, core.DialectOllama,
 		core.DialectVertex, core.DialectOpenAIResponses, core.DialectGeminiCLI, core.DialectAntigravity,
-		core.DialectCommandCode, core.DialectKiro, core.DialectCursor:
+		core.DialectCommandCode, core.DialectKiro, core.DialectCursor, core.DialectQoder:
 		return true
 	default:
 		return false

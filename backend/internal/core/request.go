@@ -24,7 +24,8 @@ const (
 	DialectCursor      Dialect = "cursor"       // Cursor connect-proto
 	DialectAntigravity Dialect = "antigravity"  // Antigravity CloudCode
 	DialectCommandCode Dialect = "command_code" // Command Code generate API
-	DialectWebCookie   Dialect = "web_cookie"    // browser-session cookie providers
+	DialectQoder       Dialect = "qoder"        // Qoder COSY-signed inference
+	DialectWebCookie   Dialect = "web_cookie"   // browser-session cookie providers
 )
 
 // ChatRequest is the canonical, dialect-independent representation of a chat
@@ -77,8 +78,8 @@ type ReasoningConfig struct {
 
 // Tool is a function/tool definition advertised to the model.
 type Tool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 	// Parameters is a JSON Schema object describing the tool arguments.
 	Parameters json.RawMessage `json:"parameters,omitempty"`
 }

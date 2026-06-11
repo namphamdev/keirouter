@@ -89,11 +89,11 @@ func TestDrivableDialect(t *testing.T) {
 			t.Errorf("dialect %q must be drivable", d)
 		}
 	}
-	// All proprietary/subscription dialects are now drivable: the full 9router
+	// All proprietary/subscription dialects are now drivable: the full
 	// transport surface has been ported.
 	for _, d := range []core.Dialect{
 		core.DialectKiro, core.DialectGeminiCLI, core.DialectAntigravity,
-		core.DialectCommandCode, core.DialectCursor,
+		core.DialectCommandCode, core.DialectCursor, core.DialectQoder,
 	} {
 		if !DrivableDialect(d) {
 			t.Errorf("dialect %q must be drivable", d)
