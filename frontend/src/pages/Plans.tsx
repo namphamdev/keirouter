@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Wallet,
@@ -9,11 +9,9 @@ import {
   ShieldCheck,
   DollarSign,
   Gauge,
-  Lock,
-  Clock3,
 } from "lucide-react";
 import { api, type Plan } from "../lib/api";
-import { formatTokenLimit, FormattedTokenInput, ModelMultiSelect } from "../components/ModelSelect";
+import { FormattedTokenInput, ModelMultiSelect } from "../components/ModelSelect";
 import { microsToUSD, formatTokens } from "../lib/format";
 import { PageHeader } from "../components/Layout";
 import { useToast } from "../components/Toast";

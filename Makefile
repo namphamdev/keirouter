@@ -13,7 +13,7 @@ BACKEND_DIR := backend
 FRONTEND_DIR := frontend
 BIN := keirouter
 
-.PHONY: dev backend frontend build build-backend build-frontend test vet bootstrap install setup quickstart clean docker
+.PHONY: dev backend frontend build build-backend build-frontend test vet hooks bootstrap install setup quickstart clean docker
 
 ## dev: run backend and frontend concurrently; Ctrl-C stops both.
 ##      The backend starts first; frontend waits until the backend is healthy
@@ -62,6 +62,13 @@ build-backend:
 
 build-frontend:
 	cd $(FRONTEND_DIR) && npm run build
+
+## hooks: install git pre-push hook (runs typecheck + vet before push).
+hooks:
+	@mkdir -p "$(shell git rev-parse --git-dir)/hooks"
+	@cp scripts/hooks/pre-push "$(shell git rev-parse --git-dir)/hooks/pre-push"
+	@chmod +x "$(shell git rev-parse --git-dir)/hooks/pre-push"
+	@echo "✅ pre-push hook installed"
 
 ## test: run the backend test suite.
 test:

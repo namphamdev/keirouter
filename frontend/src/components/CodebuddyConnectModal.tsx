@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, RefreshCw, CheckCircle2, X, AlertTriangle } from "lucide-react";
+import { ExternalLink, X, AlertTriangle } from "lucide-react";
 import { api, type DeviceCode } from "../lib/api";
 import { Button } from "./ui";
 import { useToast } from "./Toast";
