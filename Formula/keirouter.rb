@@ -1,27 +1,27 @@
-# Auto-updated by release.yml on tag v0.1.11. Do not edit manually.
+# Auto-updated by release.yml on tag v0.1.13. Do not edit manually.
 class Keirouter < Formula
   desc "AI API router — unified gateway for 20+ LLM providers with fallback, caching, and dashboard"
   homepage "https://github.com/mydisha/keirouter"
-  version "0.1.11"
+  version "0.1.13"
   license "MIT"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/mydisha/keirouter/releases/download/v0.1.11/keirouter_v0.1.11_darwin_arm64.tar.gz"
-      sha256 "31d739a29b79c7e41a0682ea6c01c50fe016f3485ef9f9c7e11b3e3895060a39"
+      url "https://github.com/mydisha/keirouter/releases/download/v0.1.13/keirouter_v0.1.13_darwin_arm64.tar.gz"
+      sha256 "67b6c4f65c6db27a9ee0034f8663b763c2f4c1d50053b52a4b56e0edeb8600db"
     else
-      url "https://github.com/mydisha/keirouter/releases/download/v0.1.11/keirouter_v0.1.11_darwin_amd64.tar.gz"
-      sha256 "314db4ed40bda5bda0ee7ce569e681274e6388ff1227d510c74cb5b69964cd74"
+      url "https://github.com/mydisha/keirouter/releases/download/v0.1.13/keirouter_v0.1.13_darwin_amd64.tar.gz"
+      sha256 "256311a0f9618dd7ea62626b94a76bc38230cdba48964f0b8ec85ba3de09dc1d"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/mydisha/keirouter/releases/download/v0.1.11/keirouter_v0.1.11_linux_arm64.tar.gz"
-      sha256 "42f0934ac4dd3f6e736d415c183d64d224318e51459ce10ad08afff8633fb8ca"
+      url "https://github.com/mydisha/keirouter/releases/download/v0.1.13/keirouter_v0.1.13_linux_arm64.tar.gz"
+      sha256 "29891b02fc95b9f10b155d2012685d9e63c2f20bd521574b08dacd3a3fbcdc35"
     else
-      url "https://github.com/mydisha/keirouter/releases/download/v0.1.11/keirouter_v0.1.11_linux_amd64.tar.gz"
-      sha256 "30330e11997ac731f48ad59c829d32b18f9720c064e8767ace9c5feb61ecc781"
+      url "https://github.com/mydisha/keirouter/releases/download/v0.1.13/keirouter_v0.1.13_linux_amd64.tar.gz"
+      sha256 "d15638d924abafebfbfe41fe36d343ddf8c8c37d82b99da8c69022ffde7213db"
     end
   end
 
