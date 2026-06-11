@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Sparkles, X, ExternalLink, ArrowUpCircle } from "lucide-react";
+import { Sparkles, X, ExternalLink, ArrowUpCircle, FileText } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
+import { ChangelogMarkdown } from "./ChangelogMarkdown";
 
 // useUpdateInfo is a shared hook so the TopBar badge and the Settings page
 // read from the same cached query. The check hits GitHub at most every few
@@ -45,8 +46,6 @@ export function UpdateNotification() {
   // Nothing to show unless GitHub reported a strictly newer version.
   if (!data || !data.update_available) return null;
 
-  const preview = changelogPreview(data.changelog);
-
   return (
     <div ref={ref} className="relative">
       <button
@@ -68,17 +67,19 @@ export function UpdateNotification() {
         <div
           role="dialog"
           aria-label="Update available"
-          className="absolute right-0 top-full z-50 mt-2 w-80 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-[var(--shadow-float)]"
+          className="absolute right-0 top-full z-50 mt-2 w-96 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-[var(--shadow-float)]"
         >
           <div className="flex items-start justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-100 text-accent-700 dark:bg-accent-800/40 dark:text-accent-200">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-100 text-accent-700 dark:bg-accent-800/40 dark:text-accent-200">
                 <Sparkles className="h-4 w-4" strokeWidth={2} />
               </div>
               <div>
-                <p className="text-sm font-medium leading-tight">Update available</p>
+                <p className="text-sm font-semibold leading-tight">Update available</p>
                 <p className="text-xs leading-tight text-[var(--text-muted)]">
-                  {data.current} → {data.latest}
+                  <span className="font-mono">{data.current}</span>
+                  <span className="mx-1">→</span>
+                  <span className="font-mono font-medium text-accent-600 dark:text-accent-400">{data.latest}</span>
                 </p>
               </div>
             </div>
@@ -91,23 +92,19 @@ export function UpdateNotification() {
             </button>
           </div>
 
-          {preview && (
-            <div className="max-h-48 overflow-y-auto px-4 py-3">
-              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                What's new
-              </p>
-              <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-[var(--text)]">
-                {preview}
-              </pre>
+          {data.changelog && (
+            <div className="max-h-56 overflow-y-auto px-4 py-3">
+              <ChangelogMarkdown changelog={data.changelog} compact />
             </div>
           )}
 
           <div className="flex items-center justify-between gap-2 border-t border-[var(--border)] px-4 py-3">
             <Link
-              to="/settings"
+              to="/settings#system"
               onClick={() => setOpen(false)}
-              className="text-xs font-medium text-accent-600 hover:underline dark:text-accent-300"
+              className="flex items-center gap-1.5 rounded-lg bg-accent-50 px-3 py-1.5 text-xs font-medium text-accent-700 transition-colors hover:bg-accent-100 dark:bg-accent-900/30 dark:text-accent-300 dark:hover:bg-accent-900/50"
             >
+              <FileText className="h-3.5 w-3.5" />
               View full changelog
             </Link>
             {data.html_url && (
@@ -115,7 +112,7 @@ export function UpdateNotification() {
                 href={data.html_url}
                 target="_blank"
                 rel="noreferrer noopener"
-                className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text)]"
+                className="flex items-center gap-1 text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
               >
                 Release notes
                 <ExternalLink className="h-3 w-3" />
@@ -126,16 +123,4 @@ export function UpdateNotification() {
       )}
     </div>
   );
-}
-
-// changelogPreview trims a long changelog down to a short preview (first lines,
-// capped) for the popover. The full text lives on the Settings page.
-function changelogPreview(changelog: string, maxLines = 8, maxChars = 400): string {
-  if (!changelog) return "";
-  const lines = changelog.split("\n").slice(0, maxLines);
-  let out = lines.join("\n").trim();
-  if (out.length > maxChars) {
-    out = out.slice(0, maxChars).trimEnd() + "…";
-  }
-  return out;
 }

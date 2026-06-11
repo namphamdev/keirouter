@@ -7,6 +7,7 @@ import {
   Palette,
 } from "lucide-react";
 import { api, type EndpointSettings, type BrandingSettings } from "../lib/api";
+import { ChangelogMarkdown } from "../components/ChangelogMarkdown";
 import { PALETTES, getPaletteScales } from "../lib/palettes";
 import { applyShadeScale, generateShades } from "../lib/color-utils";
 import { PageHeader } from "../components/Layout";
@@ -1247,9 +1248,7 @@ function UpdatesSettings() {
                   )}
                 </div>
                 <div className="max-h-80 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--bg)] p-4">
-                  <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-[var(--text)]">
-                    {data.changelog}
-                  </pre>
+                  <ChangelogMarkdown changelog={data.changelog} />
                 </div>
               </div>
             )}
