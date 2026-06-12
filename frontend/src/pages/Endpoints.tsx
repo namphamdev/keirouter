@@ -1,35 +1,25 @@
 import { useEffect, useState, useRef, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Copy,
   Check,
-  KeyRound,
-  Plus,
-  Trash2,
-  ToggleLeft,
-  ToggleRight,
   Loader2,
   ArrowUpRight,
+  KeyRound,
 } from "lucide-react";
 import {
   api,
-  type CreatedKey,
   type TailscaleEnableResult,
 } from "../lib/api";
 import { PageHeader } from "../components/Layout";
-import { formatTokenLimit, FormattedTokenInput, ModelMultiSelect } from "../components/ModelSelect";
 import {
   Card,
   CardHeader,
   Button,
   Input,
-  Select,
   Field,
   Badge,
-  Spinner,
-  EmptyState,
-  Toggle,
-  Modal,
 } from "../components/ui";
 
 // Polling intervals (ms).
@@ -73,8 +63,8 @@ export function EndpointsPage() {
       />
       <div className="space-y-5 sm:space-y-6">
         <PrimaryEndpoint />
+        <CredentialNotice />
         <TunnelSection />
-        <APIKeys />
       </div>
     </>
   );
@@ -132,6 +122,37 @@ function PrimaryEndpoint() {
         <p className="mt-2.5 text-xs text-[var(--text-muted)] sm:mt-3">
           Point your applications at this URL. All providers are accessible through this single endpoint.
         </p>
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Credential notice — keep key management centralized
+// ---------------------------------------------------------------------------
+
+function CredentialNotice() {
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6 sm:py-5">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-secondary-100 text-secondary-700 dark:bg-secondary-900/40 dark:text-secondary-200">
+            <KeyRound className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold tracking-tight text-[var(--text)]">Credentials live in API Keys</h2>
+            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-[var(--text-muted)]">
+              Use this page for connection URLs and tunnels. Create, revoke, copy owner portals, and set model limits from the API Keys page.
+            </p>
+          </div>
+        </div>
+        <Link
+          to="/keys"
+          className="inline-flex items-center justify-center gap-1.5 self-start rounded-xl bg-secondary-600 px-3.5 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-secondary-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary-400/60 dark:bg-secondary-500 dark:hover:bg-secondary-400 sm:self-center"
+        >
+          Manage keys
+          <ArrowUpRight className="h-4 w-4" />
+        </Link>
       </div>
     </Card>
   );
@@ -638,232 +659,3 @@ function TunnelBadge({ reachable }: { reachable: boolean | null }) {
   return <Badge tone={tone}>{label}</Badge>;
 }
 
-// ---------------------------------------------------------------------------
-// API Keys
-// ---------------------------------------------------------------------------
-
-const budgetPeriods = [
-  { value: "daily", label: "Daily" },
-  { value: "weekly", label: "Weekly" },
-  { value: "monthly", label: "Monthly" },
-  { value: "total", label: "All time" },
-];
-
-function APIKeys() {
-  const qc = useQueryClient();
-  const keys = useQuery({ queryKey: ["keys"], queryFn: () => api.listKeys() });
-
-  const [modalOpen, setModalOpen] = useState(false);
-  const [step, setStep] = useState<1 | 2 | 3>(1);
-  const [name, setName] = useState("");
-  const [budgetLimit, setBudgetLimit] = useState("");
-  const [budgetLimitTokens, setBudgetLimitTokens] = useState("");
-  const [budgetPeriod, setBudgetPeriod] = useState("monthly");
-  const [budgetAlertPct, setBudgetAlertPct] = useState(80);
-  const [budgetHardCutoff, setBudgetHardCutoff] = useState(true);
-  const [allowedModels, setAllowedModels] = useState<string[]>([]);
-  const [created, setCreated] = useState<CreatedKey | null>(null);
-  const [copied, setCopied] = useState(false);
-
-  const openModal = () => {
-    setName("");
-    setBudgetLimit("");
-    setBudgetLimitTokens("");
-    setBudgetPeriod("monthly");
-    setBudgetAlertPct(80);
-    setBudgetHardCutoff(true);
-    setAllowedModels([]);
-    setCreated(null);
-    setCopied(false);
-    setStep(1);
-    setModalOpen(true);
-  };
-
-  const closeModal = () => {
-    setModalOpen(false);
-    if (created) { setCreated(null); setCopied(false); }
-  };
-
-  const create = useMutation({
-    mutationFn: () => {
-      const hasLimit = parseFloat(budgetLimit) > 0;
-      const hasTokenLimit = parseInt(budgetLimitTokens) > 0;
-      const opts = hasLimit || hasTokenLimit || allowedModels.length > 0
-        ? {
-            ...(hasLimit ? { budget_limit_usd: parseFloat(budgetLimit) } : {}),
-            ...(hasTokenLimit ? { budget_limit_tokens: parseInt(budgetLimitTokens) } : {}),
-            ...(hasLimit || hasTokenLimit ? { budget_period: budgetPeriod, budget_alert_pct: budgetAlertPct, budget_hard_cutoff: budgetHardCutoff } : {}),
-            ...(allowedModels.length > 0 ? { allowed_models: allowedModels } : {}),
-          }
-        : undefined;
-      return api.createKey(name, opts);
-    },
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ["keys"] });
-      qc.invalidateQueries({ queryKey: ["budgets"] });
-      qc.invalidateQueries({ queryKey: ["budget-status"] });
-      setCreated(data);
-      setStep(3);
-    },
-    onError: () => {},
-  });
-
-  const remove = useMutation({
-    mutationFn: (id: string) => api.deleteKey(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["keys"] }),
-  });
-
-  const toggleDisabled = useMutation({
-    mutationFn: ({ id, disabled }: { id: string; disabled: boolean }) => api.updateKey(id, { disabled }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["keys"] }),
-  });
-
-  return (
-    <Card>
-      <CardHeader
-        title="API keys"
-        description="Authenticate your applications"
-        action={
-          <Button onClick={openModal}>
-            <Plus className="h-4 w-4" />
-            New key
-          </Button>
-        }
-      />
-
-      <Modal
-        open={modalOpen}
-        onClose={closeModal}
-        title={step === 3 ? "Key created" : "Create API key"}
-        subtitle={
-          step === 1 ? "Name your key so you can identify it later."
-            : step === 2 ? "Optionally set spend limits and model restrictions."
-            : undefined
-        }
-      >
-        {step === 1 && (
-          <div className="space-y-4 px-6 py-5">
-            <Field label="Key name">
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="laptop"
-                autoFocus
-                onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) { e.preventDefault(); setStep(2); } }}
-              />
-            </Field>
-            <Button className="w-full" onClick={() => setStep(2)} disabled={!name.trim()}>
-              Next
-            </Button>
-          </div>
-        )}
-        {step === 2 && (
-          <div className="space-y-4 px-6 py-5">
-            {(keys.data?.keys?.length ?? 0) === 0 && (
-              <div className="rounded-xl border border-accent-200 bg-accent-50 px-4 py-3 dark:border-accent-800 dark:bg-accent-950/30">
-                <p className="text-sm font-medium text-accent-800 dark:text-accent-200">Set limits to control spending</p>
-                <p className="mt-0.5 text-xs text-accent-700 dark:text-accent-300">This is your first key. Adding a plan now prevents surprise bills.</p>
-              </div>
-            )}
-            <div className="flex gap-3">
-              <div className="flex-1"><Field label="Limit (USD)"><Input type="number" min="0" step="0.01" value={budgetLimit} onChange={(e) => setBudgetLimit(e.target.value)} placeholder="50.00" /></Field></div>
-              <div className="flex-1"><Field label="Limit (Tokens)"><FormattedTokenInput value={budgetLimitTokens} onChange={setBudgetLimitTokens} placeholder="100000000" /></Field></div>
-              <div className="w-36"><Field label="Period"><Select value={budgetPeriod} onChange={(e) => setBudgetPeriod(e.target.value)}>{budgetPeriods.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}</Select></Field></div>
-            </div>
-            <Field label="Allowed models">
-              <ModelMultiSelect value={allowedModels} onChange={setAllowedModels} />
-              <p className="mt-1 text-[10px] text-[var(--text-muted)]">Select models or add custom patterns with * wildcard (e.g. claude-*)</p>
-            </Field>
-            <div className="flex items-end gap-6">
-              <div className="w-40"><Field label="Alert threshold (%)"><Input type="number" min="1" max="100" value={budgetAlertPct} onChange={(e) => setBudgetAlertPct(parseInt(e.target.value) || 80)} /></Field></div>
-              <div className="flex items-center gap-2 pb-0.5"><Toggle checked={budgetHardCutoff} onChange={setBudgetHardCutoff} /><span className="text-sm">Hard cutoff</span></div>
-            </div>
-            <div className="flex gap-2 pt-2 border-t border-[var(--border)]">
-              <Button variant="ghost" onClick={() => setStep(1)}>Back</Button>
-              <div className="flex-1" />
-              <Button variant="ghost" onClick={() => create.mutate()} disabled={create.isPending}>{create.isPending ? "Creating…" : "Skip budget"}</Button>
-              <Button onClick={() => create.mutate()} disabled={create.isPending}>{create.isPending ? "Creating…" : "Create key"}</Button>
-            </div>
-          </div>
-        )}
-        {step === 3 && created && (
-          <div className="space-y-4 px-6 py-5">
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)] p-4">
-              <p className="text-xs font-medium text-[var(--text-muted)]">Copy this key now — it won't be shown again.</p>
-              <div className="mt-2 flex items-center gap-2">
-                <code className="flex-1 overflow-x-auto rounded-lg bg-[var(--bg-elevated)] px-3 py-2.5 font-mono text-sm">{created.key}</code>
-                <Button onClick={() => { navigator.clipboard.writeText(created.key); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
-                  {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  {copied ? "Copied" : "Copy"}
-                </Button>
-              </div>
-            </div>
-            {created.budget && (
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] px-4 py-3">
-                <p className="text-xs font-medium text-[var(--text-muted)]">Plan attached</p>
-                <p className="mt-0.5 text-sm">
-                  {created.budget.limit_micros > 0 && `$${(created.budget.limit_micros / 1_000_000).toFixed(2)}`}
-                  {created.budget.limit_micros > 0 && created.budget.limit_tokens > 0 && " + "}
-                  {created.budget.limit_tokens > 0 && `${formatTokenLimit(String(created.budget.limit_tokens))} tokens`}
-                  {` / ${created.budget.period}`}
-                  {created.budget.hard_cutoff ? " (hard cutoff)" : ""}
-                </p>
-              </div>
-            )}
-            {created.allowed_models && created.allowed_models.length > 0 && (
-              <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] px-4 py-3">
-                <p className="text-xs font-medium text-[var(--text-muted)]">Allowed models</p>
-                <p className="mt-0.5 text-sm">{created.allowed_models.join(", ")}</p>
-              </div>
-            )}
-            <Button className="w-full" onClick={closeModal}>Done</Button>
-          </div>
-        )}
-      </Modal>
-
-      {keys.isLoading ? (
-        <Spinner />
-      ) : !keys.data?.keys?.length ? (
-        <EmptyState title="No API keys yet" hint="Create a key to authenticate your app." />
-      ) : (
-        <div className="divide-y divide-[var(--border)]">
-          {keys.data.keys.map((k) => (
-            <div key={k.id} className="flex items-center gap-3 px-4 py-3 sm:px-5 sm:py-3.5">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-ink-100 text-ink-500 dark:bg-ink-800 dark:text-ink-400">
-                <KeyRound className="h-4 w-4" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <p className="truncate text-sm font-medium">{k.name}</p>
-                  {k.allowed_models && k.allowed_models.length > 0 && (
-                    <Badge tone="accent">{k.allowed_models.length} model{k.allowed_models.length > 1 ? "s" : ""}</Badge>
-                  )}
-                </div>
-                <p className="mt-0.5 font-mono text-xs text-[var(--text-muted)]">{k.display}</p>
-              </div>
-              <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-                <Badge tone={k.disabled ? "neutral" : "success"}>
-                  {k.disabled ? "Off" : "On"}
-                </Badge>
-                <button
-                  onClick={() => toggleDisabled.mutate({ id: k.id, disabled: !k.disabled })}
-                  className="rounded-lg p-1.5 text-[var(--text-muted)] transition-colors hover:bg-ink-100 hover:text-[var(--text)] dark:hover:bg-ink-800"
-                  title={k.disabled ? "Enable key" : "Disable key"}
-                >
-                  {k.disabled ? <ToggleLeft className="h-4 w-4" /> : <ToggleRight className="h-4 w-4" />}
-                </button>
-                <button
-                  onClick={() => remove.mutate(k.id)}
-                  className="rounded-lg p-1.5 text-[var(--text-muted)] transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40 dark:hover:text-red-400"
-                  title="Delete key"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </Card>
-  );
-}

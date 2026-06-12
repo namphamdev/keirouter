@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Plus, Copy, Check, ToggleLeft, ToggleRight, ArrowLeft, ArrowRight, Trash2, Wallet, Wrench, DollarSign, Gauge } from "lucide-react";
-import { api, type CreatedKey, type Plan } from "../lib/api";
+import { KeyRound, Plus, Copy, Check, ToggleLeft, ToggleRight, ArrowLeft, ArrowRight, Trash2, Wallet, Wrench, DollarSign, Gauge, ShieldCheck, Boxes, Link2, CircleCheck, CircleOff, Activity, Ban, ListFilter } from "lucide-react";
+import { api, type APIKey, type CreatedKey, type Plan } from "../lib/api";
 import { microsToUSD, formatTokens } from "../lib/format";
 import { PageHeader } from "../components/Layout";
 import { useToast } from "../components/Toast";
@@ -15,9 +15,9 @@ import {
   Field,
   Badge,
   Spinner,
-  EmptyState,
   Toggle,
   Modal,
+  StatCard,
 } from "../components/ui";
 
 const budgetPeriods = [
@@ -27,6 +27,214 @@ const budgetPeriods = [
   { value: "total", label: "All time" },
 ];
 
+type KeySummary = {
+  total: number;
+  active: number;
+  disabled: number;
+  restricted: number;
+};
+
+function getKeySummary(keys: APIKey[] = []): KeySummary {
+  return keys.reduce(
+    (acc, key) => {
+      acc.total += 1;
+      if (key.disabled) acc.disabled += 1;
+      else acc.active += 1;
+      if ((key.allowed_models ?? []).length > 0) acc.restricted += 1;
+      return acc;
+    },
+    { total: 0, active: 0, disabled: 0, restricted: 0 },
+  );
+}
+
+function StatusPill({ disabled }: { disabled: boolean }) {
+  if (disabled) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-lg bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-700 ring-1 ring-red-200/70 dark:bg-red-950/30 dark:text-red-300 dark:ring-red-900/60">
+        <CircleOff className="h-3.5 w-3.5" />
+        Disabled
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200/70 dark:bg-emerald-950/30 dark:text-emerald-300 dark:ring-emerald-900/60">
+      <CircleCheck className="h-3.5 w-3.5" />
+      Active
+    </span>
+  );
+}
+
+function SoftLabel({
+  icon,
+  children,
+  tone = "neutral",
+}: {
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+  tone?: "neutral" | "model";
+}) {
+  const toneClass = tone === "model"
+    ? "bg-amber-50 text-amber-800 ring-amber-200/70 dark:bg-amber-950/30 dark:text-amber-300 dark:ring-amber-900/60"
+    : "bg-[var(--bg-subtle)] text-[var(--text-muted)] ring-[var(--border)]";
+
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold ring-1 ${toneClass}`}>
+      {icon}
+      {children}
+    </span>
+  );
+}
+
+function KeyCopyButton({
+  icon,
+  label,
+  value,
+  copiedMessage,
+  className = "",
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  copiedMessage: string;
+  className?: string;
+}) {
+  const toast = useToast();
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        navigator.clipboard.writeText(value);
+        toast.success(label, copiedMessage);
+      }}
+      className={`group inline-flex min-w-0 items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-left transition-colors hover:border-secondary-300 hover:bg-secondary-50/50 dark:hover:bg-secondary-950/20 ${className}`}
+    >
+      <span className="shrink-0 text-[var(--text-muted)] group-hover:text-secondary-500">{icon}</span>
+      <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--text)]">
+        {value}
+      </span>
+      <Copy className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)] transition-colors group-hover:text-secondary-500" />
+    </button>
+  );
+}
+
+function KeyEmptyState({ onCreate }: { onCreate: () => void }) {
+  return (
+    <div className="px-6 py-14">
+      <div className="mx-auto max-w-md text-center">
+        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-secondary-100 text-secondary-700 dark:bg-secondary-900/40 dark:text-secondary-200">
+          <KeyRound className="h-5 w-5" />
+        </div>
+        <h3 className="mt-4 text-base font-semibold tracking-tight text-[var(--text)]">No API keys yet</h3>
+        <p className="mt-2 text-sm leading-relaxed text-[var(--text-muted)]">
+          Create a key for CLI tools, apps, or teammates. Full secrets are shown once, then stored hashed.
+        </p>
+        <div className="mt-5 flex justify-center">
+          <Button onClick={onCreate}>
+            <Plus className="h-4 w-4" />
+            Create first key
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KeyRow({
+  apiKey,
+  selected,
+  onSelect,
+  onToggle,
+  onRevoke,
+  togglePending,
+}: {
+  apiKey: APIKey;
+  selected: boolean;
+  onSelect: () => void;
+  onToggle: () => void;
+  onRevoke: () => void;
+  togglePending: boolean;
+}) {
+  const portalUrl = `${window.location.origin}/portal?id=${apiKey.id}`;
+  const modelCount = apiKey.allowed_models?.length ?? 0;
+  const modelPreview = modelCount > 0 ? apiKey.allowed_models!.slice(0, 3).join(", ") : "All models";
+  const trafficText = apiKey.disabled ? "Blocked" : "Allowed";
+
+  return (
+    <article
+      className={`grid gap-4 px-5 py-5 transition-colors sm:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.95fr)_auto] sm:items-center sm:px-6 ${
+        selected ? "bg-secondary-50/50 dark:bg-secondary-950/20" : "hover:bg-[var(--bg-subtle)]/70"
+      }`}
+    >
+      <div className="flex min-w-0 gap-4">
+        <label className="mt-1 flex shrink-0 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onSelect}
+            className="h-4 w-4 rounded border-[var(--border)] accent-[var(--color-accent)]"
+            aria-label={`Select ${apiKey.name}`}
+          />
+        </label>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="truncate text-base font-semibold tracking-tight text-[var(--text)]">{apiKey.name}</h3>
+            <StatusPill disabled={apiKey.disabled} />
+            <SoftLabel>{apiKey.plan_name || "Custom plan"}</SoftLabel>
+            {modelCount > 0 && (
+              <SoftLabel icon={<Boxes className="h-3.5 w-3.5" />} tone="model">
+                {modelCount} model{modelCount > 1 ? "s" : ""}
+              </SoftLabel>
+            )}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs">
+            <SoftLabel icon={<ShieldCheck className="h-3.5 w-3.5" />}>
+              Traffic: {trafficText}
+            </SoftLabel>
+            <SoftLabel icon={<Boxes className="h-3.5 w-3.5" />}>
+              <span className="max-w-[18rem] truncate" title={modelPreview}>Models: {modelPreview}</span>
+            </SoftLabel>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid min-w-0 gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex w-24 shrink-0 items-center gap-1.5 text-xs font-semibold text-[var(--text-muted)]">
+            <KeyRound className="h-3.5 w-3.5" />
+            Key ID
+          </span>
+          <KeyCopyButton icon={<KeyRound className="h-3.5 w-3.5" />} label="Key copied" value={apiKey.display} copiedMessage="Masked key identifier copied." className="flex-1" />
+        </div>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex w-24 shrink-0 items-center gap-1.5 text-xs font-semibold text-[var(--text-muted)]">
+            <Link2 className="h-3.5 w-3.5" />
+            Portal
+          </span>
+          <KeyCopyButton icon={<Link2 className="h-3.5 w-3.5" />} label="Portal link copied" value={portalUrl} copiedMessage="Owner usage portal link copied." className="flex-1" />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 sm:justify-end">
+        <Button
+          variant="ghost"
+          onClick={onToggle}
+          disabled={togglePending}
+          className="px-3"
+          title={apiKey.disabled ? "Enable key" : "Disable key"}
+        >
+          {apiKey.disabled ? <ToggleLeft className="h-4 w-4" /> : <ToggleRight className="h-4 w-4" />}
+          {apiKey.disabled ? "Enable" : "Disable"}
+        </Button>
+        <Button variant="danger" onClick={onRevoke}>
+          <Trash2 className="h-3.5 w-3.5" />
+          Revoke
+        </Button>
+      </div>
+    </article>
+  );
+}
 
 export function KeysPage() {
   const qc = useQueryClient();
@@ -187,7 +395,7 @@ export function KeysPage() {
       <PageHeader
         title="API Keys"
         icon={KeyRound}
-        description="Keys your tools use to authenticate. Stored hashed; shown once."
+        description="Manage authentication keys, owner portal links, model access, and spend controls."
         action={
           <Button onClick={openModal}>
             <Plus className="h-4 w-4" />
@@ -253,9 +461,22 @@ export function KeysPage() {
         )}
       </Modal>
 
-      <Card>
+      {(() => {
+        const summary = getKeySummary(keys.data?.keys ?? []);
+        return (
+          <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StatCard label="Total keys" value={String(summary.total)} icon={KeyRound} />
+            <StatCard label="Active" value={String(summary.active)} icon={Activity} />
+            <StatCard label="Disabled" value={String(summary.disabled)} icon={Ban} iconTone="danger" />
+            <StatCard label="Restricted" value={String(summary.restricted)} icon={ListFilter} iconTone="warning" />
+          </div>
+        );
+      })()}
+
+      <Card className="overflow-hidden">
         <CardHeader
-          title={selectedIds.size > 0 ? `${selectedIds.size} selected` : "Keys"}
+          title={selectedIds.size > 0 ? `${selectedIds.size} selected` : "Key inventory"}
+          description="Copy identifiers, share owner portals, and control access from one place."
           action={
             selectedIds.size > 0 ? (
               <div className="flex items-center gap-2">
@@ -276,95 +497,40 @@ export function KeysPage() {
         {keys.isLoading ? (
           <Spinner />
         ) : !keys.data?.keys?.length ? (
-          <EmptyState title="No keys yet" />
+          <KeyEmptyState onCreate={openModal} />
         ) : (
-          <div className="divide-y divide-[var(--border)]">
-            {/* Select all row */}
+          <div>
             {keys.data.keys.length > 1 && (
-              <div className="flex items-center px-6 py-2 bg-[var(--bg-subtle)] border-b border-[var(--border)]">
-                <label className="flex items-center gap-4 cursor-pointer">
+              <div className="flex items-center justify-between gap-4 border-b border-[var(--border)] bg-[var(--bg-subtle)] px-5 py-3 sm:px-6">
+                <label className="flex cursor-pointer items-center gap-3">
                   <input
                     type="checkbox"
                     checked={selectedIds.size === keys.data.keys.length}
                     onChange={toggleSelectAll}
-                    className="h-3.5 w-3.5 rounded border-[var(--border)] accent-[var(--color-accent)]"
+                    className="h-4 w-4 rounded border-[var(--border)] accent-[var(--color-accent)]"
                   />
-                  <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">
                     Select all
                   </span>
                 </label>
+                <p className="hidden text-xs text-[var(--text-muted)] sm:block">
+                  Secrets are stored hashed. Full keys appear only after creation.
+                </p>
               </div>
             )}
-            {keys.data.keys.map((k) => (
-              <div key={k.id} className={`flex items-center gap-4 px-6 py-4 transition-colors ${selectedIds.has(k.id) ? "bg-accent-50/40 dark:bg-accent-950/20" : ""}`}>
-                <label className="flex items-center shrink-0 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(k.id)}
-                    onChange={() => toggleSelect(k.id)}
-                    className="h-3.5 w-3.5 rounded border-[var(--border)] accent-[var(--color-accent)]"
-                  />
-                </label>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">{k.name}</span>
-                    {k.disabled ? <Badge tone="danger">disabled</Badge> : <Badge tone="success">active</Badge>}
-                    {k.plan_name && (
-                      <Badge tone="neutral">{k.plan_name}</Badge>
-                    )}
-                    {k.allowed_models && k.allowed_models.length > 0 && (
-                      <Badge tone="accent">{k.allowed_models.length} model{k.allowed_models.length > 1 ? "s" : ""}</Badge>
-                    )}
-                  </div>
-                  {k.allowed_models && k.allowed_models.length > 0 && (
-                    <p className="mt-0.5 text-xs text-[var(--text-muted)]">
-                      Models: {k.allowed_models.join(", ")}
-                    </p>
-                  )}
-                  <div className="flex items-center gap-4 mt-0.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(k.display);
-                        toast.success("Key copied", "The masked key identifier has been copied to your clipboard.");
-                      }}
-                      className="flex items-center gap-1.5 font-mono text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text)]"
-                      title="Copy key"
-                    >
-                      {k.display}
-                      <Copy className="h-3 w-3 opacity-50 transition-opacity hover:opacity-100" />
-                    </button>
-                    
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(`${window.location.origin}/portal?id=${k.id}`);
-                        toast.success("Portal link copied", "Share this link with the key owner to let them track their usage.");
-                      }}
-                      className="flex items-center gap-1.5 font-mono text-xs text-emerald-500/80 transition-colors hover:text-emerald-400"
-                      title="Copy portal link"
-                    >
-                      Portal Link
-                      <Copy className="h-3 w-3 opacity-50 transition-opacity hover:opacity-100" />
-                    </button>
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    onClick={() => toggleDisabled.mutate({ id: k.id, disabled: !k.disabled })}
-                    disabled={toggleDisabled.isPending}
-                    className="px-2"
-                    title={k.disabled ? "Enable key" : "Disable key"}
-                  >
-                    {k.disabled ? <ToggleLeft className="h-4 w-4" /> : <ToggleRight className="h-4 w-4" />}
-                  </Button>
-                  <Button variant="danger" onClick={() => remove.mutate(k.id)}>
-                    Revoke
-                  </Button>
-                </div>
-              </div>
-            ))}
+            <div className="divide-y divide-[var(--border)]">
+              {keys.data.keys.map((k) => (
+                <KeyRow
+                  key={k.id}
+                  apiKey={k}
+                  selected={selectedIds.has(k.id)}
+                  onSelect={() => toggleSelect(k.id)}
+                  onToggle={() => toggleDisabled.mutate({ id: k.id, disabled: !k.disabled })}
+                  onRevoke={() => remove.mutate(k.id)}
+                  togglePending={toggleDisabled.isPending}
+                />
+              ))}
+            </div>
           </div>
         )}
       </Card>

@@ -258,35 +258,34 @@ export function StatCard({
   const arrow = delta?.direction === "up" ? "↑" : delta?.direction === "down" ? "↓" : "";
 
   const tone = iconTone === "accent"
-    ? { ring: "bg-accent-100 dark:bg-accent-900/40", icon: "text-accent-600 dark:text-accent-300", glow: "from-accent-500/8 dark:from-accent-400/12" }
+    ? { marker: "bg-secondary-500", icon: "text-secondary-600 dark:text-secondary-300", iconBg: "bg-secondary-50 ring-secondary-200/70 dark:bg-secondary-950/30 dark:ring-secondary-900/60" }
     : iconTone === "warning"
-      ? { ring: "bg-amber-100 dark:bg-amber-900/40", icon: "text-amber-600 dark:text-amber-300", glow: "from-amber-500/8 dark:from-amber-400/12" }
-      : { ring: "bg-red-100 dark:bg-red-900/40", icon: "text-red-600 dark:text-red-300", glow: "from-red-500/8 dark:from-red-400/12" };
+      ? { marker: "bg-amber-500", icon: "text-amber-700 dark:text-amber-300", iconBg: "bg-amber-50 ring-amber-200/70 dark:bg-amber-950/30 dark:ring-amber-900/60" }
+      : { marker: "bg-red-500", icon: "text-red-700 dark:text-red-300", iconBg: "bg-red-50 ring-red-200/70 dark:bg-red-950/30 dark:ring-red-900/60" };
 
   return (
-    <div className="relative flex flex-col justify-between rounded-xl border border-[var(--border)] bg-[var(--bg)] p-5 shadow-sm transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 group overflow-hidden">
-      {/* Accent gradient glow */}
-      <div className={`absolute inset-0 bg-gradient-to-br ${tone.glow} to-transparent`} />
-
-      <div className="relative flex items-center justify-between mb-5">
-        <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">
-          {label}
-        </span>
-        <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${tone.ring}`}>
-          <Icon className={`h-[18px] w-[18px] ${tone.icon}`} strokeWidth={2} />
-        </div>
-      </div>
-
-      <div className="relative">
-        <div className="text-[28px] font-semibold tracking-tight tabular-nums text-[var(--text)]">
-          {value}
-        </div>
-        {delta && (
-          <p className={`mt-1 text-[11px] font-medium ${deltaColor}`}>
-            {arrow} {delta.text}
+    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ring-1 ${tone.iconBg}`}>
+              <Icon className={`h-3.5 w-3.5 ${tone.icon}`} strokeWidth={2} />
+            </span>
+            <p className="truncate text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
+              {label}
+            </p>
+          </div>
+          <p className="mt-3 text-3xl font-semibold tracking-tight tabular-nums text-[var(--text)]">
+            {value}
           </p>
-        )}
+        </div>
+        <span className={`h-9 w-1.5 shrink-0 rounded-full ${tone.marker}`} aria-hidden="true" />
       </div>
+      {delta && (
+        <p className={`mt-3 text-xs font-medium ${deltaColor}`}>
+          {arrow} {delta.text}
+        </p>
+      )}
     </div>
   );
 }
