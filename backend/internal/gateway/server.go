@@ -291,25 +291,19 @@ func (s *Server) routes() chi.Router {
 		s.mountAdmin(r)
 	})
 
+	// OAuth provider redirects (GET) land here. They MUST work without a
+	// dashboard session — state is the CSRF guard — and without depending on
+	// the frontend asset directory. The handler writes a self-contained HTML
+	// page that postMessages the opener and closes the popup, so the same
+	// route works whether or not the dashboard SPA is bundled with the binary.
+	r.Get("/oauth/callback", s.oauthCallback)
+	r.Get("/auth/callback", s.oauthCallback)
+
 	// Serve frontend static files. The dashboard is a Vite SPA; unmatched
 	// paths fall through to index.html so client-side routing works.
-	// OAuth callbacks are intercepted here because they
-	// arrive as a GET redirect from the provider and must not require a
-	// dashboard session — the state parameter provides CSRF protection.
 	if s.frontendDir != "" {
 		fs := http.FileServer(http.Dir(s.frontendDir))
 		r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-			// Only intercept the raw provider redirect (carries code/error). The
-			// post-exchange result redirect (status/message only) falls through to
-			// the SPA so the React callback page can render and postMessage the
-			// opener tab.
-			if r.URL.Path == "/oauth/callback" || r.URL.Path == "/auth/callback" {
-				q := r.URL.Query()
-				if q.Get("code") != "" || q.Get("error") != "" {
-					s.oauthCallback(w, r)
-					return
-				}
-			}
 			path := r.URL.Path
 			if path == "/" {
 				path = "/index.html"

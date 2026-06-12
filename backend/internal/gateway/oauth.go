@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -175,30 +174,28 @@ func (s *Server) oauthExchange(w http.ResponseWriter, r *http.Request) {
 }
 
 // oauthCallback handles the GET redirect from OAuth providers after the user
-// authorizes. It exchanges the code for tokens and redirects the browser to a
-// frontend callback page that notifies the opener tab via postMessage.
+// authorizes. It exchanges the code for tokens and writes a self-contained HTML
+// page that postMessages the opener tab and closes the popup. The HTML response
+// is rendered inline (no SPA dependency) so the flow also works on minimal
+// deployments where the dashboard assets are not bundled alongside the binary.
 func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	provider := r.URL.Query().Get("provider")
 
-	frontendRedirect := func(status, msg string) {
-		// Path-style redirect (no #) — the dashboard SPA uses BrowserRouter, so
-		// the callback page reads status/message from window.location.search.
-		u := fmt.Sprintf("/oauth/callback?status=%s&provider=%s", status, url.QueryEscape(provider))
-		if msg != "" {
-			u += "&message=" + url.QueryEscape(msg)
-		}
-		http.Redirect(w, r, u, http.StatusFound)
+	writeResult := func(status, msg string) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write([]byte(renderOAuthPopupResult(provider, status, msg)))
 	}
 
 	if state == "" {
-		frontendRedirect("error", "missing code or state parameter")
+		writeResult("error", "missing code or state parameter")
 		return
 	}
 
 	sess, ok := s.oauthSessions.Get(state)
 	if !ok {
-		frontendRedirect("error", "session expired or invalid; please restart the sign-in flow")
+		writeResult("error", "session expired or invalid; please restart the sign-in flow")
 		return
 	}
 
@@ -206,18 +203,18 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	if provider == "" {
 		provider = sess.Provider
 	} else if sess.Provider != provider {
-		frontendRedirect("error", "provider mismatch")
+		writeResult("error", "provider mismatch")
 		return
 	}
 
 	if err := s.completeOAuthCallback(r, provider); err != nil {
 		s.log.Warn("oauth callback failed", "provider", provider, "error", err)
-		frontendRedirect("error", err.Error())
+		writeResult("error", err.Error())
 		return
 	}
 
 	s.log.Info("oauth callback success", "provider", provider)
-	frontendRedirect("success", "")
+	writeResult("success", "")
 }
 
 // oauthDeviceCode starts a device-authorization flow and returns the user code
