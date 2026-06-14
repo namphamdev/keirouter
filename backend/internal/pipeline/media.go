@@ -6,6 +6,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/budget"
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
+	"github.com/mydisha/keirouter/backend/internal/limits"
 )
 
 // This file extends the pipeline with the non-chat service kinds: embeddings,
@@ -26,6 +27,7 @@ type MediaOptions struct {
 	TenantID  string
 	ProjectID string
 	APIKeyID  string
+	Limits    limits.EffectiveLimits
 }
 
 // mediaAttempts resolves the ordered attempts for a media request and runs the
@@ -43,12 +45,40 @@ func (p *Pipeline) mediaAttempts(ctx context.Context, opts MediaOptions) ([]disp
 	return p.dispatcher.Plan(ctx, opts.TenantID, opts.Targets, core.NewCapabilitySet())
 }
 
+func (p *Pipeline) acquireMediaLimit(ctx context.Context, opts MediaOptions, estimatedTokens int64) (limits.ReleaseFunc, error) {
+	if p.limiter == nil {
+		return func(int64) {}, nil
+	}
+	provider, model := firstTarget(opts.Targets)
+	release, decision, err := p.limiter.Acquire(ctx, limits.Request{
+		TenantID:        opts.TenantID,
+		ProjectID:       opts.ProjectID,
+		APIKeyID:        opts.APIKeyID,
+		Provider:        provider,
+		Model:           model,
+		EstimatedTokens: estimatedTokens,
+		Limits:          opts.Limits,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !decision.Allowed {
+		return nil, rateLimitError(decision)
+	}
+	return release, nil
+}
+
 // Embeddings runs an embeddings request with fallback.
 func (p *Pipeline) Embeddings(ctx context.Context, req *core.EmbeddingRequest, opts MediaOptions) (*core.EmbeddingResponse, string, error) {
 	attempts, err := p.mediaAttempts(ctx, opts)
 	if err != nil {
 		return nil, "", err
 	}
+	release, err := p.acquireMediaLimit(ctx, opts, estimateEmbeddingTokens(req))
+	if err != nil {
+		return nil, "", err
+	}
+	defer release(0)
 	var lastErr error
 	for _, a := range attempts {
 		conn, ok := a.Conn.(core.MediaConnector)
@@ -77,6 +107,11 @@ func (p *Pipeline) GenerateImage(ctx context.Context, req *core.ImageRequest, op
 	if err != nil {
 		return nil, "", err
 	}
+	release, err := p.acquireMediaLimit(ctx, opts, 1)
+	if err != nil {
+		return nil, "", err
+	}
+	defer release(0)
 	var lastErr error
 	for _, a := range attempts {
 		conn, ok := a.Conn.(core.ImageConnector)
@@ -105,6 +140,11 @@ func (p *Pipeline) Transcribe(ctx context.Context, req *core.TranscriptionReques
 	if err != nil {
 		return nil, "", err
 	}
+	release, err := p.acquireMediaLimit(ctx, opts, 1)
+	if err != nil {
+		return nil, "", err
+	}
+	defer release(0)
 	var lastErr error
 	for _, a := range attempts {
 		conn, ok := a.Conn.(core.TranscriptionConnector)
@@ -133,6 +173,11 @@ func (p *Pipeline) Synthesize(ctx context.Context, req *core.SpeechRequest, opts
 	if err != nil {
 		return nil, "", err
 	}
+	release, err := p.acquireMediaLimit(ctx, opts, int64((len(req.Input)+3)/4))
+	if err != nil {
+		return nil, "", err
+	}
+	defer release(0)
 	var lastErr error
 	for _, a := range attempts {
 		conn, ok := a.Conn.(core.SpeechConnector)
@@ -161,6 +206,11 @@ func (p *Pipeline) Search(ctx context.Context, req *core.SearchRequest, opts Med
 	if err != nil {
 		return nil, "", err
 	}
+	release, err := p.acquireMediaLimit(ctx, opts, 1)
+	if err != nil {
+		return nil, "", err
+	}
+	defer release(0)
 	var lastErr error
 	for _, a := range attempts {
 		conn, ok := a.Conn.(core.SearchConnector)
@@ -189,6 +239,11 @@ func (p *Pipeline) Fetch(ctx context.Context, req *core.FetchRequest, opts Media
 	if err != nil {
 		return nil, "", err
 	}
+	release, err := p.acquireMediaLimit(ctx, opts, 1)
+	if err != nil {
+		return nil, "", err
+	}
+	defer release(0)
 	var lastErr error
 	for _, a := range attempts {
 		conn, ok := a.Conn.(core.FetchConnector)
@@ -209,6 +264,17 @@ func (p *Pipeline) Fetch(ctx context.Context, req *core.FetchRequest, opts Media
 		return resp, a.Target.Provider, nil
 	}
 	return nil, "", orInternal(lastErr)
+}
+
+func estimateEmbeddingTokens(req *core.EmbeddingRequest) int64 {
+	if req == nil {
+		return 0
+	}
+	chars := 0
+	for _, input := range req.Input {
+		chars += len(input)
+	}
+	return int64((chars + 3) / 4)
 }
 
 // noteMediaFailure records a cooldown and reports whether the pipeline should

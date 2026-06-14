@@ -39,18 +39,21 @@ type APIKey struct {
 // Plan is a reusable template for budget limits and model restrictions.
 // API keys inherit plan rules unless they have per-key overrides.
 type Plan struct {
-	ID            string
-	TenantID      string
-	Name          string
-	Description   string
-	LimitMicros   int64
-	LimitTokens   int64
-	Period        string
-	AlertPct      int
-	HardCutoff    bool
-	AllowedModels string // comma-separated patterns, empty = all
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID               string
+	TenantID         string
+	Name             string
+	Description      string
+	LimitMicros      int64
+	LimitTokens      int64
+	RPMLimit         int64
+	TPMLimit         int64
+	ConcurrencyLimit int64
+	Period           string
+	AlertPct         int
+	HardCutoff       bool
+	AllowedModels    string // comma-separated patterns, empty = all
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // AuthKind classifies how an account authenticates upstream.

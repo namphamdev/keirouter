@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 )
@@ -140,20 +139,13 @@ func (c *Cursor) Stream(ctx context.Context, req *core.ChatRequest, creds core.C
 	go func() {
 		defer close(out)
 
-		streamStart := time.Now()
-		ttftReported := false
+		ttft := newTTFTTracker(cfg)
 
 		seen := map[string]bool{}
 		hadTool := false
 
-		reportTTFT := func(ch core.StreamChunk) {
-			if !ttftReported && isMeaningfulChunk(ch) && cfg.OnFirstChunk != nil {
-				ttftReported = true
-				cfg.OnFirstChunk(time.Since(streamStart))
-			}
-		}
-
 		emit := func(ch core.StreamChunk) bool {
+			ttft.maybeReport(ch)
 			select {
 			case out <- ch:
 				return true
@@ -170,27 +162,23 @@ func (c *Cursor) Stream(ctx context.Context, req *core.ChatRequest, creds core.C
 				if !seen[tc.id] {
 					seen[tc.id] = true
 					ch := core.StreamChunk{Type: core.ChunkToolCall, ToolCall: &core.ToolCall{ID: tc.id, Name: tc.name, Arguments: json.RawMessage("")}}
-					reportTTFT(ch)
 					if !emit(ch) {
 						return
 					}
 				}
 				if tc.args != "" && tc.args != "{}" {
 					ch := core.StreamChunk{Type: core.ChunkToolCall, ToolCall: &core.ToolCall{ID: tc.id, Arguments: json.RawMessage(tc.args)}}
-					reportTTFT(ch)
 					if !emit(ch) {
 						return
 					}
 				}
 			case r.thinking != "":
 				ch := core.StreamChunk{Type: core.ChunkThinking, Delta: r.thinking}
-				reportTTFT(ch)
 				if !emit(ch) {
 					return
 				}
 			case r.text != "":
 				ch := core.StreamChunk{Type: core.ChunkText, Delta: r.text}
-				reportTTFT(ch)
 				if !emit(ch) {
 					return
 				}

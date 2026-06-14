@@ -54,24 +54,23 @@ export function UsagePage() {
         title="Usage"
         icon={Activity}
         description="Monitor request flow and provider distribution."
-      />
-
-      <div className="mb-6 flex justify-end">
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] p-1">
-            {periods.map((p) => (
-              <button key={p.value} onClick={() => setPeriod(p.value)}
-                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${period === p.value ? "bg-accent-600 text-white shadow-sm" : "text-[var(--text-muted)] hover:text-[var(--text)]"}`}>
-                {p.label}
-              </button>
-            ))}
+        action={
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] p-1">
+              {periods.map((p) => (
+                <button key={p.value} onClick={() => setPeriod(p.value)}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${period === p.value ? "bg-accent-600 text-white shadow-sm" : "text-[var(--text-muted)] hover:text-[var(--text)]"}`}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <button onClick={handleRefresh}
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text)]">
+              <RefreshCw className="h-4 w-4" />
+            </button>
           </div>
-          <button onClick={handleRefresh}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text)]">
-            <RefreshCw className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
+        }
+      />
 
       {insights.isLoading ? <Spinner />
         : insights.isError ? <ErrorCard message="Failed to load usage. Is the backend running?" />

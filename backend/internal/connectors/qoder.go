@@ -502,8 +502,7 @@ func (c *Qoder) Stream(ctx context.Context, req *core.ChatRequest, creds core.Cr
 		defer close(out)
 		defer resp.Body.Close()
 
-		streamStart := time.Now()
-		ttftReported := false
+		ttft := newTTFTTracker(cfg)
 
 		scanner := sseScanner(resp.Body)
 		for scanner.Scan() {
@@ -531,10 +530,7 @@ func (c *Qoder) Stream(ctx context.Context, req *core.ChatRequest, creds core.Cr
 				continue // skip malformed chunk
 			}
 			for _, ch := range chunks {
-				if !ttftReported && isMeaningfulChunk(ch) && cfg.OnFirstChunk != nil {
-					ttftReported = true
-					cfg.OnFirstChunk(time.Since(streamStart))
-				}
+				ttft.maybeReport(ch)
 				select {
 				case out <- ch:
 				case <-ctx.Done():

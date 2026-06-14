@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -1059,6 +1060,7 @@ func (s *Server) adminListPlans(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{
 			"id": p.ID, "name": p.Name, "description": p.Description,
 			"limit_micros": p.LimitMicros, "limit_tokens": p.LimitTokens,
+			"rpm_limit": p.RPMLimit, "tpm_limit": p.TPMLimit, "concurrency_limit": p.ConcurrencyLimit,
 			"period": p.Period, "alert_pct": p.AlertPct, "hard_cutoff": p.HardCutoff,
 			"allowed_models": store.GetPlanAllowedModels(p),
 			"key_count":      keyCount,
@@ -1070,14 +1072,17 @@ func (s *Server) adminListPlans(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminCreatePlan(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name          string   `json:"name"`
-		Description   string   `json:"description"`
-		LimitUSD      float64  `json:"limit_usd"`
-		LimitTokens   int64    `json:"limit_tokens"`
-		Period        string   `json:"period"`
-		AlertPct      int      `json:"alert_pct"`
-		HardCutoff    *bool    `json:"hard_cutoff"`
-		AllowedModels []string `json:"allowed_models"`
+		Name             string   `json:"name"`
+		Description      string   `json:"description"`
+		LimitUSD         float64  `json:"limit_usd"`
+		LimitTokens      int64    `json:"limit_tokens"`
+		RPMLimit         int64    `json:"rpm_limit"`
+		TPMLimit         int64    `json:"tpm_limit"`
+		ConcurrencyLimit int64    `json:"concurrency_limit"`
+		Period           string   `json:"period"`
+		AlertPct         int      `json:"alert_pct"`
+		HardCutoff       *bool    `json:"hard_cutoff"`
+		AllowedModels    []string `json:"allowed_models"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -1092,6 +1097,10 @@ func (s *Server) adminCreatePlan(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.LimitTokens < 0 {
 		writeError(w, http.StatusBadRequest, "limit_tokens must not be negative")
+		return
+	}
+	if body.RPMLimit < 0 || body.TPMLimit < 0 || body.ConcurrencyLimit < 0 {
+		writeError(w, http.StatusBadRequest, "rate limits must not be negative")
 		return
 	}
 	period, ok := normalizeBudgetPeriod(body.Period)
@@ -1111,18 +1120,21 @@ func (s *Server) adminCreatePlan(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	p := store.Plan{
-		ID:            uuid.NewString(),
-		TenantID:      adminTenant,
-		Name:          body.Name,
-		Description:   body.Description,
-		LimitMicros:   int64(body.LimitUSD * 1_000_000),
-		LimitTokens:   body.LimitTokens,
-		Period:        period,
-		AlertPct:      alertPct,
-		HardCutoff:    hardCutoff,
-		AllowedModels: store.SetPlanAllowedModels(body.AllowedModels),
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:               uuid.NewString(),
+		TenantID:         adminTenant,
+		Name:             body.Name,
+		Description:      body.Description,
+		LimitMicros:      int64(body.LimitUSD * 1_000_000),
+		LimitTokens:      body.LimitTokens,
+		RPMLimit:         body.RPMLimit,
+		TPMLimit:         body.TPMLimit,
+		ConcurrencyLimit: body.ConcurrencyLimit,
+		Period:           period,
+		AlertPct:         alertPct,
+		HardCutoff:       hardCutoff,
+		AllowedModels:    store.SetPlanAllowedModels(body.AllowedModels),
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 	if err := s.db.Plans().Create(r.Context(), p); err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
@@ -1131,6 +1143,7 @@ func (s *Server) adminCreatePlan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": p.ID, "name": p.Name, "description": p.Description,
 		"limit_micros": p.LimitMicros, "limit_tokens": p.LimitTokens,
+		"rpm_limit": p.RPMLimit, "tpm_limit": p.TPMLimit, "concurrency_limit": p.ConcurrencyLimit,
 		"period": p.Period, "alert_pct": p.AlertPct, "hard_cutoff": p.HardCutoff,
 		"allowed_models": store.GetPlanAllowedModels(p),
 	})
@@ -1149,14 +1162,17 @@ func (s *Server) adminUpdatePlan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Name          *string  `json:"name"`
-		Description   *string  `json:"description"`
-		LimitUSD      *float64 `json:"limit_usd"`
-		LimitTokens   *int64   `json:"limit_tokens"`
-		Period        *string  `json:"period"`
-		AlertPct      *int     `json:"alert_pct"`
-		HardCutoff    *bool    `json:"hard_cutoff"`
-		AllowedModels []string `json:"allowed_models"`
+		Name             *string  `json:"name"`
+		Description      *string  `json:"description"`
+		LimitUSD         *float64 `json:"limit_usd"`
+		LimitTokens      *int64   `json:"limit_tokens"`
+		RPMLimit         *int64   `json:"rpm_limit"`
+		TPMLimit         *int64   `json:"tpm_limit"`
+		ConcurrencyLimit *int64   `json:"concurrency_limit"`
+		Period           *string  `json:"period"`
+		AlertPct         *int     `json:"alert_pct"`
+		HardCutoff       *bool    `json:"hard_cutoff"`
+		AllowedModels    []string `json:"allowed_models"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -1185,6 +1201,27 @@ func (s *Server) adminUpdatePlan(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		existing.LimitTokens = *body.LimitTokens
+	}
+	if body.RPMLimit != nil {
+		if *body.RPMLimit < 0 {
+			writeError(w, http.StatusBadRequest, "rpm_limit must not be negative")
+			return
+		}
+		existing.RPMLimit = *body.RPMLimit
+	}
+	if body.TPMLimit != nil {
+		if *body.TPMLimit < 0 {
+			writeError(w, http.StatusBadRequest, "tpm_limit must not be negative")
+			return
+		}
+		existing.TPMLimit = *body.TPMLimit
+	}
+	if body.ConcurrencyLimit != nil {
+		if *body.ConcurrencyLimit < 0 {
+			writeError(w, http.StatusBadRequest, "concurrency_limit must not be negative")
+			return
+		}
+		existing.ConcurrencyLimit = *body.ConcurrencyLimit
 	}
 	if body.Period != nil {
 		period, ok := normalizeBudgetPeriod(*body.Period)
@@ -1216,6 +1253,7 @@ func (s *Server) adminUpdatePlan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": existing.ID, "name": existing.Name, "description": existing.Description,
 		"limit_micros": existing.LimitMicros, "limit_tokens": existing.LimitTokens,
+		"rpm_limit": existing.RPMLimit, "tpm_limit": existing.TPMLimit, "concurrency_limit": existing.ConcurrencyLimit,
 		"period": existing.Period, "alert_pct": existing.AlertPct, "hard_cutoff": existing.HardCutoff,
 		"allowed_models": store.GetPlanAllowedModels(existing),
 	})
@@ -2099,19 +2137,21 @@ func (s *Server) adminTestProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SSRF Protection: Validate proxy URL before use
-	if err := httputil.ValidateProxyURL(body.ProxyURL); err != nil {
-		s.log.Warn("blocked suspicious proxy URL in test", "url", body.ProxyURL, "error", err)
-		writeError(w, http.StatusBadRequest, "invalid proxyUrl: URL blocked by security policy")
+	// Validate proxy URL syntax only — proxy URLs are admin-configured trusted
+	// infrastructure, so SSRF restrictions (which guard outbound target URLs)
+	// do not apply here. Localhost proxies (Clash, V2Ray, etc.) are expected.
+	parsed, err := url.Parse(body.ProxyURL)
+	if err != nil || parsed.Host == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "invalid proxy URL: " + err.Error()})
+		return
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" && scheme != "socks5" {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "unsupported proxy scheme: " + parsed.Scheme})
 		return
 	}
 
 	start := time.Now()
-	parsed, err := url.Parse(body.ProxyURL)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "invalid proxy URL: " + err.Error()})
-		return
-	}
 	transport := &http.Transport{Proxy: http.ProxyURL(parsed)}
 	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
 	req, err := http.NewRequestWithContext(r.Context(), "GET", "https://httpbin.org/ip", nil)
@@ -2130,11 +2170,28 @@ func (s *Server) adminTestProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":        true,
+	result := map[string]any{
+		"ok":        resp.StatusCode < 400,
 		"status":    resp.StatusCode,
 		"elapsedMs": elapsed.Milliseconds(),
-	})
+	}
+
+	// Parse exit IP from httpbin.org/ip response body.
+	if resp.StatusCode < 400 {
+		var ipInfo struct {
+			Origin string `json:"origin"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&ipInfo); err == nil && ipInfo.Origin != "" {
+			result["exitIP"] = ipInfo.Origin
+		}
+	} else {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		if len(errBody) > 0 {
+			result["error"] = string(errBody)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 // ---- helpers ----------------------------------------------------------------

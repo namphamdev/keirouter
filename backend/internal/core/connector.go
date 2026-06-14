@@ -11,10 +11,16 @@ import (
 // support it wire OnFirstChunk into their SSE scanning so the pipeline can
 // measure time-to-first-token (TTFT).
 type StreamConfig struct {
+	// StartedAt is the absolute time the upstream call was initiated (set by
+	// the pipeline before calling Stream/StreamRaw). Connectors use it as the
+	// TTFT reference point so the measurement includes HTTP connection setup
+	// and header wait time. When zero, connectors fall back to their own
+	// scan-start time (less accurate).
+	StartedAt time.Time
+
 	// OnFirstChunk, if non-nil, is called once when the first meaningful
 	// chunk (text, thinking, or tool_call) arrives from the upstream. The
-	// elapsed duration is measured from when the connector opened the
-	// HTTP connection (not from pipeline entry).
+	// elapsed duration is measured from StartedAt (or scan start when zero).
 	OnFirstChunk func(elapsed time.Duration)
 }
 

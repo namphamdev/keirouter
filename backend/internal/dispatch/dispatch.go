@@ -107,15 +107,24 @@ type RoutingSource interface {
 	SetAccountAffinity(ctx context.Context, state store.AccountAffinity) error
 }
 
+// GlobalProxyReader provides dynamic global outbound proxy configuration.
+// The dispatcher consults this as a fallback when an account's credentials
+// carry no per-account proxy (from proxy pool bindings).
+type GlobalProxyReader interface {
+	ProxyURL() string
+	NoProxy() string
+}
+
 // Dispatcher walks fallback chains, yielding resolved attempts.
 type Dispatcher struct {
-	conns     ConnectorSource
-	accounts  *store.AccountRepo
-	vault     *vault.Vault
-	pools     proxy.PoolSource
-	refresher TokenRefresher
-	routing   RoutingSource
-	health    HealthSource
+	conns       ConnectorSource
+	accounts    *store.AccountRepo
+	vault       *vault.Vault
+	pools       proxy.PoolSource
+	refresher   TokenRefresher
+	routing     RoutingSource
+	health      HealthSource
+	proxyReader GlobalProxyReader
 	// defaultCooldown is applied to an account when an error carries no
 	// upstream-specified Retry-After.
 	defaultCooldown time.Duration
@@ -144,6 +153,10 @@ func (d *Dispatcher) SetRoutingSource(r RoutingSource) { d.routing = r }
 
 // SetHealthSource installs background account/model health state.
 func (d *Dispatcher) SetHealthSource(h HealthSource) { d.health = h }
+
+// SetGlobalProxy installs a global outbound proxy reader, consulted as a
+// fallback when an account has no per-account proxy pool binding.
+func (d *Dispatcher) SetGlobalProxy(r GlobalProxyReader) { d.proxyReader = r }
 
 // PlanOptions carries per-request strategy configuration.
 type PlanOptions struct {
@@ -275,6 +288,14 @@ func (d *Dispatcher) PlanWith(ctx context.Context, tenantID string, targets []Ta
 				if perr := proxy.ResolvePool(ctx, d.pools, acc.ProxyPoolID, &creds); perr != nil {
 					lastReason = perr.Error()
 					continue
+				}
+			}
+			// Apply global outbound proxy as fallback when no per-account
+			// proxy pool binding was resolved.
+			if d.proxyReader != nil && creds.ProxyURL == "" && creds.RelayURL == "" {
+				if purl := d.proxyReader.ProxyURL(); purl != "" {
+					creds.ProxyURL = purl
+					creds.NoProxy = d.proxyReader.NoProxy()
 				}
 			}
 			attempts = append(attempts, Attempt{

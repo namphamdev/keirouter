@@ -24,6 +24,7 @@ type Config struct {
 	Security SecurityConfig `koanf:"security"`
 	Cache    CacheConfig    `koanf:"cache"`
 	Meter    MeterConfig    `koanf:"meter"`
+	Limits   LimitsConfig   `koanf:"limits"`
 	Health   HealthConfig   `koanf:"health"`
 	Log      LogConfig      `koanf:"log"`
 	Data     DataConfig     `koanf:"data"`
@@ -122,6 +123,25 @@ type MeterConfig struct {
 	ShutdownFlushTimeout time.Duration `koanf:"shutdown_flush_timeout"`
 }
 
+// LimitsConfig controls per-key request rate limiting.
+type LimitsConfig struct {
+	// Enabled turns request limiting on. When false, limiter is bypassed.
+	Enabled bool `koanf:"enabled"`
+	// Backend is "memory" for MVP. "redis" is reserved for distributed limits.
+	Backend string `koanf:"backend"`
+	// DefaultRPM/TPM/Concurrency apply to keys with no assigned plan.
+	// Zero means unlimited.
+	DefaultRPM         int64 `koanf:"default_rpm"`
+	DefaultTPM         int64 `koanf:"default_tpm"`
+	DefaultConcurrency int64 `koanf:"default_concurrency"`
+	// Window is the fixed counting window for RPM/TPM.
+	Window time.Duration `koanf:"window"`
+	// CleanupInterval controls stale bucket cleanup for memory backend.
+	CleanupInterval time.Duration `koanf:"cleanup_interval"`
+	// RedisURL is reserved for the future redis backend.
+	RedisURL string `koanf:"redis_url"`
+}
+
 // HealthConfig controls background account/model health probes.
 type HealthConfig struct {
 	Enabled              bool          `koanf:"enabled"`
@@ -185,6 +205,12 @@ func Default() Config {
 			QueueSize:            10000,
 			FullQueuePolicy:      "sync",
 			ShutdownFlushTimeout: 5 * time.Second,
+		},
+		Limits: LimitsConfig{
+			Enabled:         false,
+			Backend:         "memory",
+			Window:          time.Minute,
+			CleanupInterval: time.Minute,
 		},
 		Health: HealthConfig{
 			Enabled:              true,
@@ -268,6 +294,29 @@ func (c Config) validate() error {
 	}
 	if c.Meter.ShutdownFlushTimeout <= 0 {
 		c.Meter.ShutdownFlushTimeout = 5 * time.Second
+	}
+	switch c.Limits.Backend {
+	case "", "memory":
+	default:
+		return fmt.Errorf("limits.backend must be memory, got %q", c.Limits.Backend)
+	}
+	if c.Limits.Backend == "" {
+		c.Limits.Backend = "memory"
+	}
+	if c.Limits.DefaultRPM < 0 {
+		return fmt.Errorf("limits.default_rpm must not be negative")
+	}
+	if c.Limits.DefaultTPM < 0 {
+		return fmt.Errorf("limits.default_tpm must not be negative")
+	}
+	if c.Limits.DefaultConcurrency < 0 {
+		return fmt.Errorf("limits.default_concurrency must not be negative")
+	}
+	if c.Limits.Window <= 0 {
+		c.Limits.Window = time.Minute
+	}
+	if c.Limits.CleanupInterval <= 0 {
+		c.Limits.CleanupInterval = time.Minute
 	}
 	if c.Health.Interval <= 0 {
 		c.Health.Interval = 30 * time.Second

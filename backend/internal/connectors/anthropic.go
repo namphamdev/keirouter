@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/transform"
@@ -153,8 +152,7 @@ func (c *Anthropic) Stream(ctx context.Context, req *core.ChatRequest, creds cor
 		defer close(out)
 		defer resp.Body.Close()
 
-		streamStart := time.Now()
-		ttftReported := false
+		ttft := newTTFTTracker(cfg)
 
 		scanner := sseScanner(resp.Body)
 		for scanner.Scan() {
@@ -179,10 +177,7 @@ func (c *Anthropic) Stream(ctx context.Context, req *core.ChatRequest, creds cor
 						ch.ToolCall.Name = orig
 					}
 				}
-				if !ttftReported && isMeaningfulChunk(ch) && cfg.OnFirstChunk != nil {
-					ttftReported = true
-					cfg.OnFirstChunk(time.Since(streamStart))
-				}
+				ttft.maybeReport(ch)
 				select {
 				case out <- ch:
 				case <-ctx.Done():

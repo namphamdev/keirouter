@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/budget"
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
+	"github.com/mydisha/keirouter/backend/internal/limits"
 	"github.com/mydisha/keirouter/backend/internal/pipeline"
 	"github.com/mydisha/keirouter/backend/internal/store"
 	"github.com/mydisha/keirouter/backend/internal/transform"
@@ -216,12 +218,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 	affinityKey := requestAffinityKey(r, req)
 	body = nil // release body for GC — no longer needed
 
+	effectiveLimits, err := s.effectiveLimits(r.Context(), key)
+	if err != nil {
+		s.consoleLog.Logf("ERROR", "limit resolution failed: %v", err)
+		writeError(w, http.StatusInternalServerError, "limit resolution failed")
+		return
+	}
+
 	opts := pipeline.Options{
 		Targets:  resolved.Targets,
 		PlanOpts: s.endpointPlanOptions(r.Context(), resolved.PlanOpts, resolved.Targets, affinityKey),
 		Slimmer:  s.slimmerConfig(),
 		Terse:    s.terseConfig(),
 		Caveman:  s.cavemanConfig(),
+		Limits:   effectiveLimits,
 	}
 
 	if req.Stream {
@@ -231,6 +241,25 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request, dialect core
 	}
 	s.consoleLog.Logf("DEBUG", "  entering unary path")
 	s.unaryChat(w, r, codec, req, opts, key.Name)
+}
+
+func (s *Server) effectiveLimits(ctx context.Context, key store.APIKey) (limits.EffectiveLimits, error) {
+	if key.PlanID != "" {
+		plan, err := s.db.Plans().Get(ctx, key.PlanID)
+		if err != nil {
+			return limits.EffectiveLimits{}, err
+		}
+		return limits.EffectiveLimits{
+			RPM:         plan.RPMLimit,
+			TPM:         plan.TPMLimit,
+			Concurrency: plan.ConcurrencyLimit,
+		}, nil
+	}
+	return limits.EffectiveLimits{
+		RPM:         s.cfg.Limits.DefaultRPM,
+		TPM:         s.cfg.Limits.DefaultTPM,
+		Concurrency: s.cfg.Limits.DefaultConcurrency,
+	}, nil
 }
 
 // unaryChat runs a non-streaming request and renders the response.
@@ -435,6 +464,9 @@ func (s *Server) writeProviderError(w http.ResponseWriter, err error) {
 		status = http.StatusUnauthorized
 	case core.ErrRateLimit:
 		status = http.StatusTooManyRequests
+		if pe.RetryAfter > 0 {
+			w.Header().Set("Retry-After", fmt.Sprintf("%.0f", pe.RetryAfter.Seconds()))
+		}
 	case core.ErrQuotaExhausted, core.ErrBudgetBlocked:
 		status = http.StatusPaymentRequired
 	case core.ErrTimeout:

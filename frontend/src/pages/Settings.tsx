@@ -396,48 +396,82 @@ function ProxySettings({
   local: EndpointSettings;
   update: (patch: Partial<EndpointSettings>) => void;
 }) {
-  const [testResult, setTestResult] = useState<string>("");
+  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
 
   const testProxy = async () => {
     if (!local.outbound_proxy_url) return;
     setTesting(true);
-    setTestResult("");
+    setTestResult(null);
     try {
       const res = await api.testProxy(local.outbound_proxy_url);
       if (res.ok) {
-        setTestResult(`Proxy test OK (${res.status}) in ${res.elapsedMs}ms`);
+        const ip = res.exitIP ? ` — exit IP: ${res.exitIP}` : "";
+        setTestResult({ ok: true, text: `Proxy OK (${res.elapsedMs}ms)${ip}` });
       } else {
-        setTestResult(`Proxy test failed: ${res.error}`);
+        setTestResult({ ok: false, text: `Failed: ${res.error || `HTTP ${res.status}`}` });
       }
     } catch (e) {
-      setTestResult(`Error: ${(e as Error).message}`);
+      setTestResult({ ok: false, text: (e as Error).message });
     } finally {
       setTesting(false);
     }
   };
 
+  const proxyEnabled = local.outbound_proxy_enabled;
+  const hasURL = !!local.outbound_proxy_url;
+  const statusLabel = !proxyEnabled
+    ? "Inactive"
+    : hasURL
+      ? "Active"
+      : "No URL";
+  const statusTone = !proxyEnabled
+    ? "bg-[var(--bg-subtle)] text-[var(--text-muted)]"
+    : hasURL
+      ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"
+      : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200";
+
+  const detectedScheme = (() => {
+    if (!local.outbound_proxy_url) return null;
+    try {
+      const s = new URL(local.outbound_proxy_url).protocol.replace(":", "").toLowerCase();
+      if (["http", "https", "socks5"].includes(s)) return s;
+    } catch { /* ignore */ }
+    return null;
+  })();
+
   return (
     <Card>
       <SectionHeader
         title="Network Proxy"
-        description="Configure outbound proxy for provider requests."
+        description="Route all provider outbound requests through an HTTP/HTTPS/SOCKS5 proxy."
         icon={Wifi}
       />
       <div className="divide-y divide-[var(--border)] border-t border-[var(--border)]">
         <div className="flex items-center justify-between gap-4 px-6 py-4">
-          <div>
-            <p className="text-sm font-medium">Outbound Proxy</p>
-            <p className="mt-0.5 text-xs text-[var(--text-muted)]">Enable proxy for OAuth + provider outbound requests.</p>
+          <div className="flex items-center gap-3">
+            <div>
+              <p className="text-sm font-medium">Outbound Proxy</p>
+              <p className="mt-0.5 text-xs text-[var(--text-muted)]">Applies to all provider and OAuth requests when no per-account proxy is set.</p>
+            </div>
+            <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusTone}`}>
+              {statusLabel}
+            </span>
           </div>
           <Toggle
-            checked={local.outbound_proxy_enabled}
+            checked={proxyEnabled}
             onChange={(v) => update({ outbound_proxy_enabled: v })}
           />
         </div>
 
-        {local.outbound_proxy_enabled && (
+        {proxyEnabled && (
           <>
+            {proxyEnabled && !hasURL && (
+              <div className="flex items-center gap-2 bg-amber-50 px-6 py-2.5 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+                <Info className="h-3.5 w-3.5 shrink-0" />
+                <span>Proxy is enabled but no URL is configured. Enter a proxy URL below.</span>
+              </div>
+            )}
             <div className="px-6 py-4">
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <Field label="Proxy URL">
@@ -446,7 +480,14 @@ function ProxySettings({
                     value={local.outbound_proxy_url}
                     onChange={(e) => update({ outbound_proxy_url: e.target.value })}
                   />
-                  <p className="mt-1 text-xs text-[var(--text-muted)]">Leave empty to inherit env proxy.</p>
+                  <div className="mt-1 flex items-center gap-2">
+                    {detectedScheme && (
+                      <span className="inline-flex items-center rounded bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-muted)]">
+                        {detectedScheme.toUpperCase()}
+                      </span>
+                    )}
+                    <p className="text-xs text-[var(--text-muted)]">Supports http, https, socks5.</p>
+                  </div>
                 </Field>
                 <Field label="No Proxy">
                   <Input
@@ -454,17 +495,17 @@ function ProxySettings({
                     value={local.outbound_no_proxy}
                     onChange={(e) => update({ outbound_no_proxy: e.target.value })}
                   />
-                  <p className="mt-1 text-xs text-[var(--text-muted)]">Comma-separated hostnames to bypass.</p>
+                  <p className="mt-1 text-xs text-[var(--text-muted)]">Comma-separated hostnames to bypass. Use <code className="rounded bg-[var(--bg-subtle)] px-1">*</code> for all.</p>
                 </Field>
               </div>
             </div>
             <div className="flex items-center gap-3 px-6 py-4">
-              <Button variant="ghost" onClick={testProxy} disabled={testing || !local.outbound_proxy_url}>
+              <Button variant="ghost" onClick={testProxy} disabled={testing || !hasURL}>
                 {testing ? "Testing…" : "Test proxy URL"}
               </Button>
               {testResult && (
-                <span className={`text-xs ${testResult.startsWith("Proxy test OK") ? "text-green-600 dark:text-green-400" : "text-[color:var(--color-danger)]"}`}>
-                  {testResult}
+                <span className={`text-xs ${testResult.ok ? "text-green-600 dark:text-green-400" : "text-[color:var(--color-danger)]"}`}>
+                  {testResult.text}
                 </span>
               )}
             </div>

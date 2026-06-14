@@ -313,6 +313,15 @@ func (s *Server) adminUpdateEndpointSettings(w http.ResponseWriter, r *http.Requ
 		)
 	}
 
+	// Notify dispatcher of proxy changes so they take effect without restart.
+	if s.proxyNotifier != nil {
+		s.proxyNotifier.NotifyProxy(
+			current.OutboundProxyEnabled,
+			current.OutboundProxyURL,
+			current.OutboundNoProxy,
+		)
+	}
+
 	writeJSON(w, http.StatusOK, current)
 }
 

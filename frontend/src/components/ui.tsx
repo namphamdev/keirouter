@@ -11,7 +11,7 @@ import { AlertCircle, X, type LucideIcon } from "lucide-react";
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
     <div
-      className={`rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-[var(--shadow-card)] ${className}`}
+      className={`rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-sm ring-1 ring-inset ring-white/50 dark:ring-0 overflow-hidden ${className}`}
     >
       {children}
     </div>

@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/transform"
@@ -190,8 +189,7 @@ func (c *Vertex) Stream(ctx context.Context, req *core.ChatRequest, creds core.C
 		defer close(out)
 		defer resp.Body.Close()
 
-		streamStart := time.Now()
-		ttftReported := false
+		ttft := newTTFTTracker(cfg)
 
 		scanner := sseScanner(resp.Body)
 		for scanner.Scan() {
@@ -210,10 +208,7 @@ func (c *Vertex) Stream(ctx context.Context, req *core.ChatRequest, creds core.C
 				continue
 			}
 			for _, ch := range chunks {
-				if !ttftReported && isMeaningfulChunk(ch) && cfg.OnFirstChunk != nil {
-					ttftReported = true
-					cfg.OnFirstChunk(time.Since(streamStart))
-				}
+				ttft.maybeReport(ch)
 				select {
 				case out <- ch:
 				case <-ctx.Done():

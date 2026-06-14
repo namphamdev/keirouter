@@ -24,11 +24,16 @@ func (s *Server) mediaOptions(r *http.Request, model string) (pipeline.MediaOpti
 	if err != nil {
 		return pipeline.MediaOptions{}, err
 	}
+	effectiveLimits, err := s.effectiveLimits(r.Context(), key)
+	if err != nil {
+		return pipeline.MediaOptions{}, err
+	}
 	return pipeline.MediaOptions{
 		Targets:   resolved.Targets,
 		TenantID:  tenantID,
 		ProjectID: key.ProjectID,
 		APIKeyID:  key.ID,
+		Limits:    effectiveLimits,
 	}, nil
 }
 

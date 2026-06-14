@@ -587,7 +587,7 @@ function ChainCard({ chain: c, providers, onEdit, onDelete, onToggleRR }: {
   };
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-sm transition-all hover:border-[var(--text-muted)]">
+    <Card className="transition-all hover:border-[var(--text-muted)]">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[var(--border)] bg-[var(--bg-subtle)]/50 px-5 py-4">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-500/10 text-accent-600 dark:bg-accent-500/20 dark:text-accent-400">
@@ -690,7 +690,7 @@ function ChainCard({ chain: c, providers, onEdit, onDelete, onToggleRR }: {
           <ChainTopology chain={c} providers={providers} />
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 

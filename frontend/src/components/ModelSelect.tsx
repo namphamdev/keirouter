@@ -17,7 +17,7 @@ export function formatTokenLimit(value: string): string {
   return n.toLocaleString("id-ID");
 }
 
-/** Text input that displays formatted token count on blur, raw on focus. */
+/** Text input that displays formatted token count continuously. */
 export function FormattedTokenInput({
   value,
   onChange,
@@ -27,16 +27,13 @@ export function FormattedTokenInput({
   onChange: (v: string) => void;
   placeholder?: string;
 }) {
-  const [focused, setFocused] = useState(false);
   const formatted = formatTokenLimit(value);
 
   return (
     <input
       type="text"
       inputMode="numeric"
-      value={focused ? value : formatted}
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
+      value={formatted}
       onChange={(e) => {
         const raw = e.target.value.replace(/[^\d]/g, "");
         onChange(raw);

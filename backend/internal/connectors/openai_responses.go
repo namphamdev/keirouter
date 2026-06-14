@@ -145,8 +145,7 @@ func (c *OpenAIResponses) Stream(ctx context.Context, req *core.ChatRequest, cre
 		defer close(out)
 		defer resp.Body.Close()
 
-		streamStart := time.Now()
-		ttftReported := false
+		ttft := newTTFTTracker(cfg)
 		terminalSeen := false
 
 		scanner := sseScanner(resp.Body)
@@ -174,10 +173,7 @@ func (c *OpenAIResponses) Stream(ctx context.Context, req *core.ChatRequest, cre
 				terminalSeen = true
 			}
 			for _, ch := range chunks {
-				if !ttftReported && isMeaningfulChunk(ch) && cfg.OnFirstChunk != nil {
-					ttftReported = true
-					cfg.OnFirstChunk(time.Since(streamStart))
-				}
+				ttft.maybeReport(ch)
 				select {
 				case out <- ch:
 				case <-ctx.Done():

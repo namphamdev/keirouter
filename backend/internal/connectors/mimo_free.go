@@ -344,8 +344,7 @@ func (c *MimoFree) Stream(ctx context.Context, req *core.ChatRequest, creds core
 		defer close(out)
 		defer resp.Body.Close()
 
-		streamStart := time.Now()
-		ttftReported := false
+		ttft := newTTFTTracker(cfg)
 
 		scanner := sseScanner(resp.Body)
 		for scanner.Scan() {
@@ -364,10 +363,7 @@ func (c *MimoFree) Stream(ctx context.Context, req *core.ChatRequest, creds core
 				continue
 			}
 			for _, ch := range chunks {
-				if !ttftReported && isMeaningfulChunk(ch) && cfg.OnFirstChunk != nil {
-					ttftReported = true
-					cfg.OnFirstChunk(time.Since(streamStart))
-				}
+				ttft.maybeReport(ch)
 				select {
 				case out <- ch:
 				case <-ctx.Done():

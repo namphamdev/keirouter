@@ -92,7 +92,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
 function ToastViewport({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: number) => void }) {
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-60 flex w-full max-w-sm flex-col gap-2.5">
+    <div className="pointer-events-none fixed top-4 right-4 z-60 flex w-full max-w-sm flex-col gap-2.5">
       {toasts.map((t) => (
         <ToastCard key={t.id} toast={t} onDismiss={() => onDismiss(t.id)} />
       ))}
@@ -107,21 +107,21 @@ const toneMeta: Record<
   success: {
     icon: CheckCircle2,
     iconClass: "text-emerald-600 dark:text-emerald-400",
-    bg: "bg-emerald-50/80 dark:bg-emerald-950/40",
+    bg: "bg-emerald-50 dark:bg-emerald-950",
     border: "border-emerald-200 dark:border-emerald-800/60",
     progressClass: "bg-emerald-500",
   },
   error: {
     icon: AlertCircle,
     iconClass: "text-red-600 dark:text-red-400",
-    bg: "bg-red-50/80 dark:bg-red-950/40",
+    bg: "bg-red-50 dark:bg-red-950",
     border: "border-red-200 dark:border-red-800/60",
     progressClass: "bg-red-500",
   },
   info: {
     icon: Info,
     iconClass: "text-blue-600 dark:text-blue-400",
-    bg: "bg-blue-50/80 dark:bg-blue-950/40",
+    bg: "bg-blue-50 dark:bg-blue-950",
     border: "border-blue-200 dark:border-blue-800/60",
     progressClass: "bg-blue-500",
   },
@@ -133,7 +133,7 @@ function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
   return (
     <div
       role="status"
-      className={`pointer-events-auto relative overflow-hidden rounded-xl border ${meta.border} ${meta.bg} shadow-lg shadow-black/5 backdrop-blur-sm animate-[toast-in_0.2s_ease-out] dark:shadow-black/20`}
+      className={`pointer-events-auto relative overflow-hidden rounded-xl border ${meta.border} ${meta.bg} shadow-lg shadow-black/5 animate-[toast-in_0.2s_ease-out] dark:shadow-black/20`}
     >
       <div className="flex items-start gap-3 px-4 py-3">
         <Icon className={`mt-0.5 h-5 w-5 shrink-0 ${meta.iconClass}`} strokeWidth={2} />

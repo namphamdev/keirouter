@@ -84,24 +84,23 @@ export function OverviewPage() {
         title="Overview"
         icon={Activity}
         description="Usage and performance across all providers."
+        action={
+          <div className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2">
+            <Calendar className="h-4 w-4 text-[var(--text-muted)]" />
+            <select
+              value={period}
+              onChange={(e) => setPeriod(e.target.value)}
+              className="bg-transparent text-sm font-medium focus:outline-none cursor-pointer"
+            >
+              {periods.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        }
       />
-
-      <div className="mb-6 flex justify-end">
-        <div className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2">
-          <Calendar className="h-4 w-4 text-[var(--text-muted)]" />
-          <select
-            value={period}
-            onChange={(e) => setPeriod(e.target.value)}
-            className="bg-transparent text-sm font-medium focus:outline-none"
-          >
-            {periods.map((p) => (
-              <option key={p.value} value={p.value}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
 
       {insights.isLoading ? (
         <Spinner />

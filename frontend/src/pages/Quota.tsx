@@ -81,8 +81,19 @@ export function QuotaPage() {
   const [countdown, setCountdown] = useState(REFRESH_INTERVAL / 1000);
   const countdownRef = useRef(REFRESH_INTERVAL / 1000);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [activeTab, setActiveTab] = useState<"paid" | "free">("paid");
+  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
   const qc = useQueryClient();
   const toast = useToast();
+
+  const toggleProvider = (provider: string) => {
+    setExpandedProviders(prev => {
+      const next = new Set(prev);
+      if (next.has(provider)) next.delete(provider);
+      else next.add(provider);
+      return next;
+    });
+  };
 
   const quota = useQuery({
     queryKey: ["quota", period],
@@ -235,18 +246,17 @@ export function QuotaPage() {
         title="Quota Tracker"
         icon={Clock}
         description="Monitor upstream quota limits and consumption per connected account."
-      />
-
-      <div className="mb-6 flex justify-end">
-        <div className="flex items-center gap-2">
-          <div className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-2">
-            <Calendar className="h-3.5 w-3.5 text-[var(--text-muted)]" />
-            <select value={period} onChange={(e) => setPeriod(e.target.value)} className="bg-transparent text-xs font-medium focus:outline-none">
-              {periods.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-            </select>
+        action={
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-2">
+              <Calendar className="h-3.5 w-3.5 text-[var(--text-muted)]" />
+              <select value={period} onChange={(e) => setPeriod(e.target.value)} className="bg-transparent text-xs font-medium focus:outline-none">
+                {periods.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
+            </div>
           </div>
-        </div>
-      </div>
+        }
+      />
 
       {/* Summary stat cards */}
       {!quota.isLoading && accounts.length > 0 && (
@@ -344,6 +354,30 @@ export function QuotaPage() {
           <span className="text-xs text-[var(--text-muted)]">{sorted.length}</span>
         </div>
 
+        {/* ── Tabs ─────────────────────────────────────────────── */}
+        <div className="flex gap-4 border-b border-[var(--border)] px-4">
+          <button
+            className={`py-2.5 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === "paid" 
+                ? "border-accent-600 text-[var(--text)]" 
+                : "border-transparent text-[var(--text-muted)] hover:text-[var(--text)]"
+            }`}
+            onClick={() => setActiveTab("paid")}
+          >
+            Paid Providers
+          </button>
+          <button
+            className={`py-2.5 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === "free" 
+                ? "border-accent-600 text-[var(--text)]" 
+                : "border-transparent text-[var(--text-muted)] hover:text-[var(--text)]"
+            }`}
+            onClick={() => setActiveTab("free")}
+          >
+            Free Providers
+          </button>
+        </div>
+
         {/* ── Account list ─────────────────────────────────────── */}
         {quota.isLoading ? (
           <div className="flex items-center justify-center py-12"><Spinner /></div>
@@ -352,38 +386,56 @@ export function QuotaPage() {
         ) : (
           <div className="flex flex-col">
             {(() => {
+              // Filter by tab
+              const tabAccounts = sorted.filter(a => activeTab === "paid" ? a.usage_type === "credit" : a.usage_type === "token");
+              
+              if (tabAccounts.length === 0) {
+                return (
+                  <div className="py-12 text-center text-sm text-[var(--text-muted)]">
+                    No {activeTab} provider accounts found.
+                  </div>
+                );
+              }
+
               // Group accounts by provider
-              const groupedAccounts = providers.map(p => {
-                const pAccounts = sorted.filter(a => a.provider === p);
+              const tabProviders = [...new Set(tabAccounts.map(a => a.provider))].sort();
+              const groupedAccounts = tabProviders.map(p => {
+                const pAccounts = tabAccounts.filter(a => a.provider === p);
                 return {
                   provider: p,
                   provider_name: pAccounts[0]?.provider_name || p,
                   accounts: pAccounts
                 };
-              }).filter(g => g.accounts.length > 0);
+              });
 
               return groupedAccounts.map((group, i) => (
                 <div key={group.provider} className={i > 0 ? "border-t border-[var(--border)]" : ""}>
-                  <div className="flex items-center gap-2 bg-[var(--bg-subtle)]/30 px-4 py-2 border-b border-[var(--border)]">
+                  <div 
+                    className="flex cursor-pointer select-none items-center gap-2 border-b border-[var(--border)] bg-[var(--bg-subtle)]/30 px-4 py-2 hover:bg-[var(--bg-subtle)] transition-colors"
+                    onClick={() => toggleProvider(group.provider)}
+                  >
+                    <ChevronDown className={`h-4 w-4 text-[var(--text-muted)] transition-transform ${expandedProviders.has(group.provider) ? "rotate-180" : ""}`} />
                     <ProviderIcon provider={group.provider} className="h-5 w-5" />
-                    <span className="text-sm font-semibold capitalize">{group.provider_name}</span>
+                    <span className="text-sm font-semibold capitalize text-[var(--text)]">{group.provider_name}</span>
                     <span className="text-xs text-[var(--text-muted)] bg-[var(--bg-elevated)] px-1.5 py-0.5 rounded-full border border-[var(--border)]">
                       {group.accounts.length}
                     </span>
                   </div>
-                  <div className="divide-y divide-[var(--border)]">
-                    {group.accounts.map((account) => (
-                      <QuotaRow
-                        key={account.id}
-                        account={account}
-                        selected={selected.has(account.id)}
-                        onSelect={() => toggleSelect(account.id)}
-                        onToggle={() => toggleAccount.mutate({ id: account.id, disabled: account.status !== "paused" })}
-                        onDelete={() => deleteAccount.mutate(account.id)}
-                        hideProviderIcon
-                      />
-                    ))}
-                  </div>
+                  {expandedProviders.has(group.provider) && (
+                    <div className="divide-y divide-[var(--border)]">
+                      {group.accounts.map((account) => (
+                        <QuotaRow
+                          key={account.id}
+                          account={account}
+                          selected={selected.has(account.id)}
+                          onSelect={() => toggleSelect(account.id)}
+                          onToggle={() => toggleAccount.mutate({ id: account.id, disabled: account.status !== "paused" })}
+                          onDelete={() => deleteAccount.mutate(account.id)}
+                          hideProviderIcon
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
               ));
             })()}

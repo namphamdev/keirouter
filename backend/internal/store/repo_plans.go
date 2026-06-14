@@ -14,7 +14,7 @@ type PlanRepo struct{ db *DB }
 // Plans returns the plan repository.
 func (db *DB) Plans() *PlanRepo { return &PlanRepo{db: db} }
 
-const planSelectCols = `id, tenant_id, name, description, limit_micros, limit_tokens, period, alert_pct, hard_cutoff, allowed_models, created_at, updated_at`
+const planSelectCols = `id, tenant_id, name, description, limit_micros, limit_tokens, rpm_limit, tpm_limit, concurrency_limit, period, alert_pct, hard_cutoff, allowed_models, created_at, updated_at`
 
 // Create inserts a new plan.
 func (r *PlanRepo) Create(ctx context.Context, p Plan) error {
@@ -28,10 +28,10 @@ func (r *PlanRepo) CreateOnTx(ctx context.Context, tx *sql.Tx, p Plan) error {
 
 func (r *PlanRepo) insert(ctx context.Context, ex sqlExec, p Plan) error {
 	q := r.db.rebind(`INSERT INTO plans
-		(id, tenant_id, name, description, limit_micros, limit_tokens, period, alert_pct, hard_cutoff, allowed_models, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		(id, tenant_id, name, description, limit_micros, limit_tokens, rpm_limit, tpm_limit, concurrency_limit, period, alert_pct, hard_cutoff, allowed_models, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err := ex.ExecContext(ctx, q,
-		p.ID, p.TenantID, p.Name, p.Description, p.LimitMicros, p.LimitTokens, p.Period,
+		p.ID, p.TenantID, p.Name, p.Description, p.LimitMicros, p.LimitTokens, p.RPMLimit, p.TPMLimit, p.ConcurrencyLimit, p.Period,
 		p.AlertPct, boolToInt(p.HardCutoff), p.AllowedModels, formatTime(p.CreatedAt), formatTime(p.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("store: create plan: %w", err)
@@ -71,8 +71,8 @@ func (r *PlanRepo) List(ctx context.Context, tenantID string) ([]Plan, error) {
 
 // Update modifies an existing plan's mutable fields.
 func (r *PlanRepo) Update(ctx context.Context, p Plan) error {
-	q := r.db.rebind(`UPDATE plans SET name = ?, description = ?, limit_micros = ?, limit_tokens = ?, period = ?, alert_pct = ?, hard_cutoff = ?, allowed_models = ?, updated_at = ? WHERE id = ?`)
-	res, err := r.db.sql.ExecContext(ctx, q, p.Name, p.Description, p.LimitMicros, p.LimitTokens, p.Period,
+	q := r.db.rebind(`UPDATE plans SET name = ?, description = ?, limit_micros = ?, limit_tokens = ?, rpm_limit = ?, tpm_limit = ?, concurrency_limit = ?, period = ?, alert_pct = ?, hard_cutoff = ?, allowed_models = ?, updated_at = ? WHERE id = ?`)
+	res, err := r.db.sql.ExecContext(ctx, q, p.Name, p.Description, p.LimitMicros, p.LimitTokens, p.RPMLimit, p.TPMLimit, p.ConcurrencyLimit, p.Period,
 		p.AlertPct, boolToInt(p.HardCutoff), p.AllowedModels, formatTime(p.UpdatedAt), p.ID)
 	if err != nil {
 		return fmt.Errorf("store: update plan: %w", err)
@@ -109,7 +109,7 @@ func scanPlan(scan func(dest ...any) error) (Plan, error) {
 		updated string
 	)
 	err := scan(&p.ID, &p.TenantID, &p.Name, &p.Description, &p.LimitMicros, &p.LimitTokens,
-		&p.Period, &p.AlertPct, &hardCut, &p.AllowedModels, &created, &updated)
+		&p.RPMLimit, &p.TPMLimit, &p.ConcurrencyLimit, &p.Period, &p.AlertPct, &hardCut, &p.AllowedModels, &created, &updated)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -127,7 +127,7 @@ func scanPlanRows(rows *sql.Rows) (Plan, error) {
 		updated string
 	)
 	err := rows.Scan(&p.ID, &p.TenantID, &p.Name, &p.Description, &p.LimitMicros, &p.LimitTokens,
-		&p.Period, &p.AlertPct, &hardCut, &p.AllowedModels, &created, &updated)
+		&p.RPMLimit, &p.TPMLimit, &p.ConcurrencyLimit, &p.Period, &p.AlertPct, &hardCut, &p.AllowedModels, &created, &updated)
 	if err != nil {
 		return Plan{}, fmt.Errorf("store: scan plan: %w", err)
 	}

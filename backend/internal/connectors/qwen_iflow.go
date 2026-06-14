@@ -157,7 +157,7 @@ func (c *Qwen) Stream(ctx context.Context, req *core.ChatRequest, creds core.Cre
 	if err != nil {
 		return nil, err
 	}
-	return scanOpenAISSE(ctx, c.id, req.Model, resp, c.codec, cfg.OnFirstChunk), nil
+	return scanOpenAISSE(ctx, c.id, req.Model, resp, c.codec, cfg), nil
 }
 
 // StreamRaw opens a streaming SSE connection and returns the raw response body
@@ -308,7 +308,7 @@ func (c *IFlow) Stream(ctx context.Context, req *core.ChatRequest, creds core.Cr
 	if err != nil {
 		return nil, err
 	}
-	return scanOpenAISSE(ctx, c.id, req.Model, resp, c.codec, cfg.OnFirstChunk), nil
+	return scanOpenAISSE(ctx, c.id, req.Model, resp, c.codec, cfg), nil
 }
 
 // StreamRaw opens a streaming SSE connection and returns the raw response body

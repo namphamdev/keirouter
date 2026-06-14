@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -484,8 +483,7 @@ func (c *Kiro) Stream(ctx context.Context, req *core.ChatRequest, creds core.Cre
 		defer close(out)
 		defer resp.Body.Close()
 
-		streamStart := time.Now()
-		ttftReported := false
+		ttft := newTTFTTracker(cfg)
 
 		parser := newEventStreamParser(resp.Body)
 		seenTools := map[string]bool{}
@@ -526,10 +524,7 @@ func (c *Kiro) Stream(ctx context.Context, req *core.ChatRequest, creds core.Cre
 				if ch.Type == core.ChunkText || ch.Type == core.ChunkThinking {
 					outputChars += len(ch.Delta)
 				}
-				if !ttftReported && isMeaningfulChunk(ch) && cfg.OnFirstChunk != nil {
-					ttftReported = true
-					cfg.OnFirstChunk(time.Since(streamStart))
-				}
+				ttft.maybeReport(ch)
 				select {
 				case out <- ch:
 				case <-ctx.Done():

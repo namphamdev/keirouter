@@ -55,6 +55,21 @@ meter:
   full_queue_policy: sync
   shutdown_flush_timeout: 5s
 
+limits:
+  # Per-key rate limiter. Off by default for local development.
+  enabled: false
+  # "memory" for single-instance deployments. Redis backend is reserved for later.
+  backend: memory
+  # Defaults apply only when an API key has no assigned plan. Zero means unlimited.
+  default_rpm: 0
+  default_tpm: 0
+  default_concurrency: 0
+  # Fixed counting window and stale bucket cleanup cadence.
+  window: 1m
+  cleanup_interval: 1m
+  # Reserved for future backend=redis.
+  redis_url: ""
+
 health:
   # Background account/model health checks. Unhealthy account/model pairs are
   # skipped by dispatch until probes recover.

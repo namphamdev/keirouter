@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -28,6 +29,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/healthcheck"
 	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/identity"
+	"github.com/mydisha/keirouter/backend/internal/limits"
 	"github.com/mydisha/keirouter/backend/internal/meter"
 	"github.com/mydisha/keirouter/backend/internal/oauth"
 	"github.com/mydisha/keirouter/backend/internal/observ"
@@ -187,6 +189,25 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		cfg.Server.RequestTimeout,
 	)
 
+	// Proxy notifier: atomic cache of outbound proxy config that can be updated
+	// at runtime from the dashboard settings without restarting.
+	var proxyEnabled bool
+	var proxyURL, noProxy string
+	if raw, err := db.Settings().Get(ctx, "endpoint_settings"); err == nil && raw != "" {
+		var es struct {
+			OutboundProxyEnabled bool   `json:"outbound_proxy_enabled"`
+			OutboundProxyURL     string `json:"outbound_proxy_url"`
+			OutboundNoProxy      string `json:"outbound_no_proxy"`
+		}
+		if json.Unmarshal([]byte(raw), &es) == nil {
+			proxyEnabled = es.OutboundProxyEnabled
+			proxyURL = es.OutboundProxyURL
+			noProxy = es.OutboundNoProxy
+		}
+	}
+	proxyNotifier := gateway.NewProxyNotifier(proxyEnabled, proxyURL, noProxy)
+	disp.SetGlobalProxy(proxyNotifier)
+
 	// Guardrails: content-safety policies layered global → provider → model →
 	// chain → apikey. Resolver caches lookups for 30s; audit writer drains a
 	// buffered channel to the guardrail_logs table.
@@ -205,6 +226,12 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Logger: log,
 	})
 
+	limiter := limits.NewMemory(limits.MemoryConfig{
+		Enabled:         cfg.Limits.Enabled,
+		Window:          cfg.Limits.Window,
+		CleanupInterval: cfg.Limits.CleanupInterval,
+	})
+
 	pipe := pipeline.New(pipeline.Deps{
 		Dispatcher:         disp,
 		Meter:              mtr,
@@ -214,6 +241,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Cache:              semanticCache,
 		Embedder:           embedder,
 		Guardrails:         guardrailEngine,
+		Limiter:            limiter,
 		Logger:             log,
 		RequestTimeout:     cfg.Server.RequestTimeout,
 		StreamStallTimeout: cfg.Server.StreamStallTimeout,
@@ -274,6 +302,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		TsManager:       tsManager,
 		UsageHub:        uh,
 		TimeoutNotifier: timeoutNotifier,
+		ProxyNotifier:   proxyNotifier,
 		Refresher:       tokenRefresher,
 		Guardrails:      guardrailEngine,
 		GuardrailRepo:   db.Guardrails(),
@@ -299,15 +328,26 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 
 // seedFreeAccounts auto-creates a default account for providers that are free
 // and require no credentials, so they are immediately usable without a manual
-// "connect" step in the dashboard. Only explicitly listed providers are seeded
-// to avoid creating phantom accounts for local-only providers (ollama-local,
-// vllm, sdwebui, etc.) that may not actually be running.
+// "connect" step in the dashboard. Seedable providers are derived from the
+// catalog: AuthKind "none", not hidden, and not a local-only provider (must
+// have a non-localhost base URL that actually points at a remote service).
 func seedFreeAccounts(ctx context.Context, accounts *store.AccountRepo, log *slog.Logger) {
-	freeProviders := map[string]bool{
-		"mimo-free": true,
+	// Local-only providers that should never be auto-seeded because they
+	// depend on software running on the user's machine.
+	localOnly := map[string]bool{
+		"ollama-local": true,
+		"vllm":         true,
+		"sdwebui":      true,
+		"comfyui":      true,
+		"searxng":      true,
+		"coqui":        true,
+		"tortoise":     true,
+		"google-tts":   true,
+		"edge-tts":     true,
+		"local-device": true,
 	}
 	for _, spec := range connectors.Catalog() {
-		if !freeProviders[spec.ID] {
+		if spec.AuthKind != "none" || spec.Hidden || localOnly[spec.ID] {
 			continue
 		}
 		existing, err := accounts.ListByProvider(ctx, store.DefaultTenantID, spec.ID)

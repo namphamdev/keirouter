@@ -63,7 +63,7 @@ func clientFor(creds core.Credentials) *http.Client {
 	if creds.ProxyURL == "" && creds.RelayURL == "" {
 		return sharedClient
 	}
-	key := creds.ProxyURL + "|" + creds.RelayURL
+	key := creds.ProxyURL + "|" + creds.RelayURL + "|" + creds.NoProxy
 	if v, ok := proxyTransportCache.Load(key); ok {
 		return &http.Client{Transport: v.(*http.Transport)}
 	}
@@ -80,11 +80,33 @@ func clientFor(creds core.Credentials) *http.Client {
 	}
 	if creds.ProxyURL != "" {
 		if u, err := url.Parse(creds.ProxyURL); err == nil {
-			t.Proxy = http.ProxyURL(u)
+			t.Proxy = proxyFunc(u, creds.NoProxy)
 		}
 	}
 	actual, _ := proxyTransportCache.LoadOrStore(key, t)
 	return &http.Client{Transport: actual.(*http.Transport)}
+}
+
+// proxyFunc returns a proxy function that routes requests through proxyURL,
+// skipping hosts that match the comma-separated noProxy bypass list.
+func proxyFunc(proxyURL *url.URL, noProxy string) func(*http.Request) (*url.URL, error) {
+	return func(req *http.Request) (*url.URL, error) {
+		if noProxy != "" {
+			host := req.URL.Hostname()
+			for _, bypass := range strings.Split(noProxy, ",") {
+				bypass = strings.TrimSpace(bypass)
+				if bypass == "" {
+					continue
+				}
+				if bypass == "*" ||
+					strings.EqualFold(host, bypass) ||
+					strings.HasSuffix(host, "."+bypass) {
+					return nil, nil
+				}
+			}
+		}
+		return proxyURL, nil
+	}
 }
 
 // relayRequest rewrites a request to go through a relay proxy. The relay
@@ -377,23 +399,55 @@ type streamParser interface {
 	ParseStreamLine(line []byte, model string) ([]core.StreamChunk, error)
 }
 
+// ttftTracker fires OnFirstChunk exactly once per stream, measuring elapsed
+// time from the pipeline's StartedAt (preferred) or the scanner's own start
+// time. This eliminates the duplicated ttftReported + isMeaningfulChunk boilerplate
+// across every connector's Stream method.
+type ttftTracker struct {
+	ref  time.Time // reference point for elapsed calculation
+	cb   func(time.Duration)
+	done bool
+}
+
+// newTTFTTracker builds a tracker from a StreamConfig. When cfg.StartedAt is
+// set (pipeline provided it), that is used as the TTFT reference so the
+// measurement includes HTTP connection time. Otherwise the tracker records
+// time.Now() as a fallback reference.
+func newTTFTTracker(cfg core.StreamConfig) *ttftTracker {
+	ref := cfg.StartedAt
+	if ref.IsZero() {
+		ref = time.Now()
+	}
+	return &ttftTracker{ref: ref, cb: cfg.OnFirstChunk}
+}
+
+// maybeReport fires the callback if ch is the first meaningful chunk.
+func (t *ttftTracker) maybeReport(ch core.StreamChunk) {
+	if t.done || t.cb == nil {
+		return
+	}
+	if !isMeaningfulChunk(ch) {
+		return
+	}
+	t.done = true
+	t.cb(time.Since(t.ref))
+}
+
 // scanOpenAISSE consumes an OpenAI-style SSE response, parsing each "data:"
 // payload through the given codec and emitting canonical chunks on the returned
 // channel. It owns resp.Body and closes it when done. Shared by the
 // OpenAI-compatible subscription connectors (Qwen, iFlow, ...) to avoid
 // duplicating the streaming goroutine.
 //
-// onFirstChunk, if non-nil, is called once when the first meaningful chunk
-// (text, thinking, or tool_call) arrives. The elapsed duration is measured
-// from when the goroutine starts scanning.
-func scanOpenAISSE(ctx context.Context, provider, model string, resp *http.Response, codec streamParser, onFirstChunk func(time.Duration)) <-chan core.StreamChunk {
+// TTFT is measured from cfg.StartedAt (set by the pipeline before the HTTP
+// call) to the first meaningful chunk, so it includes connection time.
+func scanOpenAISSE(ctx context.Context, provider, model string, resp *http.Response, codec streamParser, cfg core.StreamConfig) <-chan core.StreamChunk {
 	out := make(chan core.StreamChunk, 16)
 	go func() {
 		defer close(out)
 		defer resp.Body.Close()
 
-		streamStart := time.Now()
-		ttftReported := false
+		ttft := newTTFTTracker(cfg)
 
 		scanner := sseScanner(resp.Body)
 		for scanner.Scan() {
@@ -412,10 +466,7 @@ func scanOpenAISSE(ctx context.Context, provider, model string, resp *http.Respo
 				continue
 			}
 			for _, ch := range chunks {
-				if !ttftReported && isMeaningfulChunk(ch) && onFirstChunk != nil {
-					ttftReported = true
-					onFirstChunk(time.Since(streamStart))
-				}
+				ttft.maybeReport(ch)
 				select {
 				case out <- ch:
 				case <-ctx.Done():

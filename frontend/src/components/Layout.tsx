@@ -233,11 +233,11 @@ function SidebarContent({ onNavigate }: { onNavigate: () => void }) {
         {navGroups.map((group, gi) => (
           <div key={gi} role="group" aria-label={group.heading}>
             {group.heading && (
-              <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+              <p className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-widest text-ink-400 dark:text-ink-500">
                 {group.heading}
               </p>
             )}
-            <ul className="space-y-1">
+            <ul className="space-y-0.5">
               {group.items.map((item) => (
                 <li key={item.to}>
                   <NavLink
@@ -245,15 +245,26 @@ function SidebarContent({ onNavigate }: { onNavigate: () => void }) {
                     end={item.end}
                     onClick={onNavigate}
                     className={({ isActive }) =>
-                      `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/60 ${
+                      `group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-all duration-200 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/60 ${
                         isActive
-                          ? "bg-accent-100 font-medium text-accent-700 shadow-[inset_3px_0_0_0_var(--color-accent-600)] dark:bg-accent-900/40 dark:text-accent-200"
-                          : "text-[var(--text-muted)] hover:bg-ink-100 hover:text-[var(--text)] dark:hover:bg-ink-800"
+                          ? "bg-ink-100 font-medium text-ink-950 ring-1 ring-ink-200 dark:bg-ink-800/80 dark:text-white dark:ring-ink-700/50"
+                          : "text-ink-500 hover:bg-ink-100/50 hover:text-ink-900 dark:text-ink-400 dark:hover:bg-ink-800/40 dark:hover:text-ink-100"
                       }`
                     }
                   >
-                    <item.icon className="h-[18px] w-[18px] shrink-0" strokeWidth={2} />
-                    {item.label}
+                    {({ isActive }) => (
+                      <>
+                        <item.icon
+                          className={`h-[18px] w-[18px] shrink-0 transition-colors duration-200 ${
+                            isActive
+                              ? "text-accent-600 dark:text-accent-400"
+                              : "text-ink-400 group-hover:text-ink-600 dark:text-ink-500 dark:group-hover:text-ink-300"
+                          }`}
+                          strokeWidth={isActive ? 2.5 : 2}
+                        />
+                        <span className="truncate">{item.label}</span>
+                      </>
+                    )}
                   </NavLink>
                 </li>
               ))}
@@ -391,7 +402,7 @@ function ProfileMenu() {
 export function PageHeader({
   title,
   description,
-  icon: Icon,
+  icon: _Icon,
   action,
 }: {
   title: string;
@@ -402,11 +413,6 @@ export function PageHeader({
   return (
     <div className="mb-5 flex items-start justify-between gap-4">
       <div className="flex items-start gap-3">
-        {Icon && (
-          <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-100 text-accent-700 dark:bg-accent-800/40 dark:text-accent-200">
-            <Icon className="h-5 w-5" strokeWidth={2} />
-          </div>
-        )}
         <div>
           <h1 className="font-display text-3xl font-semibold tracking-tight">{title}</h1>
           {description && <p className="mt-1 text-sm text-[var(--text-muted)]">{description}</p>}

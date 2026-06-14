@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   DollarSign,
   Gauge,
+  Activity,
 } from "lucide-react";
 import { api, type Plan } from "../lib/api";
 import { FormattedTokenInput, ModelMultiSelect } from "../components/ModelSelect";
@@ -37,6 +38,12 @@ const periods = [
   { value: "total", label: "All time" },
 ];
 
+const rateLimitRules = {
+  rpm: { label: "Requests / min", max: 60_000 },
+  tpm: { label: "Tokens / min", max: 100_000_000 },
+  concurrency: { label: "Concurrent requests", max: 1_000 },
+};
+
 function parseUSD(value: string): number {
   const n = parseFloat(value);
   return Number.isFinite(n) && n > 0 ? n : 0;
@@ -45,6 +52,48 @@ function parseUSD(value: string): number {
 function parseTokens(value: string): number {
   const n = parseInt(value, 10);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function parseNonNegativeInt(value: string): number {
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function validateRateLimitInput(label: string, value: string, max: number): string | null {
+  const trimmed = value.trim();
+  if (trimmed === "") return null;
+
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) return `${label} must be a number.`;
+  if (!Number.isInteger(n)) return `${label} must be a whole number.`;
+  if (n < 0) return `${label} cannot be negative.`;
+  if (n > max) return `${label} is too high. Maximum is ${max.toLocaleString()}.`;
+
+  return null;
+}
+
+function validateRateLimits(rpmValue: string, tpmValue: string, concurrencyValue: string): string | null {
+  const fieldErrors = [
+    validateRateLimitInput(rateLimitRules.rpm.label, rpmValue, rateLimitRules.rpm.max),
+    validateRateLimitInput(rateLimitRules.tpm.label, tpmValue, rateLimitRules.tpm.max),
+    validateRateLimitInput(rateLimitRules.concurrency.label, concurrencyValue, rateLimitRules.concurrency.max),
+  ].filter(Boolean);
+
+  if (fieldErrors.length > 0) return fieldErrors[0] ?? null;
+
+  const rpm = parseNonNegativeInt(rpmValue);
+  const tpm = parseNonNegativeInt(tpmValue);
+  const concurrency = parseNonNegativeInt(concurrencyValue);
+
+  if (rpm > 0 && concurrency > rpm) {
+    return "Concurrent requests cannot be higher than requests per minute.";
+  }
+
+  if (rpm > 0 && tpm > 0 && tpm < rpm) {
+    return "Tokens per minute cannot be lower than requests per minute.";
+  }
+
+  return null;
 }
 
 function clampAlertPct(value: number): number {
@@ -81,7 +130,7 @@ export function PlansPage() {
       <PageHeader
         title="Plans"
         icon={Wallet}
-        description="Reusable templates for API key budget limits and model restrictions."
+        description="Reusable templates for API key budget limits, rate limits, and model restrictions."
         action={
           <Button onClick={() => setShowCreate(true)}>
             <Plus className="h-4 w-4" />
@@ -94,7 +143,7 @@ export function PlansPage() {
         open={showCreate}
         onClose={() => setShowCreate(false)}
         title="Create plan"
-        subtitle="Define budget rules and model restrictions as a reusable template."
+        subtitle="Define budget, rate limit, and model rules as a reusable template."
         maxWidth="max-w-xl"
       >
         <PlanForm onClose={() => setShowCreate(false)} />
@@ -116,41 +165,51 @@ export function PlansPage() {
         )}
       </Modal>
 
-      <Card>
-        <SectionHeader
-          title="All plans"
-          description="API keys inherit rules from their assigned plan."
-          icon={ShieldCheck}
-        />
-        {plans.isLoading ? (
-          <div className="px-6 pb-6">
-            <Spinner />
+      <div className="mb-6">
+        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-widest text-[var(--text-muted)]">
+          <ShieldCheck className="h-4 w-4" /> All Plans
+        </h2>
+        <p className="mt-1 text-sm text-[var(--text-muted)]">API keys inherit rules from their assigned plan.</p>
+      </div>
+
+      {plans.isLoading ? (
+        <div className="py-12">
+          <Spinner />
+        </div>
+      ) : planList.length === 0 ? (
+        <div className="rounded-2xl border-2 border-dashed border-[var(--border)] bg-[var(--bg)] px-6 py-20 text-center">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--bg-subtle)]">
+            <ShieldCheck className="h-8 w-8 text-[var(--text-muted)]" strokeWidth={1.5} />
           </div>
-        ) : planList.length === 0 ? (
-          <div className="px-6 pb-6">
-            <EmptyState title="No plans yet" hint="Create a plan to use as a template for API keys." />
-          </div>
-        ) : (
-          <div className="divide-y divide-[var(--border)]">
-            {planList.map((p) => (
-              <PlanRow
-                key={p.id}
-                plan={p}
-                onEdit={() => setEditingId(p.id)}
-                onDelete={() => {
-                  if (p.key_count > 0) {
-                    toast.error("Cannot delete", `This plan has ${p.key_count} key(s) assigned. Reassign them first.`);
-                    return;
-                  }
-                  if (confirm(`Delete plan "${p.name}"?`)) {
-                    remove.mutate(p.id);
-                  }
-                }}
-              />
-            ))}
-          </div>
-        )}
-      </Card>
+          <h3 className="text-lg font-medium text-[var(--text)]">No plans configured</h3>
+          <p className="mx-auto mt-2 max-w-sm text-sm text-[var(--text-muted)]">
+            Plans define budget constraints, rate limits, and model access. Create your first plan to start organizing API keys.
+          </p>
+          <Button className="mt-6" onClick={() => setShowCreate(true)}>
+            <Plus className="h-4 w-4" />
+            Create your first plan
+          </Button>
+        </div>
+      ) : (
+        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          {planList.map((p) => (
+            <PlanRow
+              key={p.id}
+              plan={p}
+              onEdit={() => setEditingId(p.id)}
+              onDelete={() => {
+                if (p.key_count > 0) {
+                  toast.error("Cannot delete", `This plan has ${p.key_count} key(s) assigned. Reassign them first.`);
+                  return;
+                }
+                if (confirm(`Delete plan "${p.name}"?`)) {
+                  remove.mutate(p.id);
+                }
+              }}
+            />
+          ))}
+        </div>
+      )}
     </>
   );
 }
@@ -168,72 +227,118 @@ function PlanRow({
 }) {
   const hasUSD = p.limit_micros > 0;
   const hasTokens = p.limit_tokens > 0;
+  const hasRPM = p.rpm_limit > 0;
+  const hasTPM = p.tpm_limit > 0;
+  const hasConcurrency = p.concurrency_limit > 0;
   const models = p.allowed_models ?? [];
 
   return (
-    <div className="px-6 py-5">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0 flex-1">
+    <Card className="flex flex-col">
+      <div className="flex items-start justify-between border-b border-[var(--border)] px-5 py-4">
+        <div className="min-w-0 pr-4">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium">{p.name}</span>
-            <Badge>{p.period}</Badge>
+            <h3 className="truncate text-base font-semibold text-[var(--text)]">{p.name}</h3>
             {p.hard_cutoff ? (
               <Badge tone="danger">hard cutoff</Badge>
             ) : (
               <Badge tone="neutral">advisory</Badge>
             )}
-            {models.length > 0 && (
-              <Badge tone="accent">{models.length} model{models.length > 1 ? "s" : ""}</Badge>
-            )}
           </div>
-
-          {p.description && (
-            <p className="mt-1 text-xs text-[var(--text-muted)]">{p.description}</p>
-          )}
-
-          <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-[var(--text-muted)]">
-            {hasUSD && (
-              <span className="flex items-center gap-1">
-                <DollarSign className="h-3 w-3" />
-                {microsToUSD(p.limit_micros)} / {p.period}
-              </span>
-            )}
-            {hasTokens && (
-              <span className="flex items-center gap-1">
-                <Gauge className="h-3 w-3" />
-                {formatTokens(p.limit_tokens)} tokens / {p.period}
-              </span>
-            )}
-            {!hasUSD && !hasTokens && (
-              <span className="flex items-center gap-1">
-                <DollarSign className="h-3 w-3" />
-                No spend limit
-              </span>
-            )}
-            <span className="flex items-center gap-1">
-              <KeyRound className="h-3 w-3" />
-              {p.key_count} key{p.key_count !== 1 ? "s" : ""}
-            </span>
-            <span>Alert at {p.alert_pct}%</span>
-          </div>
-
-          {models.length > 0 && (
-            <p className="mt-1.5 text-xs text-[var(--text-muted)]">
-              Models: {models.join(", ")}
-            </p>
+          {p.description ? (
+            <p className="mt-1 line-clamp-1 text-xs text-[var(--text-muted)]">{p.description}</p>
+          ) : (
+            <p className="mt-1 text-xs italic text-[var(--text-muted)] opacity-70">No description</p>
           )}
         </div>
-
         <div className="flex shrink-0 items-center gap-1.5">
-          <Button variant="ghost" onClick={onEdit} className="px-2" title="Edit plan">
-            <Pencil className="h-4 w-4" />
+          <Button variant="ghost" onClick={onEdit} className="px-2.5 py-2" title="Edit plan">
+            <Pencil className="h-4 w-4 text-[var(--text-muted)]" />
           </Button>
-          <Button variant="danger" onClick={onDelete} className="px-2" title="Delete plan">
+          <Button variant="ghost" onClick={onDelete} className="px-2.5 py-2 text-[var(--text-muted)] hover:bg-[color:var(--color-danger)]/10 hover:text-[color:var(--color-danger)]" title="Delete plan">
             <Trash2 className="h-4 w-4" />
           </Button>
         </div>
       </div>
-    </div>
+
+      <div className="flex-1 p-5">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-5">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">
+              Spend limit
+            </p>
+            <div className="mt-1 font-mono text-sm text-[var(--text)]">
+              {hasUSD ? microsToUSD(p.limit_micros) : "∞"}
+              {hasUSD && <span className="ml-1 text-xs text-[var(--text-muted)]">/{p.period}</span>}
+            </div>
+          </div>
+          
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">
+              Token limit
+            </p>
+            <div className="mt-1 font-mono text-sm text-[var(--text)]">
+              {hasTokens ? formatTokens(p.limit_tokens) : "∞"}
+              {hasTokens && <span className="ml-1 text-xs text-[var(--text-muted)]">/{p.period}</span>}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">
+              RPM
+            </p>
+            <div className="mt-1 font-mono text-sm text-[var(--text)]">
+              {hasRPM ? p.rpm_limit.toLocaleString() : "∞"}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">
+              TPM
+            </p>
+            <div className="mt-1 font-mono text-sm text-[var(--text)]">
+              {hasTPM ? formatTokens(p.tpm_limit) : "∞"}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">
+              Concurrent
+            </p>
+            <div className="mt-1 font-mono text-sm text-[var(--text)]">
+              {hasConcurrency ? p.concurrency_limit.toLocaleString() : "∞"}
+            </div>
+          </div>
+          
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">
+              Active Keys
+            </p>
+            <div className="mt-1 flex items-center gap-1.5 font-mono text-sm text-[var(--text)]">
+              <KeyRound className="h-3.5 w-3.5 text-[var(--text-muted)]" />
+              {p.key_count}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t border-[var(--border)] bg-[var(--bg-subtle)] px-5 py-3">
+        <div className="flex items-center justify-between text-xs text-[var(--text-muted)]">
+          <div className="truncate pr-4">
+            <span className="font-medium text-[var(--text)]">Models:</span>{" "}
+            {models.length > 0 ? models.join(", ") : "All allowed"}
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <span className="relative flex h-2 w-2">
+              {p.alert_pct < 100 && (
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75"></span>
+              )}
+              <span className={`relative inline-flex h-2 w-2 rounded-full ${p.alert_pct < 100 ? 'bg-amber-500' : 'bg-ink-400 dark:bg-ink-600'}`}></span>
+            </span>
+            Alert at {p.alert_pct}%
+          </div>
+        </div>
+      </div>
+    </Card>
   );
 }
 
@@ -253,6 +358,15 @@ function PlanForm({ plan, onClose }: { plan?: Plan; onClose: () => void }) {
   const [limitTokens, setLimitTokens] = useState(
     plan && plan.limit_tokens > 0 ? plan.limit_tokens.toString() : ""
   );
+  const [rpmLimit, setRpmLimit] = useState(
+    plan && plan.rpm_limit > 0 ? plan.rpm_limit.toString() : ""
+  );
+  const [tpmLimit, setTpmLimit] = useState(
+    plan && plan.tpm_limit > 0 ? plan.tpm_limit.toString() : ""
+  );
+  const [concurrencyLimit, setConcurrencyLimit] = useState(
+    plan && plan.concurrency_limit > 0 ? plan.concurrency_limit.toString() : ""
+  );
   const [period, setPeriod] = useState(plan?.period ?? "monthly");
   const [alertPct, setAlertPct] = useState(plan?.alert_pct ?? 80);
   const [hardCutoff, setHardCutoff] = useState(plan?.hard_cutoff ?? true);
@@ -261,7 +375,11 @@ function PlanForm({ plan, onClose }: { plan?: Plan; onClose: () => void }) {
 
   const usdLimit = parseUSD(limit);
   const tokenLimit = parseTokens(limitTokens);
-  const canSubmit = name.trim().length > 0;
+  const rpm = parseNonNegativeInt(rpmLimit);
+  const tpm = parseNonNegativeInt(tpmLimit);
+  const concurrency = parseNonNegativeInt(concurrencyLimit);
+  const validationError = validateRateLimits(rpmLimit, tpmLimit, concurrencyLimit);
+  const canSubmit = name.trim().length > 0 && !validationError;
 
   const create = useMutation({
     mutationFn: () =>
@@ -270,6 +388,9 @@ function PlanForm({ plan, onClose }: { plan?: Plan; onClose: () => void }) {
         description: description.trim() || undefined,
         limit_usd: usdLimit > 0 ? usdLimit : undefined,
         limit_tokens: tokenLimit > 0 ? tokenLimit : undefined,
+        rpm_limit: rpm,
+        tpm_limit: tpm,
+        concurrency_limit: concurrency,
         period,
         alert_pct: alertPct,
         hard_cutoff: hardCutoff,
@@ -293,6 +414,9 @@ function PlanForm({ plan, onClose }: { plan?: Plan; onClose: () => void }) {
         description: description.trim() || undefined,
         limit_usd: usdLimit > 0 ? usdLimit : undefined,
         limit_tokens: tokenLimit > 0 ? tokenLimit : undefined,
+        rpm_limit: rpm,
+        tpm_limit: tpm,
+        concurrency_limit: concurrency,
         period,
         alert_pct: alertPct,
         hard_cutoff: hardCutoff,
@@ -314,6 +438,10 @@ function PlanForm({ plan, onClose }: { plan?: Plan; onClose: () => void }) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
     if (!canSubmit) return;
     if (isEdit) {
       update.mutate();
@@ -397,6 +525,47 @@ function PlanForm({ plan, onClose }: { plan?: Plan; onClose: () => void }) {
 
         <div className="h-px bg-[var(--border)] w-full" />
 
+        {/* Rate limits */}
+        <section className="space-y-3">
+          <div>
+            <h3 className="text-sm font-semibold text-[var(--text-strong)]">Rate Limits</h3>
+            <p className="text-xs text-[var(--text-muted)]">Control burst traffic per API key. Leave blank or 0 for unlimited.</p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="Requests / min">
+              <Input
+                type="number"
+                min="0"
+                max={rateLimitRules.rpm.max}
+                step="1"
+                value={rpmLimit}
+                onChange={(e) => setRpmLimit(e.target.value)}
+                placeholder="60"
+              />
+            </Field>
+            <Field label="Tokens / min">
+              <FormattedTokenInput
+                value={tpmLimit}
+                onChange={setTpmLimit}
+                placeholder="100000"
+              />
+            </Field>
+            <Field label="Concurrent requests">
+              <Input
+                type="number"
+                min="0"
+                max={rateLimitRules.concurrency.max}
+                step="1"
+                value={concurrencyLimit}
+                onChange={(e) => setConcurrencyLimit(e.target.value)}
+                placeholder="5"
+              />
+            </Field>
+          </div>
+        </section>
+
+        <div className="h-px bg-[var(--border)] w-full" />
+
         {/* Allowed models */}
         <section className="space-y-3">
           <div>
@@ -447,7 +616,8 @@ function PlanForm({ plan, onClose }: { plan?: Plan; onClose: () => void }) {
           </div>
         </section>
 
-        {error && <ErrorBanner message={error} />}
+        {validationError && <ErrorBanner message={validationError} />}
+        {error && error !== validationError && <ErrorBanner message={error} />}
       </div>
 
       <div className="shrink-0 flex gap-3 border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-4 rounded-b-xl">

@@ -104,6 +104,9 @@ export interface Plan {
   description: string;
   limit_micros: number;
   limit_tokens: number;
+  rpm_limit: number;
+  tpm_limit: number;
+  concurrency_limit: number;
   period: string;
   alert_pct: number;
   hard_cutoff: boolean;
@@ -785,6 +788,9 @@ export const api = {
     description?: string;
     limit_usd?: number;
     limit_tokens?: number;
+    rpm_limit?: number;
+    tpm_limit?: number;
+    concurrency_limit?: number;
     period?: string;
     alert_pct?: number;
     hard_cutoff?: boolean;
@@ -795,6 +801,9 @@ export const api = {
     description?: string;
     limit_usd?: number;
     limit_tokens?: number;
+    rpm_limit?: number;
+    tpm_limit?: number;
+    concurrency_limit?: number;
     period?: string;
     alert_pct?: number;
     hard_cutoff?: boolean;
@@ -927,7 +936,7 @@ export const api = {
 
   // Proxy test.
   testProxy: (proxyUrl: string) =>
-    request<{ ok: boolean; status?: number; elapsedMs?: number; error?: string }>("POST", "/settings/proxy-test", { proxyUrl }),
+    request<{ ok: boolean; status?: number; elapsedMs?: number; error?: string; exitIP?: string }>("POST", "/settings/proxy-test", { proxyUrl }),
 
   // Proxy pool test.
   testProxyPool: (id: string) =>

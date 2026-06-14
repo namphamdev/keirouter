@@ -42,7 +42,8 @@ It's built with Go, which means it’s incredibly lightweight (using barely ~20M
   - **Output Compression:** Tell the AI to speak in "terse mode" to cut out all the yapping and just give you the code.
   - **Savings Dashboard:** See exactly how much money you've saved with a detailed breakdown of input and output compression ratios.
 - 💰 **Budget Engine:** Set per-key or per-organization USD and token hard limits with auto-cutoff to prevent unexpected bills.
-- 📋 **Plans & Policy Templates:** Create reusable budget templates with spend limits, token limits, reset periods, allowed models, and alert thresholds. Assign plans to API keys so you define the rules once and apply them everywhere.
+- 🚦 **Rate Limiting:** Protect your gateway and upstream quotas with per-key RPM, TPM, and concurrency caps. Use global defaults or assign limits through reusable plans.
+- 📋 **Plans & Policy Templates:** Create reusable budget templates with spend limits, token limits, rate limits, reset periods, allowed models, and alert thresholds. Assign plans to API keys so you define the rules once and apply them everywhere.
 - 🎨 **Branding & White-Label:** Customize the entire dashboard and portal with your own name, logo, favicon, tagline, and color palette. Perfect for teams and organizations that want a white-labeled AI gateway.
 - 🛠️ **Skills System:** Enhance your LLM interactions with built-in skills (Web Search, Image Generation, Text-to-Speech, etc.) natively routed through the gateway.
 - 🔧 **CLI Tools Auto-Config:** KeiRouter generates ready-to-paste configuration snippets for 11+ coding tools—Claude Code, Cursor, Cline, GitHub Copilot, DeepSeek, KiloCode, and more.
@@ -155,6 +156,9 @@ Plans let you define reusable budget policies that can be assigned to any API ke
 Each plan defines:
 - **Spend Limit** — USD budget cap (in micro-dollars for precision)
 - **Token Limit** — Maximum token usage
+- **RPM Limit** — Maximum requests per minute for each assigned API key (`0` means unlimited)
+- **TPM Limit** — Maximum estimated tokens per minute for each assigned API key (`0` means unlimited)
+- **Concurrency Limit** — Maximum in-flight requests for each assigned API key (`0` means unlimited)
 - **Reset Period** — `daily`, `weekly`, `monthly`, or `total`
 - **Allowed Models** — Restrict to specific models using wildcard patterns (e.g., `claude-*`, `gpt-4*`); empty means all models allowed
 - **Alert Threshold** — Percentage (1–100) at which alerts fire before budget exhaustion
@@ -229,6 +233,21 @@ KeiRouter connects to a massive roster of AI providers out of the box. Here's th
 
 ## ⚙️ Configuration
 By default, KeiRouter uses an embedded SQLite database (zero config required!). If you are deploying it for a team, you can use PostgreSQL. Just copy `config.example.yaml` and run with `-config`, or use environment variables like `KEIROUTER_SERVER__PORT=8080`. Docker/Coolify examples live in [deploy/README.md](deploy/README.md).
+
+Enable the local in-memory rate limiter for single-instance deployments:
+
+```yaml
+limits:
+  enabled: true
+  backend: memory
+  default_rpm: 600
+  default_tpm: 200000
+  default_concurrency: 50
+  window: 1m
+  cleanup_interval: 1m
+```
+
+Default limits apply only to API keys without an assigned plan. When a key has a plan, the plan's `rpm_limit`, `tpm_limit`, and `concurrency_limit` take precedence; `0` means unlimited.
 
 ## 🔒 Security Notes
 - The admin API (`/api/*`) is restricted to your local machine by default. If you expose it to the internet, put it behind a reverse proxy and set a stable `master_key`!
