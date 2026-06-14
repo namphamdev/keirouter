@@ -8,8 +8,6 @@ import {
   KeyRound,
   ShieldCheck,
   DollarSign,
-  Gauge,
-  Activity,
 } from "lucide-react";
 import { api, type Plan } from "../lib/api";
 import { FormattedTokenInput, ModelMultiSelect } from "../components/ModelSelect";
@@ -18,14 +16,12 @@ import { PageHeader } from "../components/Layout";
 import { useToast } from "../components/Toast";
 import {
   Card,
-  SectionHeader,
   Button,
   Input,
   Select,
   Field,
   Badge,
   Spinner,
-  EmptyState,
   ErrorBanner,
   Toggle,
   Modal,
