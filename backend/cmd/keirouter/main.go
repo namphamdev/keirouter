@@ -15,6 +15,7 @@ import (
 
 	"github.com/mydisha/keirouter/backend/internal/app"
 	"github.com/mydisha/keirouter/backend/internal/config"
+	"github.com/mydisha/keirouter/backend/internal/prettylog"
 	"github.com/mydisha/keirouter/backend/internal/version"
 )
 
@@ -51,11 +52,31 @@ func run() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	log := newLogger(cfg.Log)
+	log, isPretty := newLogger(cfg.Log)
 	slog.SetDefault(log)
 
 	if *healthcheck {
 		return runHealthcheck(cfg)
+	}
+
+	// Print the startup banner in pretty mode (TTY only).
+	if isPretty {
+		cacheLabel := "disabled"
+		if cfg.Cache.Enabled {
+			cacheLabel = cfg.Cache.Backend
+		}
+		dataDir := cfg.Data.Dir
+		if dataDir == "" {
+			dataDir = "~/.keirouter"
+		}
+		prettylog.PrintBannerStdout(prettylog.BannerConfig{
+			Version:  resolvedVersion,
+			Addr:     cfg.Addr(),
+			DBDriver: cfg.Database.Driver,
+			Cache:    cacheLabel,
+			DataDir:  dataDir,
+			LogLevel: cfg.Log.Level + " (pretty)",
+		})
 	}
 
 	// Cancel on SIGINT/SIGTERM for graceful shutdown.
@@ -98,8 +119,9 @@ func runHealthcheck(cfg config.Config) error {
 	return nil
 }
 
-// newLogger builds a structured logger per config.
-func newLogger(cfg config.LogConfig) *slog.Logger {
+// newLogger builds a structured logger per config. Returns the logger and
+// whether pretty (colorized) output is active.
+func newLogger(cfg config.LogConfig) (*slog.Logger, bool) {
 	var level slog.Level
 	switch cfg.Level {
 	case "debug":
@@ -114,10 +136,12 @@ func newLogger(cfg config.LogConfig) *slog.Logger {
 
 	opts := &slog.HandlerOptions{Level: level}
 	var handler slog.Handler
+	pretty := false
 	if cfg.Format == "json" {
 		handler = slog.NewJSONHandler(os.Stdout, opts)
 	} else {
-		handler = slog.NewTextHandler(os.Stdout, opts)
+		handler = prettylog.NewHandler(os.Stdout, &prettylog.Options{Level: level})
+		pretty = prettylog.IsTerminal(os.Stdout.Fd())
 	}
-	return slog.New(handler)
+	return slog.New(handler), pretty
 }

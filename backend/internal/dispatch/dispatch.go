@@ -89,6 +89,11 @@ type TokenRefresher interface {
 	ForceRefresh(ctx context.Context, acc store.Account) (store.Account, error)
 }
 
+// HealthSource reports background account/model health state.
+type HealthSource interface {
+	IsUnhealthy(ctx context.Context, accountID, model string) (bool, error)
+}
+
 // RoutingSource provides model-level cooldowns and chain rotation state.
 type RoutingSource interface {
 	SetModelCooldown(ctx context.Context, accountID, model string, until time.Time) error
@@ -110,6 +115,7 @@ type Dispatcher struct {
 	pools     proxy.PoolSource
 	refresher TokenRefresher
 	routing   RoutingSource
+	health    HealthSource
 	// defaultCooldown is applied to an account when an error carries no
 	// upstream-specified Retry-After.
 	defaultCooldown time.Duration
@@ -135,6 +141,9 @@ func (d *Dispatcher) SetPoolSource(p proxy.PoolSource) { d.pools = p }
 
 // SetRoutingSource installs the model-cooldown and chain-rotation backend.
 func (d *Dispatcher) SetRoutingSource(r RoutingSource) { d.routing = r }
+
+// SetHealthSource installs background account/model health state.
+func (d *Dispatcher) SetHealthSource(h HealthSource) { d.health = h }
 
 // PlanOptions carries per-request strategy configuration.
 type PlanOptions struct {
@@ -234,6 +243,14 @@ func (d *Dispatcher) PlanWith(ctx context.Context, tenantID string, targets []Ta
 				locked, _ := d.routing.IsModelCooldownActive(ctx, acc.ID, target.Model)
 				if locked {
 					lastReason = fmt.Sprintf("account %s model %s on cooldown", acc.ID, target.Model)
+					continue
+				}
+			}
+			// Background health checker: skip known-unhealthy account/model rows.
+			if d.health != nil {
+				unhealthy, _ := d.health.IsUnhealthy(ctx, acc.ID, target.Model)
+				if unhealthy {
+					lastReason = fmt.Sprintf("account %s model %s unhealthy", acc.ID, target.Model)
 					continue
 				}
 			}

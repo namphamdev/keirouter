@@ -226,6 +226,25 @@ type AccountAffinity struct {
 	UpdatedAt time.Time
 }
 
+// AccountHealth stores background probe status for one account/model pair.
+// Model "__all__" means provider/account-level health when no specific model is
+// known. The dispatcher treats unhealthy rows as a soft skip.
+type AccountHealth struct {
+	ID                   string
+	TenantID             string
+	AccountID            string
+	Provider             string
+	Model                string
+	Status               string // healthy | degraded | unhealthy
+	LatencyMS            int
+	ConsecutiveFailures  int
+	ConsecutiveSuccesses int
+	LastOKAt             *time.Time
+	LastCheckedAt        time.Time
+	LastError            string
+	UpdatedAt            time.Time
+}
+
 // ResourceSample is one resource_samples row. Nullable fields use pointers so
 // platform-unsupported signals (open FDs, load average) round-trip as NULL.
 type ResourceSample struct {

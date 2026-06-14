@@ -25,6 +25,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/guardrails"
 	"github.com/mydisha/keirouter/backend/internal/guardrails/injection"
 	"github.com/mydisha/keirouter/backend/internal/guardrails/pii"
+	"github.com/mydisha/keirouter/backend/internal/healthcheck"
 	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/identity"
 	"github.com/mydisha/keirouter/backend/internal/meter"
@@ -50,6 +51,8 @@ type App struct {
 	server         *http.Server
 	keepAlive      *oauth.KeepAlive
 	guardrailAudit *guardrails.AuditWriter
+	meter          *meter.Meter
+	healthChecker  *healthcheck.Checker
 }
 
 // Build constructs the application from configuration. It opens the database,
@@ -110,6 +113,15 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	pricing := buildPricing()
 	modelPrices := buildModelPrices()
 	mtr := meter.New(db.Usage(), pricing, modelPrices)
+	mtr.EnableAsync(meter.AsyncConfig{
+		Enabled:              cfg.Meter.Async,
+		BatchSize:            cfg.Meter.BatchSize,
+		FlushInterval:        cfg.Meter.FlushInterval,
+		QueueSize:            cfg.Meter.QueueSize,
+		FullQueuePolicy:      cfg.Meter.FullQueuePolicy,
+		ShutdownFlushTimeout: cfg.Meter.ShutdownFlushTimeout,
+		Logger:               log,
+	})
 	uh := usagehub.New()
 	mtr.SetHub(uh)
 	bud := budget.New(db.Budgets(), db.Usage())
@@ -120,8 +132,9 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	disp.SetTokenRefresher(tokenRefresher)
 	// Resolve proxy pool bindings for accounts that have one.
 	disp.SetPoolSource(db.ProxyPools())
-	// Model-level cooldowns and round-robin chain rotation.
+	// Model-level cooldowns, round-robin chain rotation, and background health.
 	disp.SetRoutingSource(db.Routing())
+	disp.SetHealthSource(db.Health())
 	slim := slimmer.Default()
 	metrics := observ.New()
 
@@ -222,6 +235,17 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	// tokens every 30 minutes so requests never hit a stale token.
 	keepAlive := oauth.NewKeepAlive(tokenRefresher, db.Accounts(), store.DefaultTenantID, log)
 
+	healthChecker := healthcheck.New(healthcheck.Config{
+		Enabled:              cfg.Health.Enabled,
+		Interval:             cfg.Health.Interval,
+		Timeout:              cfg.Health.Timeout,
+		MaxParallel:          cfg.Health.MaxParallel,
+		FailureThreshold:     cfg.Health.FailureThreshold,
+		SuccessThreshold:     cfg.Health.SuccessThreshold,
+		RecentModelWindow:    cfg.Health.RecentModelWindow,
+		MaxModelsPerProvider: cfg.Health.MaxModelsPerProvider,
+	}, log, db.Accounts(), db.Health(), connRegistry, v)
+
 	gw := gateway.New(gateway.Deps{
 		Config:          cfg,
 		Logger:          log,
@@ -254,6 +278,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		Guardrails:      guardrailEngine,
 		GuardrailRepo:   db.Guardrails(),
 		GuardrailLogs:   db.GuardrailLogs(),
+		Health:          db.Health(),
+		HealthChecker:   healthChecker,
 	})
 
 	srv := &http.Server{
@@ -268,7 +294,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	// usable without a manual "connect" step in the dashboard.
 	seedFreeAccounts(ctx, db.Accounts(), log)
 
-	return &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit}, nil
+	return &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, meter: mtr, healthChecker: healthChecker}, nil
 }
 
 // seedFreeAccounts auto-creates a default account for providers that are free
@@ -323,6 +349,12 @@ func (a *App) Run(ctx context.Context) error {
 	if a.keepAlive != nil {
 		go a.keepAlive.Run(ctx)
 	}
+	if a.meter != nil {
+		a.meter.StartAsync(ctx)
+	}
+	if a.healthChecker != nil {
+		go a.healthChecker.Run(ctx, store.DefaultTenantID)
+	}
 
 	// Background cooldown sweeper: periodically clears expired cooldowns so
 	// accounts recover automatically without a restart.
@@ -355,9 +387,12 @@ func (a *App) Run(ctx context.Context) error {
 		if err := a.server.Shutdown(shutdownCtx); err != nil {
 			return err
 		}
-		// Drain pending guardrail audit rows before closing the DB.
+		// Drain pending guardrail audit and usage rows before closing the DB.
 		if a.guardrailAudit != nil {
 			a.guardrailAudit.Stop(5 * time.Second)
+		}
+		if a.meter != nil {
+			a.meter.Close(a.cfg.Meter.ShutdownFlushTimeout)
 		}
 		return a.db.Close()
 	case err := <-errCh:

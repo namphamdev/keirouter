@@ -44,6 +44,29 @@ security:
   # remain blocked.
   allow_private_base_url: false
 
+meter:
+  # Buffered/batched usage writes. Keeps request latency low and reduces DB
+  # round-trips for both SQLite and Postgres.
+  async: true
+  batch_size: 100
+  flush_interval: 1s
+  queue_size: 10000
+  # When queue is full: "sync" writes inline to avoid data loss, "drop" drops.
+  full_queue_policy: sync
+  shutdown_flush_timeout: 5s
+
+health:
+  # Background account/model health checks. Unhealthy account/model pairs are
+  # skipped by dispatch until probes recover.
+  enabled: true
+  interval: 30s
+  timeout: 5s
+  max_parallel: 8
+  failure_threshold: 2
+  success_threshold: 1
+  recent_model_window: 24h
+  max_models_per_provider: 8
+
 cache:
   # Semantic response cache. Off by default. When enabled, repeated or
   # near-identical prompts are served from cache for zero upstream cost.

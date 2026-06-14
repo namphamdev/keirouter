@@ -13,28 +13,36 @@ BACKEND_DIR := backend
 FRONTEND_DIR := frontend
 BIN := keirouter
 
+# ANSI colors for terminal output.
+C_RESET  := \033[0m
+C_BOLD   := \033[1m
+C_DIM    := \033[2m
+C_GREEN  := \033[32m
+C_YELLOW := \033[33m
+C_CYAN   := \033[36m
+
 .PHONY: dev backend frontend build build-backend build-frontend test vet hooks bootstrap install setup quickstart clean docker
 
 ## dev: run backend and frontend concurrently; Ctrl-C stops both.
 ##      The backend starts first; frontend waits until the backend is healthy
 ##      so the Vite proxy never hits ECONNREFUSED on cold start.
 dev:
-	@echo "Starting KeiRouter backend (:20180) and dashboard (:5180)…"
+	@printf "$(C_BOLD)$(C_CYAN)Starting KeiRouter$(C_RESET) backend (:20180) + dashboard (:5180)…\n"
 	@trap 'kill 0' INT TERM EXIT; \
 	( cd $(BACKEND_DIR) && go run ./cmd/keirouter ) & \
 	( \
-		echo "⏳ Waiting for backend…"; \
+		printf "$(C_DIM)⏳ Waiting for backend…$(C_RESET)\n"; \
 		ready=0; \
 		for i in $$(seq 1 30); do \
 			if curl -sf http://127.0.0.1:20180/healthz >/dev/null 2>&1; then \
-				echo "✅ Backend ready"; \
+				printf "$(C_GREEN)$(C_BOLD)✅ Backend ready$(C_RESET)\n"; \
 				ready=1; \
 				break; \
 			fi; \
 			sleep 0.5; \
 		done; \
 		if [ "$$ready" -ne 1 ]; then \
-			echo "Backend did not become healthy on http://127.0.0.1:20180/healthz"; \
+			printf "$(C_YELLOW)$(C_BOLD)Backend did not become healthy$(C_RESET) on http://127.0.0.1:20180/healthz\n"; \
 			exit 1; \
 		fi; \
 		cd $(FRONTEND_DIR) && npm run dev \
@@ -95,11 +103,11 @@ clean:
 ##        Zero config — no .env required for local use.
 ##        Usage: make setup
 setup:
-	@echo "🚀 KeiRouter — one-command setup"
-	@test -d $(FRONTEND_DIR)/node_modules || ( echo "📦 Installing frontend deps…" && cd $(FRONTEND_DIR) && npm ci --quiet )
+	@printf "$(C_BOLD)$(C_CYAN)🚀 KeiRouter$(C_RESET) — one-command setup\n"
+	@test -d $(FRONTEND_DIR)/node_modules || ( printf "$(C_DIM)📦 Installing frontend deps…$(C_RESET)\n" && cd $(FRONTEND_DIR) && npm ci --quiet )
 	@cd $(BACKEND_DIR) && go mod download 2>/dev/null || true
 	@echo ""
-	@echo "✅ Dependencies ready. Starting dev servers…"
+	@printf "$(C_GREEN)$(C_BOLD)✅ Dependencies ready.$(C_RESET) Starting dev servers…\n"
 	@echo "   Backend  → http://localhost:20180"
 	@echo "   Dashboard→ http://localhost:5180"
 	@echo "   Password → keirouter"

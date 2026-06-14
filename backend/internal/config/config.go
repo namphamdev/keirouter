@@ -23,6 +23,8 @@ type Config struct {
 	Database DatabaseConfig `koanf:"database"`
 	Security SecurityConfig `koanf:"security"`
 	Cache    CacheConfig    `koanf:"cache"`
+	Meter    MeterConfig    `koanf:"meter"`
+	Health   HealthConfig   `koanf:"health"`
 	Log      LogConfig      `koanf:"log"`
 	Data     DataConfig     `koanf:"data"`
 }
@@ -104,6 +106,34 @@ type CacheConfig struct {
 	EmbeddingDims int `koanf:"embedding_dims"`
 }
 
+// MeterConfig controls usage metering writes.
+type MeterConfig struct {
+	// Async enables buffered/batched DB writes for usage rows.
+	Async bool `koanf:"async"`
+	// BatchSize is the maximum records per flush.
+	BatchSize int `koanf:"batch_size"`
+	// FlushInterval bounds how long records wait in memory.
+	FlushInterval time.Duration `koanf:"flush_interval"`
+	// QueueSize is the buffered event capacity.
+	QueueSize int `koanf:"queue_size"`
+	// FullQueuePolicy is "sync" (fallback direct write) or "drop".
+	FullQueuePolicy string `koanf:"full_queue_policy"`
+	// ShutdownFlushTimeout bounds final drain on shutdown.
+	ShutdownFlushTimeout time.Duration `koanf:"shutdown_flush_timeout"`
+}
+
+// HealthConfig controls background account/model health probes.
+type HealthConfig struct {
+	Enabled              bool          `koanf:"enabled"`
+	Interval             time.Duration `koanf:"interval"`
+	Timeout              time.Duration `koanf:"timeout"`
+	MaxParallel          int           `koanf:"max_parallel"`
+	FailureThreshold     int           `koanf:"failure_threshold"`
+	SuccessThreshold     int           `koanf:"success_threshold"`
+	RecentModelWindow    time.Duration `koanf:"recent_model_window"`
+	MaxModelsPerProvider int           `koanf:"max_models_per_provider"`
+}
+
 // LogConfig controls structured logging.
 type LogConfig struct {
 	// Level: debug, info, warn, error.
@@ -147,6 +177,24 @@ func Default() Config {
 			EmbeddingProvider:   "hash",
 			EmbeddingModel:      "text-embedding-3-small",
 			EmbeddingDims:       1536,
+		},
+		Meter: MeterConfig{
+			Async:                true,
+			BatchSize:            100,
+			FlushInterval:        time.Second,
+			QueueSize:            10000,
+			FullQueuePolicy:      "sync",
+			ShutdownFlushTimeout: 5 * time.Second,
+		},
+		Health: HealthConfig{
+			Enabled:              true,
+			Interval:             30 * time.Second,
+			Timeout:              5 * time.Second,
+			MaxParallel:          8,
+			FailureThreshold:     2,
+			SuccessThreshold:     1,
+			RecentModelWindow:    24 * time.Hour,
+			MaxModelsPerProvider: 8,
 		},
 		Log: LogConfig{Level: "info", Format: "text"},
 	}
@@ -203,6 +251,44 @@ func (c Config) validate() error {
 	}
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		return fmt.Errorf("server.port out of range: %d", c.Server.Port)
+	}
+	if c.Meter.BatchSize <= 0 {
+		c.Meter.BatchSize = 100
+	}
+	if c.Meter.FlushInterval <= 0 {
+		c.Meter.FlushInterval = time.Second
+	}
+	if c.Meter.QueueSize <= 0 {
+		c.Meter.QueueSize = 10000
+	}
+	switch c.Meter.FullQueuePolicy {
+	case "", "sync", "drop":
+	default:
+		return fmt.Errorf("meter.full_queue_policy must be sync or drop, got %q", c.Meter.FullQueuePolicy)
+	}
+	if c.Meter.ShutdownFlushTimeout <= 0 {
+		c.Meter.ShutdownFlushTimeout = 5 * time.Second
+	}
+	if c.Health.Interval <= 0 {
+		c.Health.Interval = 30 * time.Second
+	}
+	if c.Health.Timeout <= 0 {
+		c.Health.Timeout = 5 * time.Second
+	}
+	if c.Health.MaxParallel <= 0 {
+		c.Health.MaxParallel = 8
+	}
+	if c.Health.FailureThreshold <= 0 {
+		c.Health.FailureThreshold = 2
+	}
+	if c.Health.SuccessThreshold <= 0 {
+		c.Health.SuccessThreshold = 1
+	}
+	if c.Health.RecentModelWindow <= 0 {
+		c.Health.RecentModelWindow = 24 * time.Hour
+	}
+	if c.Health.MaxModelsPerProvider <= 0 {
+		c.Health.MaxModelsPerProvider = 8
 	}
 	return nil
 }

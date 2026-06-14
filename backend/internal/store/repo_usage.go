@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -15,7 +17,54 @@ func (db *DB) Usage() *UsageRepo { return &UsageRepo{db: db} }
 
 // Record inserts a usage row for a completed request.
 func (r *UsageRepo) Record(ctx context.Context, u UsageRecord) error {
-	q := r.db.rebind(`
+	if err := insertUsage(ctx, r.db.sql, r.db.rebind, u); err != nil {
+		return fmt.Errorf("store: record usage: %w", err)
+	}
+	return nil
+}
+
+// RecordBatch inserts multiple usage rows in one transaction. It is compatible
+// with both SQLite and Postgres because placeholders are rebound through DB.
+func (r *UsageRepo) RecordBatch(ctx context.Context, records []UsageRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	tx, err := r.db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin usage batch: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const cols = 22
+	var b strings.Builder
+	b.WriteString(`INSERT INTO usage_records
+		(id, tenant_id, project_id, api_key_id, provider, model, account_id, client,
+		 prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
+		 cost_micros, cache_hit, latency_ms, ttft_ms,
+		 slim_bytes_saved, slim_tokens_saved, slim_rules, caveman_active, terse_active,
+		 created_at) VALUES `)
+	args := make([]any, 0, len(records)*cols)
+	for i, u := range records {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		args = append(args, usageArgs(u)...)
+	}
+	q := r.db.rebind(b.String())
+	if _, err := tx.ExecContext(ctx, q, args...); err != nil {
+		return fmt.Errorf("store: record usage batch: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit usage batch: %w", err)
+	}
+	return nil
+}
+
+func insertUsage(ctx context.Context, exec interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, rebind func(string) string, u UsageRecord) error {
+	q := rebind(`
 		INSERT INTO usage_records
 			(id, tenant_id, project_id, api_key_id, provider, model, account_id, client,
 			 prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
@@ -23,17 +72,19 @@ func (r *UsageRepo) Record(ctx context.Context, u UsageRecord) error {
 			 slim_bytes_saved, slim_tokens_saved, slim_rules, caveman_active, terse_active,
 			 created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-	_, err := r.db.sql.ExecContext(ctx, q,
+	_, err := exec.ExecContext(ctx, q, usageArgs(u)...)
+	return err
+}
+
+func usageArgs(u UsageRecord) []any {
+	return []any{
 		u.ID, u.TenantID, nullString(u.ProjectID), nullString(u.APIKeyID),
 		u.Provider, u.Model, nullString(u.AccountID), u.Client,
 		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.CacheWriteTokens,
 		u.CostMicros, boolToInt(u.CacheHit), u.LatencyMS, u.TTFTMS,
 		u.SlimBytesSaved, u.SlimTokensSaved, u.SlimRules, boolToInt(u.CavemanActive), boolToInt(u.TerseActive),
-		formatTime(u.CreatedAt))
-	if err != nil {
-		return fmt.Errorf("store: record usage: %w", err)
+		formatTime(u.CreatedAt),
 	}
-	return nil
 }
 
 // SpendSince returns total cost in micros for a budget scope since the given

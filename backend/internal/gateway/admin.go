@@ -66,6 +66,8 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/usage/models", s.adminModelUsage)
 	r.Get("/usage/stream", s.adminUsageStream)
 	r.Get("/quota", s.adminQuotaUsage)
+	r.Get("/health/accounts", s.adminListAccountHealth)
+	r.Post("/health/check-now", s.adminRunHealthCheck)
 	r.Get("/console", s.adminConsoleLog)
 	r.Delete("/console", s.adminConsoleClear)
 	r.Get("/console/stream", s.adminConsoleStream)
