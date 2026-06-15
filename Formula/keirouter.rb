@@ -1,27 +1,27 @@
-# Auto-updated by release.yml on tag v0.1.14. Do not edit manually.
+# Auto-updated by release.yml on tag v0.1.15. Do not edit manually.
 class Keirouter < Formula
   desc "AI API router — unified gateway for 20+ LLM providers with fallback, caching, and dashboard"
   homepage "https://github.com/mydisha/keirouter"
-  version "0.1.14"
+  version "0.1.15"
   license "MIT"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/mydisha/keirouter/releases/download/v0.1.14/keirouter_v0.1.14_darwin_arm64.tar.gz"
-      sha256 "8d40593b0f1ca4bd6d1e0de34dbec00941a06ff4a8f09ebaf904e93f701320ee"
+      url "https://github.com/mydisha/keirouter/releases/download/v0.1.15/keirouter_v0.1.15_darwin_arm64.tar.gz"
+      sha256 "49a20b6a852c594ddce2c32b8a3100d5faf459ea8c266c59568171f245256fad"
     else
-      url "https://github.com/mydisha/keirouter/releases/download/v0.1.14/keirouter_v0.1.14_darwin_amd64.tar.gz"
-      sha256 "009e78055781257ab72654518be0d27c7c626ed4efc0a9de5b048ace411c983e"
+      url "https://github.com/mydisha/keirouter/releases/download/v0.1.15/keirouter_v0.1.15_darwin_amd64.tar.gz"
+      sha256 "454989fc220c839e01f01db02415c6be680cc2a02fc6953901148af6294a7ade"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/mydisha/keirouter/releases/download/v0.1.14/keirouter_v0.1.14_linux_arm64.tar.gz"
-      sha256 "e05e483b2fda36504382ab5437e1e58d56d94354e762a1548cdcb9fbc74e1404"
+      url "https://github.com/mydisha/keirouter/releases/download/v0.1.15/keirouter_v0.1.15_linux_arm64.tar.gz"
+      sha256 "003a685041e6b92a3f980772af3ccbf1afed6b466399be7b664754abeff1e5ff"
     else
-      url "https://github.com/mydisha/keirouter/releases/download/v0.1.14/keirouter_v0.1.14_linux_amd64.tar.gz"
-      sha256 "0b629dad77ee00407580eb609f21022165eaf6765790d831a1f2b396c7478ee9"
+      url "https://github.com/mydisha/keirouter/releases/download/v0.1.15/keirouter_v0.1.15_linux_amd64.tar.gz"
+      sha256 "12f71aef8ec5f24fef534c4eda1c0c1ecf16ac359552cd99bc80e825636d22fb"
     end
   end
 
