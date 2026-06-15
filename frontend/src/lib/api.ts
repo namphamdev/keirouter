@@ -548,6 +548,8 @@ export interface TopicsConfig {
   mode?: "allow" | "block";
   topics?: string[];
   action?: GuardrailAction;
+  engine?: "keyword" | "embedding";
+  similarity_threshold?: number;
 }
 
 export interface ToxicityConfig {
@@ -555,6 +557,7 @@ export interface ToxicityConfig {
   categories?: string[];
   threshold?: number;
   action?: GuardrailAction;
+  engine?: "native" | "openai";
 }
 
 export interface BiasConfig {

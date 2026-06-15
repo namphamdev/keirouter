@@ -266,7 +266,6 @@ function TopicsSection({
         title="Topic Boundaries"
         description="Restrict allowed conversation topics."
         iconTone="secondary"
-        action={<Badge tone="warning">Coming soon</Badge>}
       />
       <div className="px-5 pb-5 space-y-4">
         <div className="flex items-center justify-between">
@@ -340,7 +339,6 @@ function ToxicitySection({
         title="Toxicity Detection"
         description="Classify and filter profanity, hate speech, harassment, violence, and sexual content."
         iconTone="danger"
-        action={<Badge tone="warning">Coming soon</Badge>}
       />
       <div className="px-5 pb-5 space-y-4">
         <div className="flex items-center justify-between">
@@ -422,7 +420,7 @@ function BiasSection({
         title="Bias Detection"
         description="Scan output for political, gender, ethnic, or religious bias."
         iconTone="secondary"
-        action={<Badge tone="warning">Coming soon</Badge>}
+        action={<Badge tone="neutral">Experimental</Badge>}
       />
       <div className="px-5 pb-5 space-y-4">
         <div className="flex items-center justify-between">

@@ -19,15 +19,16 @@ import (
 
 // Config is the fully-resolved application configuration.
 type Config struct {
-	Server   ServerConfig   `koanf:"server"`
-	Database DatabaseConfig `koanf:"database"`
-	Security SecurityConfig `koanf:"security"`
-	Cache    CacheConfig    `koanf:"cache"`
-	Meter    MeterConfig    `koanf:"meter"`
-	Limits   LimitsConfig   `koanf:"limits"`
-	Health   HealthConfig   `koanf:"health"`
-	Log      LogConfig      `koanf:"log"`
-	Data     DataConfig     `koanf:"data"`
+	Server     ServerConfig     `koanf:"server"`
+	Database   DatabaseConfig   `koanf:"database"`
+	Security   SecurityConfig   `koanf:"security"`
+	Cache      CacheConfig      `koanf:"cache"`
+	Meter      MeterConfig      `koanf:"meter"`
+	Limits     LimitsConfig     `koanf:"limits"`
+	Health     HealthConfig     `koanf:"health"`
+	Log        LogConfig        `koanf:"log"`
+	Data       DataConfig       `koanf:"data"`
+	Guardrails GuardrailsConfig `koanf:"guardrails"`
 }
 
 // ServerConfig controls the HTTP listener.
@@ -166,6 +167,23 @@ type LogConfig struct {
 type DataConfig struct {
 	// Dir is the root data directory. Empty => OS-specific default.
 	Dir string `koanf:"dir"`
+}
+
+// GuardrailsConfig wires optional external engines for the guardrails layer.
+// Detectors run with their built-in native engines by default; populate the
+// sub-configs to enable an external engine on a per-detector basis.
+type GuardrailsConfig struct {
+	Toxicity ToxicityEngineConfig `koanf:"toxicity"`
+}
+
+// ToxicityEngineConfig configures the optional OpenAI Moderation engine. When
+// OpenAIAPIKey is empty the OpenAI engine stays disabled and policies that
+// select engine="openai" fall back to native.
+type ToxicityEngineConfig struct {
+	OpenAIAPIKey  string        `koanf:"openai_api_key"`
+	OpenAIBaseURL string        `koanf:"openai_base_url"`
+	OpenAIModel   string        `koanf:"openai_model"`
+	OpenAITimeout time.Duration `koanf:"openai_timeout"`
 }
 
 // Default returns the baseline configuration applied before file/env overrides.

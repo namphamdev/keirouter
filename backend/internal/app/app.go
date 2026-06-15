@@ -24,8 +24,11 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
 	"github.com/mydisha/keirouter/backend/internal/gateway"
 	"github.com/mydisha/keirouter/backend/internal/guardrails"
+	"github.com/mydisha/keirouter/backend/internal/guardrails/bias"
 	"github.com/mydisha/keirouter/backend/internal/guardrails/injection"
 	"github.com/mydisha/keirouter/backend/internal/guardrails/pii"
+	"github.com/mydisha/keirouter/backend/internal/guardrails/topics"
+	"github.com/mydisha/keirouter/backend/internal/guardrails/toxicity"
 	"github.com/mydisha/keirouter/backend/internal/healthcheck"
 	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/identity"
@@ -223,15 +226,27 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	// buffered channel to the guardrail_logs table.
 	guardrailResolver := guardrails.NewResolver(db.Guardrails(), 30*time.Second)
 	guardrailAudit := guardrails.NewAuditWriter(db.GuardrailLogs(), log, guardrails.AuditWriterConfig{})
+	// Toxicity: native engine ships unconditionally; OpenAI Moderation is
+	// wired only when an API key is configured.
+	toxCfg := toxicity.Config{}
+	if cfg.Guardrails.Toxicity.OpenAIAPIKey != "" {
+		toxCfg.OpenAI = &toxicity.OpenAIConfig{
+			APIKey:  cfg.Guardrails.Toxicity.OpenAIAPIKey,
+			BaseURL: cfg.Guardrails.Toxicity.OpenAIBaseURL,
+			Model:   cfg.Guardrails.Toxicity.OpenAIModel,
+			Timeout: cfg.Guardrails.Toxicity.OpenAITimeout,
+		}
+		log.Info("guardrails: toxicity OpenAI engine enabled")
+	}
 	guardrailEngine := guardrails.NewEngine(guardrails.EngineConfig{
 		Resolver: guardrailResolver,
 		Audit:    guardrailAudit,
 		Detectors: []guardrails.Detector{
 			pii.New(),
 			injection.New(),
-			guardrails.NewTopicsStub(),
-			guardrails.NewToxicityStub(),
-			guardrails.NewBiasStub(),
+			topics.New(topics.Config{Embedder: embedder}),
+			toxicity.New(toxCfg),
+			bias.New(),
 		},
 		Logger: log,
 	})
