@@ -4,7 +4,7 @@ import {
   Sparkles, Zap, MessageSquare, Layers, Route, Wifi, Monitor, Database, Clock,
   ArrowUpCircle, CheckCircle2, ExternalLink,
   Gauge, Eye, EyeOff, KeyRound, Download, Upload, ShieldCheck, Info,
-  Palette,
+  Palette, Shield,
 } from "lucide-react";
 import { api, type EndpointSettings, type BrandingSettings } from "../lib/api";
 import { ChangelogMarkdown } from "../components/ChangelogMarkdown";
@@ -364,6 +364,27 @@ function NetworkTab({
             />
             <p className="mt-1 text-xs text-[var(--text-muted)]">Default: 300s (5 min)</p>
           </Field>
+        </div>
+      </Card>
+
+      {/* Rate limiting */}
+      <Card>
+        <SectionHeader
+          title="Rate Limits"
+          description="Enable per-key RPM, TPM, and concurrency limits from assigned plans."
+          icon={Shield}
+        />
+        <div className="flex items-center justify-between border-t border-[var(--border)] px-6 py-4">
+          <div>
+            <p className="text-sm font-medium">Enforce API key rate limits</p>
+            <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+              When enabled, plan limits are enforced immediately. Blank or 0 plan values remain unlimited.
+            </p>
+          </div>
+          <Toggle
+            checked={local.rate_limits_enabled !== false}
+            onChange={(v) => update({ rate_limits_enabled: v })}
+          />
         </div>
       </Card>
 

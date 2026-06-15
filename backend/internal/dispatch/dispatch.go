@@ -89,9 +89,10 @@ type TokenRefresher interface {
 	ForceRefresh(ctx context.Context, acc store.Account) (store.Account, error)
 }
 
-// HealthSource reports background account/model health state.
+// HealthSource reports and updates background account/model health state.
 type HealthSource interface {
 	IsUnhealthy(ctx context.Context, accountID, model string) (bool, error)
+	MarkHealthy(ctx context.Context, accountID, model string) error
 }
 
 // RoutingSource provides model-level cooldowns and chain rotation state.
@@ -213,6 +214,7 @@ func (d *Dispatcher) PlanWith(ctx context.Context, tenantID string, targets []Ta
 
 	now := time.Now()
 	var attempts []Attempt
+	var unhealthyAttempts []Attempt
 	var lastReason string
 
 	for _, target := range ordered {
@@ -259,13 +261,14 @@ func (d *Dispatcher) PlanWith(ctx context.Context, tenantID string, targets []Ta
 					continue
 				}
 			}
-			// Background health checker: skip known-unhealthy account/model rows.
+			// Background health checker: deprioritize known-unhealthy accounts
+			// rather than hard-skipping them. They are held back as fallback
+			// candidates so that when no healthy account is available the
+			// request still reaches the provider — and a successful response
+			// lets NoteSuccess recover the health row.
+			isUnhealthy := false
 			if d.health != nil {
-				unhealthy, _ := d.health.IsUnhealthy(ctx, acc.ID, target.Model)
-				if unhealthy {
-					lastReason = fmt.Sprintf("account %s model %s unhealthy", acc.ID, target.Model)
-					continue
-				}
+				isUnhealthy, _ = d.health.IsUnhealthy(ctx, acc.ID, target.Model)
 			}
 			// Refresh an expiring OAuth access token before use, so the
 			// connector always receives a live token. A refresh failure skips
@@ -298,13 +301,27 @@ func (d *Dispatcher) PlanWith(ctx context.Context, tenantID string, targets []Ta
 					creds.NoProxy = d.proxyReader.NoProxy()
 				}
 			}
-			attempts = append(attempts, Attempt{
+			attempt := Attempt{
 				Target:  target,
 				Conn:    conn,
 				Creds:   creds,
 				Account: acc,
-			})
+			}
+			if isUnhealthy {
+				unhealthyAttempts = append(unhealthyAttempts, attempt)
+			} else {
+				attempts = append(attempts, attempt)
+			}
 		}
+	}
+
+	// Fall back to unhealthy accounts when no healthy candidate exists.
+	// This prevents a total outage when the background probe incorrectly
+	// marks all accounts unhealthy, and gives NoteSuccess a chance to
+	// recover the health row via real production traffic.
+	if len(attempts) == 0 && len(unhealthyAttempts) > 0 {
+		attempts = unhealthyAttempts
+		lastReason = ""
 	}
 
 	if len(attempts) == 0 {
@@ -370,6 +387,9 @@ func (d *Dispatcher) NoteSuccess(ctx context.Context, accountID, model string) {
 	_ = d.accounts.ResetBackoffLevel(ctx, accountID)
 	if d.routing != nil && model != "" {
 		_ = d.routing.ClearModelCooldown(ctx, accountID, model)
+	}
+	if d.health != nil && model != "" {
+		_ = d.health.MarkHealthy(ctx, accountID, model)
 	}
 }
 

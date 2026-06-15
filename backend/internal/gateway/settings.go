@@ -49,6 +49,9 @@ type EndpointSettings struct {
 	// Observability.
 	ObservabilityEnabled *bool `json:"observability_enabled,omitempty"`
 
+	// RateLimitsEnabled toggles per-key RPM/TPM/concurrency enforcement.
+	RateLimitsEnabled bool `json:"rate_limits_enabled"`
+
 	// Timeout settings (milliseconds).
 	// StreamStallTimeoutMs aborts a stream that produces no data for this long.
 	// Increase for reasoning models (Deepseek, GLM) that think before streaming.
@@ -75,6 +78,7 @@ func defaultEndpointSettings() EndpointSettings {
 		OutboundProxyEnabled: false,
 		OutboundProxyURL:     "",
 		OutboundNoProxy:      "",
+		RateLimitsEnabled:    true,
 		// Timeout defaults (ms). Raised from 9router's aggressive 20s/30s to
 		// accommodate slow upstream providers and reasoning models.
 		StreamStallTimeoutMs:    120000, // 2 min (was 30s in 9router)
@@ -97,6 +101,11 @@ func (s *Server) loadEndpointSettings(ctx context.Context) EndpointSettings {
 	var es EndpointSettings
 	if err := json.Unmarshal([]byte(raw), &es); err != nil {
 		return def
+	}
+	var rawFields map[string]json.RawMessage
+	_ = json.Unmarshal([]byte(raw), &rawFields)
+	if _, ok := rawFields["rate_limits_enabled"]; !ok {
+		es.RateLimitsEnabled = def.RateLimitsEnabled
 	}
 	// Backfill empty levels with defaults.
 	if es.CavemanLevel == "" {
@@ -186,6 +195,7 @@ func (s *Server) adminUpdateEndpointSettings(w http.ResponseWriter, r *http.Requ
 		OutboundProxyURL        *string `json:"outbound_proxy_url"`
 		OutboundNoProxy         *string `json:"outbound_no_proxy"`
 		ObservabilityEnabled    *bool   `json:"observability_enabled"`
+		RateLimitsEnabled       *bool   `json:"rate_limits_enabled"`
 		StreamStallTimeoutMs    *int    `json:"stream_stall_timeout_ms"`
 		ResponseHeaderTimeoutMs *int    `json:"response_header_timeout_ms"`
 		RequestTimeoutMs        *int    `json:"request_timeout_ms"`
@@ -259,6 +269,9 @@ func (s *Server) adminUpdateEndpointSettings(w http.ResponseWriter, r *http.Requ
 	if patch.ObservabilityEnabled != nil {
 		current.ObservabilityEnabled = patch.ObservabilityEnabled
 	}
+	if patch.RateLimitsEnabled != nil {
+		current.RateLimitsEnabled = *patch.RateLimitsEnabled
+	}
 	if patch.StreamStallTimeoutMs != nil {
 		if *patch.StreamStallTimeoutMs < 5000 || *patch.StreamStallTimeoutMs > 600000 {
 			writeError(w, http.StatusBadRequest, "stream_stall_timeout_ms must be between 5000 and 600000")
@@ -320,6 +333,11 @@ func (s *Server) adminUpdateEndpointSettings(w http.ResponseWriter, r *http.Requ
 			current.OutboundProxyURL,
 			current.OutboundNoProxy,
 		)
+	}
+
+	// Notify limiter so changes take effect without restart.
+	if s.rateLimiter != nil {
+		s.rateLimiter.SetEnabled(current.RateLimitsEnabled)
 	}
 
 	writeJSON(w, http.StatusOK, current)

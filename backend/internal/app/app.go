@@ -208,6 +208,16 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	proxyNotifier := gateway.NewProxyNotifier(proxyEnabled, proxyURL, noProxy)
 	disp.SetGlobalProxy(proxyNotifier)
 
+	cfg.Limits.Enabled = true
+	if raw, err := db.Settings().Get(ctx, "endpoint_settings"); err == nil && raw != "" {
+		var es struct {
+			RateLimitsEnabled *bool `json:"rate_limits_enabled"`
+		}
+		if json.Unmarshal([]byte(raw), &es) == nil && es.RateLimitsEnabled != nil {
+			cfg.Limits.Enabled = *es.RateLimitsEnabled
+		}
+	}
+
 	// Guardrails: content-safety policies layered global → provider → model →
 	// chain → apikey. Resolver caches lookups for 30s; audit writer drains a
 	// buffered channel to the guardrail_logs table.
@@ -303,6 +313,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		UsageHub:        uh,
 		TimeoutNotifier: timeoutNotifier,
 		ProxyNotifier:   proxyNotifier,
+		RateLimiter:     limiter,
 		Refresher:       tokenRefresher,
 		Guardrails:      guardrailEngine,
 		GuardrailRepo:   db.Guardrails(),

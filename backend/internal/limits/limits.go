@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/config"
@@ -84,7 +85,7 @@ type bucket struct {
 }
 
 type Memory struct {
-	enabled bool
+	enabled atomic.Bool
 	window  time.Duration
 	now     func() time.Time
 
@@ -103,23 +104,31 @@ func NewMemory(cfg MemoryConfig) *Memory {
 		now = time.Now
 	}
 	m := &Memory{
-		enabled:     cfg.Enabled,
 		window:      window,
 		now:         now,
 		buckets:     make(map[string]bucket),
 		concurrency: make(map[string]int64),
 	}
+	m.enabled.Store(cfg.Enabled)
 	if cfg.CleanupInterval > 0 {
 		go m.cleanupLoop(cfg.CleanupInterval)
 	}
 	return m
 }
 
+func (m *Memory) SetEnabled(enabled bool) {
+	m.enabled.Store(enabled)
+}
+
+func (m *Memory) Enabled() bool {
+	return m.enabled.Load()
+}
+
 func (m *Memory) Acquire(ctx context.Context, req Request) (ReleaseFunc, Decision, error) {
 	if ctx.Err() != nil {
 		return nil, Decision{}, ctx.Err()
 	}
-	if !m.enabled {
+	if !m.enabled.Load() {
 		return noopRelease, Decision{Allowed: true}, nil
 	}
 	if req.APIKeyID == "" {

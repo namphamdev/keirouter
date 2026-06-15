@@ -52,7 +52,7 @@ func New(cfg Config, log *slog.Logger, accounts *store.AccountRepo, health *stor
 		cfg.MaxParallel = 8
 	}
 	if cfg.FailureThreshold <= 0 {
-		cfg.FailureThreshold = 2
+		cfg.FailureThreshold = 3
 	}
 	if cfg.SuccessThreshold <= 0 {
 		cfg.SuccessThreshold = 1

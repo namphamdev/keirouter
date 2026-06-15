@@ -77,6 +77,25 @@ func (r *HealthRepo) IsUnhealthy(ctx context.Context, accountID, model string) (
 	return false, rows.Err()
 }
 
+// MarkHealthy sets an account/model pair to healthy when real traffic succeeds,
+// resetting the failure counter so the background probe's unhealthy verdict
+// can be overridden by production success. Only updates existing rows; new
+// account/model pairs are created by the background checker.
+func (r *HealthRepo) MarkHealthy(ctx context.Context, accountID, model string) error {
+	now := formatTime(time.Now())
+	q := r.db.rebind(`UPDATE account_health
+		SET status = 'healthy', consecutive_failures = 0,
+		    consecutive_successes = consecutive_successes + 1,
+		    last_ok_at = ?, last_checked_at = ?, updated_at = ?
+		WHERE account_id = ? AND model IN (?, '__all__')
+		  AND status != 'healthy'`)
+	_, err := r.db.sql.ExecContext(ctx, q, now, now, now, accountID, model)
+	if err != nil {
+		return fmt.Errorf("store: mark account healthy: %w", err)
+	}
+	return nil
+}
+
 // List returns health rows for a tenant.
 func (r *HealthRepo) List(ctx context.Context, tenantID string) ([]AccountHealth, error) {
 	q := r.db.rebind(`SELECT ` + accountHealthColumns + `
