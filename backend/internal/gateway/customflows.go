@@ -24,6 +24,8 @@ func (s *Server) mountCustomFlows(r chi.Router) {
 	r.Post("/codebuddy/auth-poll", s.codebuddyAuthPoll)
 
 	r.Post("/cursor/import", s.cursorImport)
+
+	r.Post("/commandcode/import", s.commandcodeImport)
 }
 
 // kilocodeDeviceStart begins a KiloCode device-auth request and returns the user
@@ -185,6 +187,35 @@ func (s *Server) cursorImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "provider": "cursor"})
+}
+
+// commandcodeImport validates and stores a token pasted from the Command Code
+// CLI (~/.commandcode/auth.json) or generated at commandcode.ai/studio.
+func (s *Server) commandcodeImport(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Token string `json:"token"`
+		Label string `json:"label"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.Token == "" {
+		writeError(w, http.StatusBadRequest, "token is required")
+		return
+	}
+
+	tokens, err := oauth.CommandCodeImportToken(r.Context(), body.Token)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	label := defaultStr(body.Label, "Command Code (CLI)")
+	id, perr := s.persistOAuthAccount(r, "commandcode", label, tokens)
+	if perr != nil {
+		writeError(w, http.StatusInternalServerError, perr.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "provider": "commandcode"})
 }
 
 // completeCustomPoll maps a custom-flow PollResult to the standard poll

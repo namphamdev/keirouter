@@ -8,6 +8,7 @@ import { QoderConnectModal } from "../components/QoderConnectModal";
 import { KilocodeConnectModal } from "../components/KilocodeConnectModal";
 import { CodebuddyConnectModal } from "../components/CodebuddyConnectModal";
 import { CursorConnectModal } from "../components/CursorConnectModal";
+import { CommandCodeConnectModal } from "../components/CommandCodeConnectModal";
 import { useToast } from "../components/Toast";
 import {
   Card,
@@ -88,6 +89,7 @@ export function ProviderDetailPage() {
   const [kilocodeOpen, setKilocodeOpen] = useState(false);
   const [codebuddyOpen, setCodebuddyOpen] = useState(false);
   const [cursorOpen, setCursorOpen] = useState(false);
+  const [commandcodeOpen, setCommandcodeOpen] = useState(false);
   const [addKeyOpen, setAddKeyOpen] = useState(false);
 
   // Model search and pagination
@@ -313,7 +315,8 @@ export function ProviderDetailPage() {
   const isKilocode = provider.id === "kilocode";
   const isCodebuddy = provider.id === "codebuddy";
   const isCursor = provider.id === "cursor";
-  const hasCustomModal = isKiro || isQoder || isKilocode || isCodebuddy || isCursor;
+  const isCommandCode = provider.id === "commandcode";
+  const hasCustomModal = isKiro || isQoder || isKilocode || isCodebuddy || isCursor || isCommandCode;
   const supportsManualConnect = !hasCustomModal && (
     provider.auth_modes.includes("api_key") ||
     provider.auth_modes.includes("none") ||
@@ -410,6 +413,12 @@ export function ProviderDetailPage() {
                   <Button variant="ghost" className="h-8 px-3 text-xs" onClick={() => setCursorOpen(true)}>
                     <Plug className="h-3.5 w-3.5" />
                     Connect Cursor
+                  </Button>
+                )}
+                {isCommandCode && (
+                  <Button variant="ghost" className="h-8 px-3 text-xs" onClick={() => setCommandcodeOpen(true)}>
+                    <Plug className="h-3.5 w-3.5" />
+                    Connect CLI
                   </Button>
                 )}
                 {!hasCustomModal && oauthProvider && (
@@ -610,6 +619,7 @@ export function ProviderDetailPage() {
       {kilocodeOpen && <KilocodeConnectModal onClose={() => setKilocodeOpen(false)} />}
       {codebuddyOpen && <CodebuddyConnectModal onClose={() => setCodebuddyOpen(false)} />}
       {cursorOpen && <CursorConnectModal onClose={() => setCursorOpen(false)} />}
+      {commandcodeOpen && <CommandCodeConnectModal onClose={() => setCommandcodeOpen(false)} />}
       {addKeyOpen && (
         <AddApiKeyModal
           provider={provider}

@@ -494,3 +494,36 @@ func cursorMachineID(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
+
+// ---------------------------------------------------------------------------
+// Command Code (import token)
+// ---------------------------------------------------------------------------
+
+// CommandCodeImportToken validates a token pasted from the Command Code CLI
+// (~/.commandcode/auth.json) or generated at commandcode.ai/studio. The token
+// is stored as an access token; the CommandCode connector sends it as a Bearer
+// token on the /alpha/generate endpoint. A best-effort JWT decode extracts the
+// user email for the account label.
+func CommandCodeImportToken(_ context.Context, token string) (*Tokens, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, fmt.Errorf("commandcode: token is required")
+	}
+
+	tokens := &Tokens{
+		AccessToken: token,
+		ExpiresIn:   86400 * 30,
+		Extra: map[string]string{
+			"auth_method": "imported",
+		},
+	}
+	if payload := decodeJWTPayload(token); payload != nil {
+		if email, _ := payload["email"].(string); email != "" {
+			tokens.Email = email
+		}
+		if sub, _ := payload["sub"].(string); sub != "" && tokens.Email == "" {
+			tokens.Email = sub
+		}
+	}
+	return tokens, nil
+}

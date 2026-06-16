@@ -1061,6 +1061,10 @@ export const api = {
   cursorImport: (token: string, label?: string) =>
     request<{ id: string; provider: string }>("POST", "/cursor/import", { token, label }),
 
+  // Command Code connect flow (import token from CLI or studio). Mounted under /commandcode.
+  commandcodeImport: (token: string, label?: string) =>
+    request<{ id: string; provider: string }>("POST", "/commandcode/import", { token, label }),
+
   // System monitoring.
   systemMonitor: () => request<SystemSnapshot>("GET", "/system"),
   systemHistory: () => request<SystemHistory>("GET", "/system/history"),

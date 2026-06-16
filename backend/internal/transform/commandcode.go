@@ -5,6 +5,7 @@ import (
 	"fmt"
 	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -130,6 +131,7 @@ func (CommandCodeCodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
 			"mainBranch":    "",
 			"gitStatus":     "",
 			"recentCommits": []any{},
+			"date":          time.Now().Format("2006-01-02"),
 		},
 		"params": params,
 	}

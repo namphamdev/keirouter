@@ -59,12 +59,31 @@ func (c *CommandCode) headers(creds core.Credentials) map[string]string {
 	return mergeHeaders(h, creds.Headers)
 }
 
-// Validate confirms a credential is present. Command Code only exposes a
-// generate endpoint (no cheap models/userinfo probe), so this is a presence
-// check: a live probe would consume quota.
+// Validate confirms a credential is valid by sending a minimal generate probe
+// to the upstream endpoint. The probe uses the cheapest model with max_tokens=1
+// so quota consumption is negligible.
 func (c *CommandCode) Validate(ctx context.Context, creds core.Credentials) error {
 	if creds.AccessToken == "" && creds.APIKey == "" {
 		return fmt.Errorf("validation failed for %s: no access token or API key", c.id)
+	}
+
+	maxTokens := 1
+	req := &core.ChatRequest{
+		Model:     "deepseek/deepseek-v4-flash",
+		Stream:    true,
+		MaxTokens: &maxTokens,
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "ping"}}},
+		},
+	}
+	body, err := c.codec.RenderRequest(req)
+	if err != nil {
+		return fmt.Errorf("validation failed for %s: %w", c.id, err)
+	}
+
+	_, err = doJSON(ctx, c.id, "validate", c.baseURL(creds), body, c.headers(creds))
+	if err != nil {
+		return fmt.Errorf("validation failed for %s: %w", c.id, err)
 	}
 	return nil
 }
