@@ -75,6 +75,11 @@ var rules = []rule{
 	{"kiro", []core.Capability{core.CapToolCalling}, false},
 	{"codewhisperer", []core.Capability{core.CapToolCalling}, false},
 
+	// Cursor IDE agent models. Composer is Cursor's agentic coding family;
+	// "default" is the auto-picker model id exposed by the Cursor connector.
+	{"composer", []core.Capability{core.CapToolCalling, core.CapVision, core.CapReasoning, core.CapLongContext}, false},
+	{"default", []core.Capability{core.CapToolCalling, core.CapVision, core.CapReasoning, core.CapLongContext}, true},
+
 	// Qoder (coding assistant platform). Model IDs are generic tier names,
 	// so we use exact matches to avoid false positives with other providers.
 	{"auto", []core.Capability{core.CapToolCalling, core.CapLongContext}, true},

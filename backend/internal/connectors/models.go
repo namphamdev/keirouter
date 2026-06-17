@@ -207,6 +207,7 @@ var providerModels = map[string][]ModelSpec{
 	},
 	"cursor": {
 		m("default", "Auto (Server Picks)"),
+		m("composer-2.5", "Composer 2.5"),
 		m("claude-4.5-opus-high-thinking", "Claude 4.5 Opus High Thinking"),
 		m("claude-4.5-opus-high", "Claude 4.5 Opus High"),
 		m("claude-4.5-sonnet-thinking", "Claude 4.5 Sonnet Thinking"),

@@ -1,28 +1,45 @@
 package connectors
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 )
 
-// Cursor drives Cursor IDE's StreamUnifiedChatWithTools endpoint. Unlike every
-// other provider, Cursor speaks a Connect-RPC protobuf transport (not JSON):
-// the request body is a hand-encoded protobuf wrapped in a Connect-RPC frame,
-// authenticated by the x-cursor-checksum "Jyh cipher" header set, and the
-// response is a sequence of Connect-RPC frames carrying protobuf payloads. This
-// connector ports 9router's CursorExecutor: it builds the framed body, reads the
-// full framed response, and decodes each frame into canonical chunks.
+// cursorClientVersion advertises the CLI build to Cursor's agent endpoint.
+// Cursor gates the agent.v1 protocol on a recognized CLI client version.
+const cursorClientVersion = "cli-2026.01.09-231024f"
+
+// cursorProviderIdentifier tags advertised MCP tools so Cursor routes their
+// invocations back as exec handshake messages.
+const cursorProviderIdentifier = "pi-agent"
+
+// cursorNativeToolNames are tools Cursor implements internally; advertising
+// them as MCP tools would shadow the native implementations.
+var cursorNativeToolNames = map[string]bool{
+	"bash": true, "read": true, "write": true, "delete": true,
+	"ls": true, "grep": true, "lsp": true, "todo": true,
+}
+
+// Cursor drives Cursor's agent.v1 CLI protocol: a single bidirectional
+// Connect-streaming RPC to /agent.v1.AgentService/Run over HTTP/2. The client
+// sends an AgentRunRequest then services the server's exec/KV/blob handshake
+// while consuming interaction updates (text, thinking, tool calls) until the
+// turn ends.
+//
+// KeiRouter is an OpenAI-compatible proxy with no local filesystem, so every
+// exec operation (shell, read, write, ...) is rejected; only the request
+// context handshake (which advertises the caller's MCP tools) is honored.
 type Cursor struct {
 	id          string
 	defaultBase string
-	chatPath    string
 }
 
 // NewCursor builds a Cursor connector.
@@ -31,11 +48,7 @@ func NewCursor(id, defaultBaseURL string) *Cursor {
 	if base == "" {
 		base = "https://api2.cursor.sh"
 	}
-	return &Cursor{
-		id:          id,
-		defaultBase: base,
-		chatPath:    "/aiserver.v1.ChatService/StreamUnifiedChatWithTools",
-	}
+	return &Cursor{id: id, defaultBase: base}
 }
 
 func (c *Cursor) ID() string            { return c.id }
@@ -48,13 +61,8 @@ func (c *Cursor) baseURL(creds core.Credentials) string {
 	return c.defaultBase
 }
 
-func (c *Cursor) url(creds core.Credentials) string {
-	return strings.TrimRight(c.baseURL(creds), "/") + c.chatPath
-}
-
-// Validate confirms a token is present. Cursor speaks a Connect-RPC protobuf
-// transport with no cheap probe endpoint, so only token presence can be
-// checked without issuing a billable chat request.
+// Validate confirms a token is present. Cursor's agent endpoint has no cheap
+// probe, so only credential presence can be checked without a billable run.
 func (c *Cursor) Validate(ctx context.Context, creds core.Credentials) error {
 	if creds.AccessToken == "" && creds.APIKey == "" {
 		return fmt.Errorf("validation failed for %s: no access token", c.id)
@@ -62,24 +70,32 @@ func (c *Cursor) Validate(ctx context.Context, creds core.Credentials) error {
 	return nil
 }
 
-// headers builds the Cursor Connect-RPC + checksum header set. machine_id and
-// ghost_mode come from the account's extra metadata; machine_id is derived from
-// the token when absent.
-func (c *Cursor) headers(creds core.Credentials) map[string]string {
-	token := creds.AccessToken
-	if token == "" {
-		token = creds.APIKey
+func (c *Cursor) token(creds core.Credentials) string {
+	if creds.AccessToken != "" {
+		return creds.AccessToken
 	}
-	machineID := creds.Extra["machine_id"]
-	ghost := creds.Extra["ghost_mode"] != "false" // default true
-	h := buildCursorHeaders(token, machineID, stainlessOSLower(), cursorArch(), ghost)
+	return creds.APIKey
+}
+
+// headers builds the agent.v1 Connect header set with Bearer auth and the CLI
+// client identity.
+func (c *Cursor) headers(creds core.Credentials) map[string]string {
+	h := map[string]string{
+		"content-type":             "application/connect+proto",
+		"connect-protocol-version": "1",
+		"te":                       "trailers",
+		"authorization":            "Bearer " + cleanCursorAgentToken(c.token(creds)),
+		"x-ghost-mode":             "true",
+		"x-cursor-client-version":  cursorClientVersion,
+		"x-cursor-client-type":     "cli",
+		"x-request-id":             uuid.NewString(),
+	}
 	return mergeHeaders(h, creds.Headers)
 }
 
-// Chat performs a non-streaming Cursor call: it reads the full framed protobuf
-// response and folds it into a single response.
+// Chat performs a Cursor run and folds the streamed result into one response.
 func (c *Cursor) Chat(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (*core.ChatResponse, error) {
-	results, err := c.do(ctx, req, creds)
+	ch, err := c.Stream(ctx, req, creds, core.StreamConfig{})
 	if err != nil {
 		return nil, err
 	}
@@ -89,23 +105,43 @@ func (c *Cursor) Chat(ctx context.Context, req *core.ChatRequest, creds core.Cre
 	toolCalls := map[string]*core.ToolCall{}
 	var toolOrder []string
 	finish := core.FinishStop
+	var usage core.Usage
 
-	for _, r := range results {
-		switch {
-		case r.toolCall != nil:
-			tc, ok := toolCalls[r.toolCall.id]
+	for chunk := range ch {
+		switch chunk.Type {
+		case core.ChunkText:
+			text += chunk.Delta
+		case core.ChunkThinking:
+			thinking += chunk.Delta
+		case core.ChunkToolCall:
+			if chunk.ToolCall == nil {
+				continue
+			}
+			tc, ok := toolCalls[chunk.ToolCall.ID]
 			if !ok {
-				tc = &core.ToolCall{ID: r.toolCall.id, Name: r.toolCall.name, Arguments: json.RawMessage(r.toolCall.args)}
-				toolCalls[r.toolCall.id] = tc
-				toolOrder = append(toolOrder, r.toolCall.id)
+				tc = &core.ToolCall{ID: chunk.ToolCall.ID, Name: chunk.ToolCall.Name, Arguments: append(json.RawMessage{}, chunk.ToolCall.Arguments...)}
+				toolCalls[chunk.ToolCall.ID] = tc
+				toolOrder = append(toolOrder, chunk.ToolCall.ID)
 			} else {
-				tc.Arguments = append(tc.Arguments, []byte(r.toolCall.args)...)
+				if chunk.ToolCall.Name != "" {
+					tc.Name = chunk.ToolCall.Name
+				}
+				tc.Arguments = append(tc.Arguments, chunk.ToolCall.Arguments...)
 			}
 			finish = core.FinishToolCalls
-		case r.text != "":
-			text += r.text
-		case r.thinking != "":
-			thinking += r.thinking
+		case core.ChunkUsage:
+			if chunk.Usage != nil {
+				usage = *chunk.Usage
+			}
+		case core.ChunkFinish:
+			if chunk.FinishReason != "" {
+				finish = chunk.FinishReason
+			}
+			if chunk.Usage != nil {
+				usage = *chunk.Usage
+			}
+		case core.ChunkError:
+			return nil, chunk.Err
 		}
 	}
 
@@ -123,175 +159,27 @@ func (c *Cursor) Chat(ctx context.Context, req *core.ChatRequest, creds core.Cre
 		msg.Content = append(msg.Content, core.ContentPart{Type: core.PartToolCall, ToolCall: tc})
 	}
 
-	return &core.ChatResponse{Model: req.Model, Message: msg, FinishReason: finish}, nil
+	return &core.ChatResponse{Model: req.Model, Message: msg, FinishReason: finish, Usage: usage}, nil
 }
 
-// Stream performs a Cursor call and emits canonical chunks. Cursor returns the
-// whole framed protobuf response (not incremental SSE), so the connector reads
-// it fully then replays decoded frames as chunks.
-func (c *Cursor) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
-	results, err := c.do(ctx, req, creds)
-	if err != nil {
-		return nil, err
-	}
-
-	out := make(chan core.StreamChunk, 16)
-	go func() {
-		defer close(out)
-
-		ttft := newTTFTTracker(cfg)
-
-		seen := map[string]bool{}
-		hadTool := false
-
-		emit := func(ch core.StreamChunk) bool {
-			ttft.maybeReport(ch)
-			select {
-			case out <- ch:
-				return true
-			case <-ctx.Done():
-				return false
-			}
-		}
-
-		for _, r := range results {
-			switch {
-			case r.toolCall != nil:
-				hadTool = true
-				tc := r.toolCall
-				if !seen[tc.id] {
-					seen[tc.id] = true
-					ch := core.StreamChunk{Type: core.ChunkToolCall, ToolCall: &core.ToolCall{ID: tc.id, Name: tc.name, Arguments: json.RawMessage("")}}
-					if !emit(ch) {
-						return
-					}
-				}
-				if tc.args != "" && tc.args != "{}" {
-					ch := core.StreamChunk{Type: core.ChunkToolCall, ToolCall: &core.ToolCall{ID: tc.id, Arguments: json.RawMessage(tc.args)}}
-					if !emit(ch) {
-						return
-					}
-				}
-			case r.thinking != "":
-				ch := core.StreamChunk{Type: core.ChunkThinking, Delta: r.thinking}
-				if !emit(ch) {
-					return
-				}
-			case r.text != "":
-				ch := core.StreamChunk{Type: core.ChunkText, Delta: r.text}
-				if !emit(ch) {
-					return
-				}
-			}
-		}
-
-		finish := core.FinishStop
-		if hadTool {
-			finish = core.FinishToolCalls
-		}
-		emit(core.StreamChunk{Type: core.ChunkFinish, FinishReason: finish})
-	}()
-	return out, nil
+// deterministicMessageID derives a stable UUID-shaped id from a content key so
+// identical history hashes to the same blob ids across requests.
+func deterministicMessageID(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	h := hex.EncodeToString(sum[:])
+	return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
 }
 
-// do performs the HTTP POST and decodes the framed protobuf response into an
-// ordered slice of cursorResults.
-func (c *Cursor) do(ctx context.Context, req *core.ChatRequest, creds core.Credentials) ([]cursorResult, error) {
-	forceAgent := strings.Contains(strings.ToLower(req.Metadata.ClientKind), "claude")
-	body := buildCursorBody(req, forceAgent)
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url(creds), bytes.NewReader(body))
-	if err != nil {
-		return nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
+// cleanCursorAgentToken strips a "prefix::" segment from a Cursor token.
+func cleanCursorAgentToken(token string) string {
+	if i := strings.Index(token, "::"); i >= 0 {
+		return token[i+2:]
 	}
-	for k, v := range c.headers(creds) {
-		httpReq.Header.Set(k, v)
-	}
-
-	resp, err := sharedClient.Do(httpReq)
-	if err != nil {
-		return nil, transportError(ctx, c.id, req.Model, err)
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, &core.ProviderError{Kind: core.ErrUpstream, Provider: c.id, Model: req.Model, Message: "read body: " + err.Error(), Cause: err}
-	}
-	if resp.StatusCode >= 400 {
-		return nil, httpStatusError(c.id, req.Model, resp, raw)
-	}
-
-	// Decode all Connect-RPC frames.
-	var results []cursorResult
-	offset := 0
-	for offset < len(raw) {
-		payload, consumed, ok := parseConnectRPCFrame(raw[offset:])
-		if !ok {
-			break
-		}
-		offset += consumed
-
-		// A JSON error frame begins with '{'.
-		if len(payload) > 0 && payload[0] == '{' {
-			if cerr := cursorErrorFromJSON(payload); cerr != nil {
-				if len(results) == 0 {
-					return nil, &core.ProviderError{Kind: cerr.kind, Provider: c.id, Model: req.Model, Message: cerr.message}
-				}
-				break // already have content; stop on trailing error frame
-			}
-		}
-
-		res := extractCursorResult(payload)
-		if res.text != "" || res.thinking != "" || res.toolCall != nil {
-			results = append(results, res)
-		}
-	}
-	return results, nil
+	return token
 }
 
+// cursorErr carries a classified error decoded from a Connect end-stream frame.
 type cursorErr struct {
 	kind    core.ErrorKind
 	message string
-}
-
-// cursorErrorFromJSON parses a Cursor JSON error frame, returning nil if the
-// payload is not actually an error.
-func cursorErrorFromJSON(payload []byte) *cursorErr {
-	var e struct {
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if json.Unmarshal(payload, &e) != nil || e.Error.Message == "" && e.Error.Code == "" {
-		return nil
-	}
-	kind := core.ErrUpstream
-	if e.Error.Code == "resource_exhausted" {
-		kind = core.ErrRateLimit
-	}
-	msg := e.Error.Message
-	if msg == "" {
-		msg = e.Error.Code
-	}
-	return &cursorErr{kind: kind, message: msg}
-}
-
-func stainlessOSLower() string {
-	switch stainlessOS() {
-	case "MacOS":
-		return "macos"
-	case "Windows":
-		return "windows"
-	default:
-		return "linux"
-	}
-}
-
-func cursorArch() string {
-	if stainlessArch() == "arm64" {
-		return "aarch64"
-	}
-	return "x64"
 }

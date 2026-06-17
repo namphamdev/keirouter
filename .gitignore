@@ -50,3 +50,5 @@ data/
 !.vscode/extensions.json
 *.swp
 node_modules/
+oh-my-pi/
+codedb.snapshot

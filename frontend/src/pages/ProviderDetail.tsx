@@ -1311,6 +1311,24 @@ function AuthCodeFlow({ provider, onClose }: { provider: OAuthProvider; onClose:
     }
   };
 
+  // startManual opens the provider sign-in without starting the gateway's fixed
+  // loopback callback server, then switches straight to manual paste. This is
+  // the reliable path for providers with a fixed loopback redirect (e.g. xAI on
+  // 127.0.0.1:56121) when that port is already taken by the provider's own CLI
+  // or the dashboard runs on a remote host.
+  const startManual = async () => {
+    setError("");
+    try {
+      const res = await api.oauthAuthorize(provider.provider, redirectURIForProvider(provider), true);
+      stateRef.current = res.state;
+      window.open(res.authorize_url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      setError((e as Error).message);
+      return;
+    }
+    setManual(true);
+  };
+
   const submitManual = async () => {
     setError("");
     const input = pasted.trim();
@@ -1387,6 +1405,13 @@ function AuthCodeFlow({ provider, onClose }: { provider: OAuthProvider; onClose:
           <Button onClick={start} className="w-full">
             Open sign-in
           </Button>
+          <button
+            type="button"
+            onClick={startManual}
+            className="w-full text-center text-xs text-[var(--text-muted)] underline underline-offset-2 hover:text-[var(--text)]"
+          >
+            Enter the code manually instead
+          </button>
         </>
       ) : (
         <div className="flex flex-col items-center gap-3 py-4">

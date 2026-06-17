@@ -24,6 +24,8 @@ func (s *Server) mountCustomFlows(r chi.Router) {
 	r.Post("/codebuddy/auth-poll", s.codebuddyAuthPoll)
 
 	r.Post("/cursor/import", s.cursorImport)
+	r.Post("/cursor/login-start", s.cursorLoginStart)
+	r.Post("/cursor/login-poll", s.cursorLoginPoll)
 
 	r.Post("/commandcode/import", s.commandcodeImport)
 }
@@ -187,6 +189,55 @@ func (s *Server) cursorImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "provider": "cursor"})
+}
+
+// cursorLoginStart generates the local PKCE/uuid state and returns the browser
+// deep-control login URL. The uuid doubles as the poll key.
+func (s *Server) cursorLoginStart(w http.ResponseWriter, r *http.Request) {
+	flow, err := oauth.CursorInitiateLogin()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "cursor flow init failed"))
+		return
+	}
+	s.oauthSessions.Put(flow.UUID, &oauth.Session{
+		Provider:   "cursor",
+		Flow:       oauth.FlowDeviceCode,
+		DeviceCode: flow.UUID,
+		Verifier:   flow.Verifier,
+		Interval:   2,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"device_code":               flow.UUID,
+		"user_code":                 "",
+		"verification_uri":          "https://cursor.com/loginDeepControl",
+		"verification_uri_complete": flow.VerificationURIComplete,
+		"expires_in":                300,
+		"interval":                  2,
+	})
+}
+
+// cursorLoginPoll polls the Cursor deep-control auth endpoint using the stored
+// uuid and PKCE verifier.
+func (s *Server) cursorLoginPoll(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		DeviceCode string `json:"device_code"`
+		Label      string `json:"label"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.DeviceCode == "" {
+		writeError(w, http.StatusBadRequest, "device_code is required")
+		return
+	}
+	sess, ok := s.oauthSessions.Get(body.DeviceCode)
+	if !ok || sess.Provider != "cursor" {
+		writeError(w, http.StatusBadRequest, "session not found or expired; restart the flow")
+		return
+	}
+
+	result := oauth.CursorPollToken(r.Context(), body.DeviceCode, sess.Verifier)
+	s.completeCustomPoll(w, r, "cursor", body.DeviceCode, body.Label, result)
 }
 
 // commandcodeImport validates and stores a token pasted from the Command Code

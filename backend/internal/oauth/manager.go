@@ -52,6 +52,10 @@ func (m *TokenManager) EnsureFresh(ctx context.Context, acc store.Account) (stor
 		// Kiro refreshes through AWS SSO OIDC (Builder ID / IDC, using the stored
 		// client credentials) or the Kiro desktop social auth service (imported).
 		tokens, err = refreshKiro(ctx, acc, refreshToken)
+	} else if acc.Provider == "cursor" {
+		// Cursor refreshes through its deep-control exchange endpoint; imported
+		// accounts have no refresh token and are skipped above.
+		tokens, err = CursorRefresh(ctx, refreshToken)
 	} else {
 		cfg, ok := ConfigFor(acc.Provider)
 		if !ok {
@@ -115,6 +119,8 @@ func (m *TokenManager) ForceRefresh(ctx context.Context, acc store.Account) (sto
 	var tokens *Tokens
 	if acc.Provider == "kiro" {
 		tokens, err = refreshKiro(ctx, acc, refreshToken)
+	} else if acc.Provider == "cursor" {
+		tokens, err = CursorRefresh(ctx, refreshToken)
 	} else {
 		cfg, ok := ConfigFor(acc.Provider)
 		if !ok {

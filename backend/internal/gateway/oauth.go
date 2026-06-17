@@ -70,6 +70,12 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	var body struct {
 		RedirectURI string `json:"redirect_uri"`
+		// Manual signals that the dashboard will collect the authorization
+		// code by hand (paste). In that case we skip starting the fixed
+		// loopback callback server, so the flow works even when the provider's
+		// loopback port is already in use (e.g. the provider's own CLI is
+		// running) or unreachable from a remote dashboard.
+		Manual bool `json:"manual"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -89,9 +95,11 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid redirect_uri: URL blocked by security policy")
 		return
 	}
-	if err := s.ensureFixedOAuthCallbackServer(cfg); err != nil {
-		writeError(w, http.StatusConflict, err.Error())
-		return
+	if !body.Manual {
+		if err := s.ensureFixedOAuthCallbackServer(cfg); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 	}
 
 	pkce, err := oauth.GeneratePKCE(cfg.PKCEVerifierBytes)

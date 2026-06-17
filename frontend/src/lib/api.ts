@@ -1000,9 +1000,10 @@ export const api = {
 
   // OAuth provider connections.
   oauthProviders: () => request<{ providers: OAuthProvider[] }>("GET", "/oauth/providers"),
-  oauthAuthorize: (provider: string, redirectUri: string) =>
+  oauthAuthorize: (provider: string, redirectUri: string, manual = false) =>
     request<{ authorize_url: string; state: string; redirect_uri?: string }>("POST", `/oauth/${provider}/authorize`, {
       redirect_uri: redirectUri,
+      manual,
     }),
   oauthExchange: (provider: string, input: { code: string; state: string; label?: string }) =>
     request<{ id: string; provider: string; email: string }>("POST", `/oauth/${provider}/exchange`, input),
@@ -1057,9 +1058,17 @@ export const api = {
   codebuddyAuthPoll: (deviceCode: string, label?: string) =>
     request<OAuthPollResult>("POST", "/codebuddy/auth-poll", { device_code: deviceCode, label }),
 
-  // Cursor connect flow (import token from Cursor IDE). Mounted under /cursor.
+  // Cursor connect flow. Mounted under /cursor. Two paths:
+  //   - import: paste an access token exported from the Cursor IDE.
+  //   - login: deep-control PKCE flow — backend generates a PKCE pair + uuid,
+  //     opens cursor.com/loginDeepControl in the browser, then polls until the
+  //     user authorizes and a token pair is returned.
   cursorImport: (token: string, label?: string) =>
     request<{ id: string; provider: string }>("POST", "/cursor/import", { token, label }),
+  cursorLoginStart: () =>
+    request<DeviceCode>("POST", "/cursor/login-start", {}),
+  cursorLoginPoll: (deviceCode: string, label?: string) =>
+    request<OAuthPollResult>("POST", "/cursor/login-poll", { device_code: deviceCode, label }),
 
   // Command Code connect flow (import token from CLI or studio). Mounted under /commandcode.
   commandcodeImport: (token: string, label?: string) =>

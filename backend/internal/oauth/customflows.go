@@ -496,6 +496,168 @@ func cursorMachineID(token string) string {
 }
 
 // ---------------------------------------------------------------------------
+// Cursor (deep-control PKCE login + poll + refresh)
+// ---------------------------------------------------------------------------
+
+const (
+	cursorLoginURL   = "https://cursor.com/loginDeepControl"
+	cursorPollURL    = "https://api2.cursor.sh/auth/poll"
+	cursorRefreshURL = "https://api2.cursor.sh/auth/exchange_user_api_key"
+)
+
+// CursorLoginFlow is the local state of a Cursor deep-control login. The poll
+// endpoint identifies the pending login by the generated uuid plus the PKCE
+// verifier rather than a server-issued device code.
+type CursorLoginFlow struct {
+	UUID                    string
+	Verifier                string
+	VerificationURIComplete string
+}
+
+// CursorInitiateLogin generates the PKCE pair + uuid and builds the browser
+// login URL Cursor opens for "deep control" CLI authentication.
+func CursorInitiateLogin() (*CursorLoginFlow, error) {
+	pkce, err := GeneratePKCE(96)
+	if err != nil {
+		return nil, fmt.Errorf("cursor: generate pkce: %w", err)
+	}
+	id := uuid.NewString()
+
+	q := url.Values{}
+	q.Set("challenge", pkce.Challenge)
+	q.Set("uuid", id)
+	q.Set("mode", "login")
+	q.Set("redirectTarget", "cli")
+
+	return &CursorLoginFlow{
+		UUID:                    id,
+		Verifier:                pkce.Verifier,
+		VerificationURIComplete: cursorLoginURL + "?" + q.Encode(),
+	}, nil
+}
+
+// CursorPollToken polls the Cursor auth poll endpoint once. A 404 means the
+// user has not finished the browser login yet; a 200 with an accessToken means
+// success.
+func CursorPollToken(ctx context.Context, loginUUID, verifier string) PollResult {
+	if loginUUID == "" || verifier == "" {
+		return PollResult{Err: fmt.Errorf("cursor: missing uuid or verifier")}
+	}
+	q := url.Values{}
+	q.Set("uuid", loginUUID)
+	q.Set("verifier", verifier)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cursorPollURL+"?"+q.Encode(), nil)
+	if err != nil {
+		return PollResult{Err: fmt.Errorf("cursor: build poll request: %w", err)}
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return PollResult{Err: fmt.Errorf("cursor: poll request: %w", err)}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return PollResult{Pending: true}
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return PollResult{Err: fmt.Errorf("cursor: poll failed (%d): %s", resp.StatusCode, truncate(raw, 300))}
+	}
+
+	var parsed struct {
+		AccessToken  string `json:"accessToken"`
+		RefreshToken string `json:"refreshToken"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return PollResult{Err: fmt.Errorf("cursor: parse poll response: %w", err)}
+	}
+	if parsed.AccessToken == "" {
+		return PollResult{Pending: true}
+	}
+	return PollResult{Done: true, Tokens: cursorBuildTokens(parsed.AccessToken, parsed.RefreshToken)}
+}
+
+// CursorRefresh exchanges a Cursor refresh token for a fresh access token via
+// the exchange_user_api_key endpoint. Cursor returns a new access token and,
+// when rotated, a new refresh token.
+func CursorRefresh(ctx context.Context, refreshToken string) (*Tokens, error) {
+	if refreshToken == "" {
+		return nil, fmt.Errorf("cursor: no refresh token available")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cursorRefreshURL, strings.NewReader("{}"))
+	if err != nil {
+		return nil, fmt.Errorf("cursor: build refresh request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+refreshToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("cursor: refresh request: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		return nil, classifyRefreshError(raw, resp.StatusCode)
+	}
+
+	var parsed struct {
+		AccessToken  string `json:"accessToken"`
+		RefreshToken string `json:"refreshToken"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("cursor: parse refresh response: %w", err)
+	}
+	if parsed.AccessToken == "" {
+		return nil, fmt.Errorf("cursor: refresh response missing accessToken")
+	}
+	tokens := cursorBuildTokens(parsed.AccessToken, parsed.RefreshToken)
+	if tokens.RefreshToken == "" {
+		tokens.RefreshToken = refreshToken
+	}
+	return tokens, nil
+}
+
+// cursorBuildTokens normalizes a Cursor access/refresh pair into Tokens,
+// deriving the access-token lifetime, account label, and machine id.
+func cursorBuildTokens(accessToken, refreshToken string) *Tokens {
+	tokens := &Tokens{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		ExpiresIn:    cursorTokenExpiresIn(accessToken),
+		Extra: map[string]string{
+			"machine_id":  cursorMachineID(accessToken),
+			"auth_method": "oauth",
+		},
+	}
+	if payload := decodeJWTPayload(accessToken); payload != nil {
+		if email, _ := payload["email"].(string); email != "" {
+			tokens.Email = email
+		}
+		if sub, _ := payload["sub"].(string); sub != "" && tokens.Email == "" {
+			tokens.Email = sub
+		}
+	}
+	return tokens
+}
+
+// cursorTokenExpiresIn derives the access-token lifetime in seconds from the
+// JWT exp claim, defaulting to one day when the claim is missing.
+func cursorTokenExpiresIn(token string) int {
+	if payload := decodeJWTPayload(token); payload != nil {
+		if exp, ok := payload["exp"].(float64); ok && exp > 0 {
+			if remaining := int(int64(exp) - time.Now().Unix()); remaining > 0 {
+				return remaining
+			}
+		}
+	}
+	return 86400
+}
+
+// ---------------------------------------------------------------------------
 // Command Code (import token)
 // ---------------------------------------------------------------------------
 
