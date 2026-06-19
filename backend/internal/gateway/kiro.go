@@ -6,9 +6,11 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/mydisha/keirouter/backend/internal/oauth"
 	"github.com/mydisha/keirouter/backend/internal/store"
+	"github.com/mydisha/keirouter/backend/internal/vault"
 )
 
 // mountKiro registers the Kiro-specific connect endpoints. Kiro authenticates
@@ -21,6 +23,7 @@ func (s *Server) mountKiro(r chi.Router) {
 	r.Post("/kiro/device-start", s.kiroDeviceStart)
 	r.Post("/kiro/device-poll", s.kiroDevicePoll)
 	r.Post("/kiro/import", s.kiroImport)
+	r.Post("/kiro/api-key", s.kiroAPIKey)
 	r.Get("/kiro/health", s.kiroHealth)
 }
 
@@ -183,9 +186,62 @@ func (s *Server) kiroImport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "provider": "kiro"})
 }
 
+// kiroAPIKey validates a long-lived CodeWhisperer API key and stores it as a
+// headless Kiro connection. Unlike the OAuth flows, an API key has no refresh
+// token: it is validated by resolving its CodeWhisperer profile (the profileArn
+// the chat request must carry) and persisted as an api_key account.
+func (s *Server) kiroAPIKey(w http.ResponseWriter, r *http.Request) {
+	if s.vault == nil {
+		writeError(w, http.StatusInternalServerError, errVaultUnconfigured.Error())
+		return
+	}
+	var body struct {
+		APIKey string `json:"api_key"`
+		Region string `json:"region"`
+		Label  string `json:"label"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.APIKey == "" {
+		writeError(w, http.StatusBadRequest, "api_key is required")
+		return
+	}
+
+	tokens, err := oauth.KiroValidateAPIKey(r.Context(), body.APIKey, body.Region)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	now := time.Now()
+	acc := store.Account{
+		ID:        uuid.NewString(),
+		TenantID:  adminTenant,
+		Provider:  "kiro",
+		Label:     defaultStr(body.Label, "Kiro (API Key)"),
+		AuthKind:  store.AuthAPIKey,
+		Priority:  100,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.vault.Seal(&acc, vault.NewSecret{APIKey: tokens.AccessToken, Metadata: tokens.Extra}); err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "vault seal failed"))
+		return
+	}
+	if err := s.accounts.Create(r.Context(), acc); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.clearStaleProviderCooldowns(r.Context(), adminTenant, "kiro")
+
+	writeJSON(w, http.StatusCreated, map[string]any{"id": acc.ID, "provider": "kiro"})
+}
+
 // kiroHealth reports the connection status of all Kiro accounts. The dashboard
 // uses this to show a "Reconnect" prompt when the SSO session has expired.
 func (s *Server) kiroHealth(w http.ResponseWriter, r *http.Request) {
+
 	tenantID := store.DefaultTenantID
 	accs, err := s.accounts.ListByProvider(r.Context(), tenantID, "kiro")
 	if err != nil {

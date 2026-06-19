@@ -93,16 +93,15 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 	g.Go(func() error {
-		ruleSavings, _ = s.usage.SavingsByRule(gctx, adminTenant, since)
-		return nil
-	})
-	g.Go(func() error {
 		clientSavings, _ = s.usage.SavingsByClient(gctx, adminTenant, since)
 		return nil
 	})
 	if err := g.Wait(); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if sum.SlimBytesSaved > 0 {
+		ruleSavings, _ = s.usage.SavingsByRule(ctx, adminTenant, since)
 	}
 
 	// Per-provider breakdown with shares of total request volume. Decorate each

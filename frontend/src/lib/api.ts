@@ -669,6 +669,35 @@ class APIError extends Error {
   }
 }
 
+// Default per-request timeout for admin API calls. Without an upper bound a
+// stalled backend leaves the fetch promise pending forever, so React Query
+// never transitions out of its loading state and the page spins indefinitely
+// until a hard refresh. A bounded request rejects, surfacing an error the UI
+// can render (and the user can retry).
+const DEFAULT_TIMEOUT_MS = 20_000;
+
+// fetchWithTimeout wraps fetch with an AbortController-based deadline. On
+// timeout the request is aborted and a clear APIError(408) is thrown so callers
+// can distinguish a stall from a network/HTTP failure.
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit = {},
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new APIError(408, "Request timed out. Is the backend reachable?");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Returns the browser's IANA timezone (e.g. "Asia/Jakarta"), falling back to UTC. */
 function browserTZ(): string {
   try {
@@ -679,7 +708,7 @@ function browserTZ(): string {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetchWithTimeout(`/api${path}`, {
     method,
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
@@ -699,7 +728,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 async function requestBlob(method: string, path: string): Promise<Blob> {
-  const res = await fetch(`/api${path}`, { method });
+  const res = await fetchWithTimeout(`/api${path}`, { method });
   if (!res.ok) {
     let message = res.statusText;
     try {
@@ -714,7 +743,9 @@ async function requestBlob(method: string, path: string): Promise<Blob> {
 }
 
 async function requestForm<T>(method: string, path: string, body: FormData): Promise<T> {
-  const res = await fetch(`/api${path}`, { method, body });
+  // Uploads (e.g. SQLite restore) can legitimately take longer than a JSON
+  // call, so allow a more generous deadline than the default.
+  const res = await fetchWithTimeout(`/api${path}`, { method, body }, 60_000);
   if (!res.ok) {
     let message = res.statusText;
     try {
@@ -1029,11 +1060,18 @@ export const api = {
     request<DeviceCode>("POST", "/kiro/device-start", input),
   kiroDevicePoll: (deviceCode: string, label?: string) =>
     request<OAuthPollResult>("POST", "/kiro/device-poll", { device_code: deviceCode, label }),
+  kiroAPIKey: (apiKey: string, region?: string, label?: string) =>
+    request<{ id: string; provider: string }>("POST", "/kiro/api-key", {
+      api_key: apiKey,
+      region,
+      label,
+    }),
   kiroImport: (refreshToken: string, label?: string) =>
     request<{ id: string; provider: string }>("POST", "/kiro/import", {
       refresh_token: refreshToken,
       label,
     }),
+
 
   // Qoder connect flow (PKCE device-token poll). Mounted under /qoder (not
   // /oauth/qoder) to avoid the chi /oauth/{provider} route collision. The flow

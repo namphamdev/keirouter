@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity, DollarSign, Zap, RefreshCw, TrendingUp, Clock, Box, TerminalSquare, ArrowUpDown, ArrowUp, ArrowDown, Search
@@ -19,32 +19,55 @@ const periods = [
   { value: "month", label: "30D" },
 ];
 
+const USAGE_REFRESH_DEBOUNCE_MS = 8000;
+
 export function UsagePage() {
   const [period, setPeriod] = useState("today");
   const qc = useQueryClient();
   const toast = useToast();
+  const refreshTimer = useRef<number | null>(null);
 
   const insights = useQuery({
     queryKey: ["usage-insights", period],
     queryFn: () => api.usageInsights(period),
-    refetchInterval: 10_000,
+    staleTime: 12_000,
+    refetchInterval: 60_000,
+    placeholderData: (previous) => previous,
   });
 
   const modelUsage = useQuery({
     queryKey: ["usage-models", period],
     queryFn: () => api.modelUsage(period),
-    refetchInterval: 10_000,
+    staleTime: 12_000,
+    refetchInterval: 60_000,
+    placeholderData: (previous) => previous,
   });
 
   useEffect(() => {
+    const scheduleRefresh = () => {
+      if (refreshTimer.current != null) return;
+      refreshTimer.current = window.setTimeout(() => {
+        refreshTimer.current = null;
+        qc.invalidateQueries({ queryKey: ["usage-insights", period] });
+        qc.invalidateQueries({ queryKey: ["usage-models", period] });
+      }, USAGE_REFRESH_DEBOUNCE_MS);
+    };
     return connectUsageStream(() => {
-      qc.invalidateQueries({ queryKey: ["usage-insights"] });
-      qc.invalidateQueries({ queryKey: ["usage-models"] });
+      scheduleRefresh();
     });
-  }, [qc]);
+  }, [qc, period]);
+
+  useEffect(() => {
+    return () => {
+      if (refreshTimer.current != null) {
+        window.clearTimeout(refreshTimer.current);
+      }
+    };
+  }, []);
 
   const handleRefresh = () => {
-    qc.invalidateQueries({ queryKey: ["usage-insights"] });
+    qc.invalidateQueries({ queryKey: ["usage-insights", period] });
+    qc.invalidateQueries({ queryKey: ["usage-models", period] });
     toast.success("Usage data refreshed", "All usage metrics and breakdowns have been re-fetched from the server.");
   };
 

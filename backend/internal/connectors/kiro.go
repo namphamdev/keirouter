@@ -20,7 +20,7 @@ import (
 // the response is a binary AWS EventStream of typed events
 // (assistantResponseEvent, reasoningContentEvent, toolUseEvent, messageStopEvent,
 // metricsEvent, ...). This connector parses the binary frames and maps them to
-// canonical chunks, mirroring 9router's KiroExecutor.transformEventStreamToSSE.
+// canonical chunks.
 type Kiro struct {
 	id          string
 	defaultBase string
@@ -35,16 +35,139 @@ func NewKiro(id, defaultBaseURL string) *Kiro {
 func (c *Kiro) ID() string            { return c.id }
 func (c *Kiro) Dialect() core.Dialect { return core.DialectKiro }
 
-func (c *Kiro) baseURL(creds core.Credentials) string {
-	if creds.BaseURL != "" {
-		return creds.BaseURL
+// kiroEndpoints are the interchangeable regional surfaces of the Kiro
+// generateAssistantResponse service. They are attempted in order so a transient
+// rate-limit or edge failure on one host can be retried on the next before the
+// account is taken out of rotation. The list is not extra quota: the hosts are
+// alternate front doors to one regional service, so rotating them is edge-level
+// failover only.
+var kiroEndpoints = []string{
+	"https://runtime.us-east-1.kiro.dev/generateAssistantResponse",
+	"https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse",
+	"https://q.us-east-1.amazonaws.com/generateAssistantResponse",
+}
+
+// isKiroAPIKey reports whether the credentials authenticate with a long-lived
+// CodeWhisperer API key rather than an OAuth/social access token.
+func isKiroAPIKey(creds core.Credentials) bool {
+	return creds.Extra["kiro_auth_method"] == "api_key"
+}
+
+// kiroAPIKey resolves the raw API key from the credentials. The key may arrive
+// in the dedicated APIKey field or, for imported connections, as the access
+// token.
+func kiroAPIKey(creds core.Credentials) string {
+	if creds.APIKey != "" {
+		return creds.APIKey
 	}
-	return c.defaultBase
+	return creds.AccessToken
+}
+
+// endpoints returns the ordered list of upstream hosts to try for this request.
+// The configured base (a per-credential BaseURL when set, otherwise the
+// connector default) leads. The remaining known regional surfaces are appended
+// as failover hosts only when the primary is itself a known Kiro production
+// surface; a custom base URL (a relay, proxy, or test server) is used verbatim
+// so operator overrides are never bypassed. API-key credentials are validated
+// against the CodeWhisperer (amazonaws.com) surface and are rejected by the
+// kiro.dev gateway with 401/403, so for API-key auth the amazonaws hosts are
+// pulled to the front.
+func (c *Kiro) endpoints(creds core.Credentials) []string {
+	primary := creds.BaseURL
+	if primary == "" {
+		primary = c.defaultBase
+	}
+	// A custom (non-production) base is used as-is, with no fallback injection.
+	if primary != "" && !isKnownKiroEndpoint(primary) {
+		return []string{primary}
+	}
+	list := make([]string, 0, len(kiroEndpoints)+1)
+	if primary != "" {
+		list = append(list, primary)
+	}
+	for _, e := range kiroEndpoints {
+		if e != primary {
+			list = append(list, e)
+		}
+	}
+	if isKiroAPIKey(creds) {
+		list = orderAmazonFirst(list)
+	}
+	return list
+}
+
+// isKnownKiroEndpoint reports whether url is one of the built-in Kiro regional
+// surfaces. Only these participate in cross-host failover.
+func isKnownKiroEndpoint(url string) bool {
+	for _, e := range kiroEndpoints {
+		if e == url {
+			return true
+		}
+	}
+	return false
+}
+
+// orderAmazonFirst reorders endpoints so the amazonaws.com hosts come before
+// any others, preserving relative order within each group.
+func orderAmazonFirst(endpoints []string) []string {
+	amazon := make([]string, 0, len(endpoints))
+	others := make([]string, 0, len(endpoints))
+	for _, e := range endpoints {
+		if strings.Contains(e, "amazonaws.com") {
+			amazon = append(amazon, e)
+		} else {
+			others = append(others, e)
+		}
+	}
+	if len(amazon) == 0 {
+		return endpoints
+	}
+	return append(amazon, others...)
+}
+
+// kiroEndpointRetryable reports whether an endpoint failure is worth retrying on
+// an alternate Kiro host. Only rate-limit, upstream 5xx, and transport/timeout
+// errors qualify; auth, bad-request, and quota errors are returned to the caller
+// immediately since another host would reject them the same way.
+func kiroEndpointRetryable(err error) bool {
+	pe := core.AsProviderError(err)
+	if pe == nil {
+		return false
+	}
+	switch pe.Kind {
+	case core.ErrRateLimit, core.ErrUpstream, core.ErrTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// openStreamWithFailover opens the binary eventstream POST against each
+// candidate endpoint in order. A retryable failure (rate-limit, 5xx, transport)
+// advances to the next host; non-retryable failures (auth, bad request, quota)
+// are returned at once. The last error is returned when every host is
+// exhausted, so the dispatcher only applies a cooldown after a genuine,
+// service-wide failure rather than a single edge hiccup.
+func (c *Kiro) openStreamWithFailover(ctx context.Context, model string, body []byte, headers map[string]string, endpoints []string) (*http.Response, error) {
+	var lastErr error
+	for i, url := range endpoints {
+		resp, err := openStream(ctx, c.id, model, url, body, headers)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		// Stop early on a definitive rejection, or when no hosts remain.
+		if !kiroEndpointRetryable(err) || i == len(endpoints)-1 {
+			return nil, err
+		}
+	}
+	return nil, lastErr
 }
 
 // headers builds the AWS SDK + CodeWhisperer headers Kiro expects.
 func (c *Kiro) headers(creds core.Credentials) map[string]string {
 	h := map[string]string{
+
 		"Accept":                "application/vnd.amazon.eventstream",
 		"X-Amz-Target":          "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
 		"User-Agent":            "AWS-SDK-JS/3.0.0 kiro-ide/1.0.0",
@@ -52,7 +175,15 @@ func (c *Kiro) headers(creds core.Credentials) map[string]string {
 		"Amz-Sdk-Request":       "attempt=1; max=3",
 		"Amz-Sdk-Invocation-Id": uuid.NewString(),
 	}
-	if creds.AccessToken != "" {
+	if isKiroAPIKey(creds) {
+		// API-key credentials are sent as a long-lived bearer token with an
+		// explicit marker so CodeWhisperer treats them as a headless API key
+		// rather than a short-lived OIDC/social access token.
+		if key := kiroAPIKey(creds); key != "" {
+			h["Authorization"] = bearer(key)
+			h["tokentype"] = "API_KEY"
+		}
+	} else if creds.AccessToken != "" {
 		h["Authorization"] = bearer(creds.AccessToken)
 	}
 	return mergeHeaders(h, creds.Headers)
@@ -166,31 +297,47 @@ func (c *Kiro) ListModels(ctx context.Context, creds core.Credentials) ([]ModelS
 // ---- Quota fetching ---------------------------------------------------------
 
 // FetchQuota fetches upstream Kiro usage/quota info by probing the
-// getUsageLimits endpoints. Mirrors 9router's getKiroUsage() logic: tries
-// three endpoints in sequence and returns provider-specific error messages
-// based on the auth method.
+// getUsageLimits endpoints. It tries three endpoints in sequence and returns
+// provider-specific error messages based on the auth method.
+
 func (c *Kiro) FetchQuota(ctx context.Context, creds core.Credentials) (*QuotaResult, error) {
-	if creds.AccessToken == "" {
-		return &QuotaResult{Message: "No access token; cannot fetch quota."}, nil
+	// API-key accounts carry the credential in APIKey; OAuth/social accounts in
+	// AccessToken. Resolve whichever is present so the quota probe works for
+	// every auth method.
+	token := kiroAPIKey(creds)
+	if token == "" {
+		return &QuotaResult{Message: "No credential; cannot fetch quota."}, nil
 	}
 	region := creds.Extra["kiro_region"]
 	if region == "" {
 		region = "us-east-1"
 	}
+	authMethod := creds.Extra["kiro_auth_method"]
+	isAPIKey := authMethod == "api_key"
+
 	profileArn := creds.Extra["profile_arn"]
 	if profileArn == "" {
 		profileArn = creds.Extra["kiro_profile_arn"]
 	}
-	authMethod := creds.Extra["kiro_auth_method"]
-	if profileArn == "" {
+	// For API-key auth, only ever send a profileArn that was actually resolved
+	// for this connection — injecting the shared placeholder ARN makes
+	// CodeWhisperer 403 the request ("bearer token invalid"). OAuth/social may
+	// fall back to the default placeholder.
+	if profileArn == "" && !isAPIKey {
 		profileArn = "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX"
 	}
 
 	authHeaders := map[string]string{
-		"Authorization":    bearer(creds.AccessToken),
+		"Authorization":    bearer(token),
 		"Accept":           "application/json",
 		"User-Agent":       "aws-sdk-js/1.0.0 KiroIDE",
 		"x-amz-user-agent": "aws-sdk-js/1.0.0 KiroIDE",
+	}
+	// Headless API keys must be marked so CodeWhisperer treats them as a
+	// long-lived API key rather than an OIDC token; without it the quota call
+	// is rejected (401/403).
+	if isAPIKey {
+		authHeaders["tokentype"] = "API_KEY"
 	}
 
 	sawAuthError := false
@@ -206,14 +353,21 @@ func (c *Kiro) FetchQuota(ctx context.Context, creds core.Credentials) (*QuotaRe
 		sawAuthError = true
 	}
 
-	// Attempt 2: POST on codewhisperer endpoint.
-	postBody := map[string]string{"origin": "AI_EDITOR", "profileArn": profileArn, "resourceType": "AGENTIC_REQUEST"}
+	// Attempt 2: POST on codewhisperer endpoint. Only include profileArn when
+	// one is set (api-key connections without a resolved profile omit it).
+	postBody := map[string]string{"origin": "AI_EDITOR", "resourceType": "AGENTIC_REQUEST"}
+	if profileArn != "" {
+		postBody["profileArn"] = profileArn
+	}
 	postJSON, _ := json.Marshal(postBody)
 	postHeaders := map[string]string{
-		"Authorization": bearer(creds.AccessToken),
+		"Authorization": bearer(token),
 		"Content-Type":  "application/x-amz-json-1.0",
 		"x-amz-target":  "AmazonCodeWhispererService.GetUsageLimits",
 		"Accept":        "application/json",
+	}
+	if isAPIKey {
+		postHeaders["tokentype"] = "API_KEY"
 	}
 	body, err = doJSON(ctx, c.id, "quota", "https://codewhisperer.us-east-1.amazonaws.com", postJSON, postHeaders)
 	if err == nil {
@@ -223,8 +377,11 @@ func (c *Kiro) FetchQuota(ctx context.Context, creds core.Credentials) (*QuotaRe
 		sawAuthError = true
 	}
 
-	// Attempt 3: GET on q endpoint with profileArn.
-	qParams := fmt.Sprintf("origin=AI_EDITOR&profileArn=%s&resourceType=AGENTIC_REQUEST", profileArn)
+	// Attempt 3: GET on q endpoint, including profileArn only when set.
+	qParams := "origin=AI_EDITOR&resourceType=AGENTIC_REQUEST"
+	if profileArn != "" {
+		qParams = fmt.Sprintf("origin=AI_EDITOR&profileArn=%s&resourceType=AGENTIC_REQUEST", profileArn)
+	}
 	url3 := fmt.Sprintf("https://q.%s.amazonaws.com/getUsageLimits?%s", region, qParams)
 	body, err = doJSONMethod(ctx, http.MethodGet, c.id, "quota", url3, nil, authHeaders)
 	if err == nil {
@@ -234,8 +391,9 @@ func (c *Kiro) FetchQuota(ctx context.Context, creds core.Credentials) (*QuotaRe
 		sawAuthError = true
 	}
 
-	// Return provider-specific messages matching 9router.
+	// Return provider-specific messages keyed on the auth method.
 	if sawAuthError {
+
 		switch authMethod {
 		case "idc":
 			return &QuotaResult{Message: "Kiro quota API is unavailable for the current AWS IAM Identity Center session. Chat may still work. If this persists after renewing your session, reconnect Kiro."}, nil
@@ -316,8 +474,8 @@ func parseKiroPrecision(raw json.RawMessage) int {
 }
 
 // parseKiroQuota parses the getUsageLimits response into a QuotaResult.
-// Mirrors 9router's parseKiroQuotaData().
 func parseKiroQuota(body []byte) (*QuotaResult, error) {
+
 	var data struct {
 		UsageBreakdownList []kiroQuotaBreakdown `json:"usageBreakdownList"`
 		SubscriptionInfo   struct {
@@ -463,13 +621,23 @@ func (c *Kiro) Chat(ctx context.Context, req *core.ChatRequest, creds core.Crede
 // Stream performs a streaming call, parsing the AWS EventStream into canonical
 // chunks.
 func (c *Kiro) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
-	body, err := c.codec.RenderRequest(req)
+	// API-key credentials are scoped to a CodeWhisperer profile resolved at
+	// connect time; the request body must carry that profileArn or the upstream
+	// rejects it with 403. OAuth/social tokens send no profileArn.
+	var profileArn string
+	if isKiroAPIKey(creds) {
+		profileArn = creds.Extra["kiro_profile_arn"]
+	}
+	body, err := c.codec.RenderRequestWithProfile(req, profileArn)
 	if err != nil {
 		return nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
 	}
 
 	// Kiro returns a binary eventstream, not SSE; use a plain streaming POST.
-	resp, err := openStream(ctx, c.id, req.Model, c.baseURL(creds), body, c.headers(creds))
+	// Try each interchangeable endpoint in turn so a transient rate-limit or
+	// edge failure on one host is retried on the next before the error is
+	// surfaced to the dispatcher (which would otherwise cool the account down).
+	resp, err := c.openStreamWithFailover(ctx, req.Model, body, c.headers(creds), c.endpoints(creds))
 	if err != nil {
 		// On an upstream rejection (e.g. CodeWhisperer's 400 "Improperly formed
 		// request"), the offending field is opaque. When KIRO_DEBUG is set, dump

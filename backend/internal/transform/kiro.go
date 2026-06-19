@@ -1,10 +1,12 @@
 package transform
 
 import (
-	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
+
+	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 
 	"github.com/google/uuid"
 
@@ -175,9 +177,22 @@ func (KiroCodec) ParseRequest(body []byte) (*core.ChatRequest, error) {
 	}, nil
 }
 
-// RenderRequest builds the CodeWhisperer conversationState payload.
-func (KiroCodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
+// RenderRequest builds the CodeWhisperer conversationState payload. It is the
+// Codec-interface entry point and carries no profileArn; OAuth/social tokens
+// are accepted by the upstream without one.
+func (c KiroCodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
+	return c.RenderRequestWithProfile(req, "")
+}
+
+// RenderRequestWithProfile builds the CodeWhisperer conversationState payload
+// and, when profileArn is non-empty, attaches it at the top level of the
+// payload. Headless API-key credentials are scoped to an account-specific
+// profile: the upstream rejects the request with 403 unless the request carries
+// the profileArn resolved for that key. OAuth/social connections pass "" here
+// since their tokens are accepted without an explicit profile.
+func (KiroCodec) RenderRequestWithProfile(req *core.ChatRequest, profileArn string) ([]byte, error) {
 	upstream, agentic, modelThinking := resolveKiroModel(req.Model)
+
 	thinking := modelThinking || kiroThinkingEnabled(req, req.Model)
 
 	history, current := buildKiroHistory(req, upstream)
@@ -209,6 +224,14 @@ func (KiroCodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
 		},
 	}
 
+	// Attach the resolved profileArn at the top level for API-key auth. The
+	// CodeWhisperer surface scopes a headless key to a specific profile and
+	// rejects the request with 403 when the profileArn is missing or does not
+	// belong to the key's account. OAuth/social tokens pass "" and omit it.
+	if profileArn != "" {
+		payload["profileArn"] = profileArn
+	}
+
 	infer := map[string]any{"maxTokens": kiroMaxTokens(req)}
 	if req.Temperature != nil {
 		infer["temperature"] = *req.Temperature
@@ -236,6 +259,18 @@ func buildKiroHistory(req *core.ChatRequest, upstream string) ([]map[string]any,
 	messages := req.Messages
 	if len(req.Tools) == 0 {
 		messages = flattenKiroToolInteractions(messages)
+	}
+
+	// Resolve one collision-free name per declared tool up front. Sanitization
+	// alone can collapse distinct names to the same value (e.g. "tool.a" and
+	// "tool-a" both become "tool_a", two long names share the same 64-char
+	// prefix, or empty names both fall back to "tool"). CodeWhisperer rejects a
+	// toolConfig that lists the same name twice with TOOL_DUPLICATE (HTTP 400).
+	// The mapping is reused when rendering assistant toolUses so a call always
+	// references the exact spec name it was declared under.
+	var toolNames map[string]string
+	if len(req.Tools) > 0 {
+		toolNames = buildKiroToolNames(req.Tools)
 	}
 
 	flushUser := func(text string, toolResults []map[string]any, images []map[string]any) {
@@ -273,7 +308,7 @@ func buildKiroHistory(req *core.ChatRequest, upstream string) ([]map[string]any,
 					}
 					toolUses = append(toolUses, map[string]any{
 						"toolUseId": firstNonEmptyStr(p.ToolCall.ID, uuid.NewString()),
-						"name":      sanitizeKiroToolName(p.ToolCall.Name),
+						"name":      kiroToolUseName(p.ToolCall.Name, toolNames),
 						"input":     input,
 					})
 				}
@@ -381,18 +416,24 @@ func buildKiroHistory(req *core.ChatRequest, upstream string) ([]map[string]any,
 	// Attach tools to the current message's context.
 	if len(req.Tools) > 0 {
 		var tools []map[string]any
+		// Skip tools whose original name was already emitted so a client that
+		// sends the same tool twice does not produce a duplicate spec entry.
+		emitted := make(map[string]bool, len(req.Tools))
 		for _, t := range req.Tools {
+			if emitted[t.Name] {
+				continue
+			}
+			emitted[t.Name] = true
 			schema := normalizeKiroToolSchema(rawToAny(t.Parameters))
 			desc := t.Description
 			if strings.TrimSpace(desc) == "" {
 				desc = "Tool: " + t.Name
 			}
-			// Sanitize the tool name to CodeWhisperer's accepted format. The
-			// same transform is applied to toolUses[].name in assistant history
-			// so the spec and the call stay consistent.
+			// Use the pre-resolved unique name so the spec and any matching
+			// toolUse in assistant history stay consistent.
 			tools = append(tools, map[string]any{
 				"toolSpecification": map[string]any{
-					"name":        sanitizeKiroToolName(t.Name),
+					"name":        toolNames[t.Name],
 					"description": desc,
 					"inputSchema": map[string]any{"json": schema},
 				},
@@ -707,6 +748,58 @@ func normalizeKiroAlternation(history []map[string]any) []map[string]any {
 	}
 
 	return out
+}
+
+// buildKiroToolNames maps each declared tool's original name to a unique,
+// CodeWhisperer-valid name. Names are sanitized first, then a numeric suffix is
+// appended whenever sanitization produced a value already taken by an earlier
+// tool, guaranteeing every entry in toolConfig.tools is distinct. Tools sharing
+// an identical original name map to the same final name (the client meant one
+// tool), so the spec dedup loop emits a single entry for them.
+func buildKiroToolNames(tools []core.Tool) map[string]string {
+	mapping := make(map[string]string, len(tools))
+	used := make(map[string]bool, len(tools))
+	for _, t := range tools {
+		if _, ok := mapping[t.Name]; ok {
+			continue
+		}
+		mapping[t.Name] = uniqueKiroToolName(sanitizeKiroToolName(t.Name), used)
+	}
+	return mapping
+}
+
+// uniqueKiroToolName returns base when it is still free, otherwise base with the
+// smallest numeric suffix that is unused, trimming the base so the suffixed name
+// never exceeds CodeWhisperer's 64-character limit.
+func uniqueKiroToolName(base string, used map[string]bool) string {
+	if !used[base] {
+		used[base] = true
+		return base
+	}
+	for n := 2; ; n++ {
+		suffix := "_" + strconv.Itoa(n)
+		trimmed := base
+		if len(trimmed)+len(suffix) > 64 {
+			trimmed = trimmed[:64-len(suffix)]
+		}
+		candidate := trimmed + suffix
+		if !used[candidate] {
+			used[candidate] = true
+			return candidate
+		}
+	}
+}
+
+// kiroToolUseName resolves the name an assistant toolUse must reference. When
+// the call's tool was declared in req.Tools, the pre-resolved unique name is
+// used so the call matches its spec; otherwise the name is sanitized directly.
+func kiroToolUseName(name string, mapping map[string]string) string {
+	if mapping != nil {
+		if mapped, ok := mapping[name]; ok {
+			return mapped
+		}
+	}
+	return sanitizeKiroToolName(name)
 }
 
 // sanitizeKiroToolName coerces a tool name into CodeWhisperer's accepted

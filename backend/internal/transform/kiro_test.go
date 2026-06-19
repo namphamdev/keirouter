@@ -8,7 +8,50 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/core"
 )
 
+func TestKiro_RenderRequestWithProfile_APIKey(t *testing.T) {
+	req := &core.ChatRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "hi"}}},
+		},
+	}
+	arn := "arn:aws:codewhisperer:us-east-1:123456789012:profile/ABCDEF"
+	body, err := KiroCodec{}.RenderRequestWithProfile(req, arn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatal(err)
+	}
+	if env["profileArn"] != arn {
+		t.Errorf("expected top-level profileArn %q, got %v", arn, env["profileArn"])
+	}
+}
+
+func TestKiro_RenderRequest_NoProfileByDefault(t *testing.T) {
+	req := &core.ChatRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "hi"}}},
+		},
+	}
+	body, err := KiroCodec{}.RenderRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatal(err)
+	}
+	// OAuth/social path must not attach a profileArn.
+	if _, present := env["profileArn"]; present {
+		t.Errorf("profileArn should be absent for the default render, got %v", env["profileArn"])
+	}
+}
+
 func TestKiro_RenderRequest_ConversationState(t *testing.T) {
+
 	req := &core.ChatRequest{
 		Model:  "claude-sonnet-4.5",
 		System: "be precise",
@@ -765,12 +808,12 @@ func TestStripKiroBracketSuffix(t *testing.T) {
 
 func TestSanitizeKiroToolName(t *testing.T) {
 	cases := map[string]string{
-		"Read":                 "Read",
-		"mcp__server__do":      "mcp__server__do",
-		"do-thing":             "do_thing",
-		"weird.name":           "weird_name",
-		"123abc":               "t_123abc",
-		"":                     "tool",
+		"Read":                  "Read",
+		"mcp__server__do":       "mcp__server__do",
+		"do-thing":              "do_thing",
+		"weird.name":            "weird_name",
+		"123abc":                "t_123abc",
+		"":                      "tool",
 		strings.Repeat("x", 80): strings.Repeat("x", 64),
 	}
 	for in, want := range cases {
@@ -800,4 +843,167 @@ func isValidKiroToolName(s string) bool {
 		}
 	}
 	return true
+}
+
+// kiroToolSpecNames extracts the toolSpecification names from a rendered Kiro
+// payload's currentMessage.userInputMessageContext.tools. Test helper.
+func kiroToolSpecNames(t *testing.T, body []byte) []string {
+	t.Helper()
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatal(err)
+	}
+	cs := env["conversationState"].(map[string]any)
+	cm := cs["currentMessage"].(map[string]any)["userInputMessage"].(map[string]any)
+	ctx, ok := cm["userInputMessageContext"].(map[string]any)
+	if !ok {
+		t.Fatalf("current message missing userInputMessageContext: %v", cm)
+	}
+	tools, ok := ctx["tools"].([]any)
+	if !ok {
+		t.Fatalf("current message missing tools array: %v", ctx)
+	}
+	var names []string
+	for _, tt := range tools {
+		spec := tt.(map[string]any)["toolSpecification"].(map[string]any)
+		names = append(names, spec["name"].(string))
+	}
+	return names
+}
+
+// Two distinct tool names that sanitize to the same value must render as two
+// unique toolSpecification names. CodeWhisperer rejects a toolConfig that lists
+// the same name twice with TOOL_DUPLICATE (HTTP 400).
+func TestKiro_RenderRequest_DedupesCollidingToolNames(t *testing.T) {
+	req := &core.ChatRequest{
+		Model: "claude-sonnet-4.5",
+		Tools: []core.Tool{
+			{Name: "tool.a", Description: "first"},
+			{Name: "tool-a", Description: "second"},
+		},
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "go"}}},
+		},
+	}
+	body, err := KiroCodec{}.RenderRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := kiroToolSpecNames(t, body)
+	if len(names) != 2 {
+		t.Fatalf("expected 2 tool specs, got %d: %v", len(names), names)
+	}
+	seen := map[string]bool{}
+	for _, n := range names {
+		if !isValidKiroToolName(n) {
+			t.Errorf("tool name %q is not CodeWhisperer-valid", n)
+		}
+		if seen[n] {
+			t.Errorf("duplicate tool name %q in %v", n, names)
+		}
+		seen[n] = true
+	}
+}
+
+// Tool names that are entirely invalid both fall back to "tool"; the renderer
+// must still produce unique names rather than two "tool" entries (the exact
+// TOOL_DUPLICATE case observed against Bedrock).
+func TestKiro_RenderRequest_DedupesEmptyFallbackToolNames(t *testing.T) {
+	req := &core.ChatRequest{
+		Model: "claude-sonnet-4.5",
+		Tools: []core.Tool{
+			{Name: "***", Description: "first"},
+			{Name: "///", Description: "second"},
+		},
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "go"}}},
+		},
+	}
+	body, err := KiroCodec{}.RenderRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := kiroToolSpecNames(t, body)
+	if len(names) != 2 || names[0] == names[1] {
+		t.Fatalf("fallback names must be unique, got %v", names)
+	}
+}
+
+// A client that declares the same tool twice should yield a single spec entry,
+// not a duplicate.
+func TestKiro_RenderRequest_DedupesIdenticalToolNames(t *testing.T) {
+	req := &core.ChatRequest{
+		Model: "claude-sonnet-4.5",
+		Tools: []core.Tool{
+			{Name: "read_file", Description: "first"},
+			{Name: "read_file", Description: "second"},
+		},
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "go"}}},
+		},
+	}
+	body, err := KiroCodec{}.RenderRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := kiroToolSpecNames(t, body)
+	if len(names) != 1 || names[0] != "read_file" {
+		t.Fatalf("identical tool names must collapse to one spec, got %v", names)
+	}
+}
+
+// An assistant toolUse must reference the same unique name its spec was
+// declared under, so the spec and the call stay consistent after dedup.
+func TestKiro_RenderRequest_ToolUseMatchesDedupedSpecName(t *testing.T) {
+	req := &core.ChatRequest{
+		Model: "claude-sonnet-4.5",
+		Tools: []core.Tool{
+			{Name: "tool.a", Description: "first"},
+			{Name: "tool-a", Description: "second"},
+		},
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "use it"}}},
+			{Role: core.RoleAssistant, Content: []core.ContentPart{{
+				Type:     core.PartToolCall,
+				ToolCall: &core.ToolCall{ID: "call_1", Name: "tool-a", Arguments: json.RawMessage(`{"x":1}`)},
+			}}},
+			{Role: core.RoleUser, Content: []core.ContentPart{{Type: core.PartText, Text: "again"}}},
+		},
+	}
+	body, err := KiroCodec{}.RenderRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	specNames := kiroToolSpecNames(t, body)
+	specSet := map[string]bool{}
+	for _, n := range specNames {
+		specSet[n] = true
+	}
+
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatal(err)
+	}
+	history := env["conversationState"].(map[string]any)["history"].([]any)
+	found := false
+	for _, h := range history {
+		arm, ok := h.(map[string]any)["assistantResponseMessage"].(map[string]any)
+		if !ok {
+			continue
+		}
+		tus, ok := arm["toolUses"].([]any)
+		if !ok {
+			continue
+		}
+		for _, tu := range tus {
+			name := tu.(map[string]any)["name"].(string)
+			if !specSet[name] {
+				t.Errorf("toolUse name %q has no matching spec in %v", name, specNames)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected an assistant toolUse in history")
+	}
 }

@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect, useCallback, type ReactNode } from "react";
+import { Suspense, useState, useRef, useEffect, useCallback, type ReactNode } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useIsFetching } from "@tanstack/react-query";
 import {
   LayoutGrid,
   Boxes,
@@ -30,12 +30,14 @@ import { useBranding } from "../contexts/BrandingContext";
 import { ThemeToggle } from "./ThemeToggle";
 import { CommandPalette } from "./CommandPalette";
 import { UpdateNotification } from "./UpdateNotification";
+import { preloadRoute, type RoutePreloadKey } from "../routePreload";
 
 interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
   end?: boolean;
+  preload?: RoutePreloadKey;
 }
 
 interface NavGroup {
@@ -46,47 +48,47 @@ interface NavGroup {
 const navGroups: NavGroup[] = [
   {
     items: [
-      { to: "/", label: "Overview", icon: LayoutGrid, end: true },
+      { to: "/", label: "Overview", icon: LayoutGrid, end: true, preload: "/" },
     ],
   },
   {
     heading: "Traffic & Logic",
     items: [
-      { to: "/endpoints", label: "Endpoints", icon: Network },
-      { to: "/chains", label: "Chains", icon: Layers },
-      { to: "/skills", label: "Skills", icon: Sparkles },
+      { to: "/endpoints", label: "Endpoints", icon: Network, preload: "/endpoints" },
+      { to: "/chains", label: "Chains", icon: Layers, preload: "/chains" },
+      { to: "/skills", label: "Skills", icon: Sparkles, preload: "/skills" },
     ],
   },
   {
     heading: "Connections",
     items: [
-      { to: "/keys", label: "API Keys", icon: Key },
-      { to: "/providers", label: "Providers", icon: Boxes },
-      { to: "/media", label: "Media", icon: Image },
-      { to: "/proxy-pools", label: "Proxy Pools", icon: Waypoints },
+      { to: "/keys", label: "API Keys", icon: Key, preload: "/keys" },
+      { to: "/providers", label: "Providers", icon: Boxes, preload: "/providers" },
+      { to: "/media", label: "Media", icon: Image, preload: "/media" },
+      { to: "/proxy-pools", label: "Proxy Pools", icon: Waypoints, preload: "/proxy-pools" },
     ],
   },
   {
     heading: "Safety",
     items: [
-      { to: "/guardrails", label: "Guardrails", icon: Shield },
+      { to: "/guardrails", label: "Guardrails", icon: Shield, preload: "/guardrails" },
     ],
   },
   {
     heading: "Cost & Analytics",
     items: [
-      { to: "/usage", label: "Usage", icon: BarChart3 },
-      { to: "/plans", label: "Plans", icon: Wallet },
-      { to: "/quota", label: "Quota Tracker", icon: Clock },
-      { to: "/system", label: "System", icon: Activity },
-      { to: "/settings", label: "Settings", icon: Settings },
+      { to: "/usage", label: "Usage", icon: BarChart3, preload: "/usage" },
+      { to: "/plans", label: "Plans", icon: Wallet, preload: "/plans" },
+      { to: "/quota", label: "Quota Tracker", icon: Clock, preload: "/quota" },
+      { to: "/system", label: "System", icon: Activity, preload: "/system" },
+      { to: "/settings", label: "Settings", icon: Settings, preload: "/settings" },
     ],
   },
   {
     heading: "Developer",
     items: [
-      { to: "/console", label: "Console Log", icon: ScrollText },
-      { to: "/cli-tools", label: "CLI Tools", icon: TerminalSquare },
+      { to: "/console", label: "Console Log", icon: ScrollText, preload: "/console" },
+      { to: "/cli-tools", label: "CLI Tools", icon: TerminalSquare, preload: "/cli-tools" },
     ],
   },
 ];
@@ -175,6 +177,25 @@ export function Layout() {
     return () => { document.body.style.overflow = ""; };
   }, [sidebarOpen]);
 
+  useEffect(() => {
+    const warmCommonRoutes = () => {
+      preloadRoute("/usage");
+      preloadRoute("/providers");
+      preloadRoute("/keys");
+    };
+    type IdleWindow = Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    const idleWindow = window as IdleWindow;
+    if (idleWindow.requestIdleCallback && idleWindow.cancelIdleCallback) {
+      const id = idleWindow.requestIdleCallback(warmCommonRoutes, { timeout: 3000 });
+      return () => idleWindow.cancelIdleCallback?.(id);
+    }
+    const id = window.setTimeout(warmCommonRoutes, 1500);
+    return () => window.clearTimeout(id);
+  }, []);
+
   return (
     <div className="flex h-full bg-[var(--bg)]">
       {/* Desktop sidebar — hidden below lg. */}
@@ -200,10 +221,13 @@ export function Layout() {
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
+        <RouteProgress />
         <TopBar onMenuToggle={() => setSidebarOpen((v) => !v)} onSearchOpen={() => setPaletteOpen(true)} />
         <main className="flex-1 overflow-y-auto">
           <div className="mx-auto max-w-6xl px-4 py-4 sm:px-8 sm:py-6">
-            <Outlet />
+            <Suspense fallback={<PageOutletFallback />}>
+              <Outlet />
+            </Suspense>
           </div>
         </main>
       </div>
@@ -211,6 +235,25 @@ export function Layout() {
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );
+}
+
+function PageOutletFallback() {
+  return (
+    <div className="flex min-h-[240px] items-center justify-center py-16">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-current border-t-transparent opacity-40" />
+    </div>
+  );
+}
+
+// RouteProgress shows a thin indeterminate bar at the top of the content area
+// whenever queries are in flight (page navigation kicks off the next page's
+// data fetches). This gives an immediate visual response to a nav click even
+// while the route's chunk and data are still loading, instead of the page
+// appearing frozen for seconds. Pure CSS animation (.route-progress).
+function RouteProgress() {
+  const fetching = useIsFetching();
+  if (fetching === 0) return null;
+  return <div className="route-progress" role="progressbar" aria-label="Loading" aria-busy="true" />;
 }
 
 function SidebarContent({ onNavigate }: { onNavigate: () => void }) {
@@ -243,6 +286,9 @@ function SidebarContent({ onNavigate }: { onNavigate: () => void }) {
                   <NavLink
                     to={item.to}
                     end={item.end}
+                    onMouseEnter={() => item.preload && preloadRoute(item.preload)}
+                    onFocus={() => item.preload && preloadRoute(item.preload)}
+                    onTouchStart={() => item.preload && preloadRoute(item.preload)}
                     onClick={onNavigate}
                     className={({ isActive }) =>
                       `group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-all duration-200 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/60 ${

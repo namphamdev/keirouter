@@ -37,12 +37,17 @@ const maxResponseBodyBytes = 32 << 20 // 32 MiB
 var sharedClient = &http.Client{
 	Timeout: 0, // per-request deadlines come from context
 	Transport: &http.Transport{
-		MaxIdleConns:           200,               // keep more idle conns across all hosts
-		MaxIdleConnsPerHost:    20,                // more conns per upstream (parallel streams)
-		MaxConnsPerHost:        50,                // cap total conns per host to prevent FD exhaustion
-		IdleConnTimeout:        120 * time.Second, // keep idle conns longer for bursty traffic
-		TLSHandshakeTimeout:    10 * time.Second,
-		ResponseHeaderTimeout:  30 * time.Second, // don't wait forever for upstream headers
+		MaxIdleConns:        200,               // keep more idle conns across all hosts
+		MaxIdleConnsPerHost: 20,                // more conns per upstream (parallel streams)
+		MaxConnsPerHost:     50,                // cap total conns per host to prevent FD exhaustion
+		IdleConnTimeout:     120 * time.Second, // keep idle conns longer for bursty traffic
+		TLSHandshakeTimeout: 10 * time.Second,
+		// Time-to-headers safety net. Kept in step with the dashboard's
+		// response_header_timeout default so slow-but-healthy providers
+		// (reasoning models, ollama on modest hardware) aren't cut off before
+		// the operator-configured budget. Per-request context deadlines from
+		// the pipeline still bound the overall call.
+		ResponseHeaderTimeout:  60 * time.Second,
 		ExpectContinueTimeout:  1 * time.Second,
 		WriteBufferSize:        16 * 1024, // 16 KB write buffer (reduced from 64 KB)
 		ReadBufferSize:         16 * 1024, // 16 KB read buffer (reduced from 64 KB)
@@ -72,7 +77,7 @@ func clientFor(creds core.Credentials) *http.Client {
 		MaxIdleConnsPerHost:   20,
 		IdleConnTimeout:       120 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		WriteBufferSize:       16 * 1024,
 		ReadBufferSize:        16 * 1024,

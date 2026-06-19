@@ -48,12 +48,21 @@ func (s *ToolArgSanitizer) Process(chunk core.StreamChunk, emit func(core.Stream
 
 	idx := chunk.Index
 
-	// New tool call (has ID and Name) — flush any previous buffer at this index.
+	// Start a new buffer only when this chunk opens a genuinely new tool call.
+	// A chunk opens a new call when it carries an ID that differs from the
+	// buffer currently at this index (or no buffer exists yet). Some providers
+	// (e.g. Kiro) repeat the same tool-use ID on the argument-delta chunks that
+	// follow the opening chunk; treating those as new calls would prematurely
+	// flush the still-empty buffer (emitting a tool call with "{}" args) and
+	// then accumulate the real arguments into a second, name-less buffer —
+	// which is exactly what makes a client see "read_file" with no parameters.
 	if chunk.ToolCall.ID != "" {
-		s.flushIndex(idx, emit)
-		s.buffers[idx] = &toolBuffer{
-			id:   chunk.ToolCall.ID,
-			name: chunk.ToolCall.Name,
+		if existing, ok := s.buffers[idx]; !ok || existing.id != chunk.ToolCall.ID {
+			s.flushIndex(idx, emit)
+			s.buffers[idx] = &toolBuffer{
+				id:   chunk.ToolCall.ID,
+				name: chunk.ToolCall.Name,
+			}
 		}
 	}
 

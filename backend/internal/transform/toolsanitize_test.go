@@ -165,7 +165,106 @@ func TestToolArgSanitizer_FlushOnNewToolAtSameIndex(t *testing.T) {
 	}
 }
 
+// TestToolArgSanitizer_KiroRepeatedIDDelta reproduces the Kiro streaming shape:
+// the connector emits an opening chunk (ID + Name + empty args) followed by an
+// argument chunk that REPEATS the same tool-use ID. The sanitizer must treat
+// the second chunk as a continuation of the same call, not a brand-new one.
+// Before the fix, the repeated ID prematurely flushed the empty buffer (a tool
+// call with "{}" args) and accumulated the real arguments into a second,
+// name-less buffer — which made Cline see "read_file" with no parameters.
+func TestToolArgSanitizer_KiroRepeatedIDDelta(t *testing.T) {
+	s := NewToolArgSanitizer()
+	var emitted []core.StreamChunk
+	emit := func(c core.StreamChunk) { emitted = append(emitted, c) }
+
+	// Opening chunk: ID + Name + empty args (Kiro toolUseEvent announce).
+	s.Process(core.StreamChunk{
+		Type:  core.ChunkToolCall,
+		Index: 0,
+		ToolCall: &core.ToolCall{
+			ID:        "tooluse_1",
+			Name:      "read_file",
+			Arguments: json.RawMessage(""),
+		},
+	}, emit)
+
+	// Argument chunk: SAME ID repeated, carries the real input.
+	s.Process(core.StreamChunk{
+		Type:  core.ChunkToolCall,
+		Index: 0,
+		ToolCall: &core.ToolCall{
+			ID:        "tooluse_1",
+			Arguments: json.RawMessage(`{"path":"src/main.go"}`),
+		},
+	}, emit)
+
+	// Nothing should be emitted while buffering — no premature flush.
+	if len(emitted) != 0 {
+		t.Fatalf("expected 0 emitted during buffering, got %d: %+v", len(emitted), emitted)
+	}
+
+	// Finish flushes exactly one consolidated tool call.
+	s.Process(core.StreamChunk{Type: core.ChunkFinish, FinishReason: core.FinishToolCalls}, emit)
+
+	var tools []core.StreamChunk
+	for _, c := range emitted {
+		if c.Type == core.ChunkToolCall {
+			tools = append(tools, c)
+		}
+	}
+	if len(tools) != 1 {
+		t.Fatalf("expected exactly 1 tool call, got %d: %+v", len(tools), tools)
+	}
+	tc := tools[0].ToolCall
+	if tc.Name != "read_file" {
+		t.Errorf("expected Name 'read_file', got %q", tc.Name)
+	}
+	if tc.ID != "tooluse_1" {
+		t.Errorf("expected ID 'tooluse_1', got %q", tc.ID)
+	}
+	var args map[string]any
+	if err := json.Unmarshal(tc.Arguments, &args); err != nil {
+		t.Fatalf("arguments not valid JSON: %v (%s)", err, tc.Arguments)
+	}
+	if args["path"] != "src/main.go" {
+		t.Errorf("expected path 'src/main.go', got %v (full args: %s)", args["path"], tc.Arguments)
+	}
+}
+
+// TestToolArgSanitizer_KiroFragmentedArgs covers Kiro emitting the arguments as
+// multiple fragments after the announce chunk, all repeating the same ID. They
+// must accumulate into one complete JSON object.
+func TestToolArgSanitizer_KiroFragmentedArgs(t *testing.T) {
+	s := NewToolArgSanitizer()
+	var emitted []core.StreamChunk
+	emit := func(c core.StreamChunk) { emitted = append(emitted, c) }
+
+	s.Process(core.StreamChunk{
+		Type: core.ChunkToolCall, Index: 0,
+		ToolCall: &core.ToolCall{ID: "t1", Name: "read_file", Arguments: json.RawMessage("")},
+	}, emit)
+	for _, frag := range []string{`{"path":`, `"a/b/`, `c.go"}`} {
+		s.Process(core.StreamChunk{
+			Type: core.ChunkToolCall, Index: 0,
+			ToolCall: &core.ToolCall{ID: "t1", Arguments: json.RawMessage(frag)},
+		}, emit)
+	}
+	s.Flush(emit)
+
+	if len(emitted) != 1 {
+		t.Fatalf("expected 1 tool call, got %d: %+v", len(emitted), emitted)
+	}
+	var args map[string]any
+	if err := json.Unmarshal(emitted[0].ToolCall.Arguments, &args); err != nil {
+		t.Fatalf("reassembled args invalid: %v (%s)", err, emitted[0].ToolCall.Arguments)
+	}
+	if args["path"] != "a/b/c.go" {
+		t.Errorf("expected path 'a/b/c.go', got %v", args["path"])
+	}
+}
+
 func TestSanitizeToolArgs_InvalidJSON(t *testing.T) {
+
 	// Should return original if unparseable.
 	got := sanitizeToolArgs("Read", "not json")
 	if got != "not json" {

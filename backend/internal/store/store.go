@@ -67,7 +67,16 @@ func Open(ctx context.Context, cfg config.DatabaseConfig, dataDir string) (*DB, 
 	// SQLite is single-writer; cap connections to avoid SQLITE_BUSY. Postgres
 	// uses the configured pool.
 	if dialect == DialectSQLite {
-		sqlDB.SetMaxOpenConns(1)
+		maxOpen := cfg.MaxOpenConns
+		if maxOpen <= 0 {
+			maxOpen = 4
+		}
+		sqlDB.SetMaxOpenConns(maxOpen)
+		if cfg.MaxIdleConns > 0 {
+			sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
+		} else {
+			sqlDB.SetMaxIdleConns(maxOpen)
+		}
 	} else {
 		if cfg.MaxOpenConns > 0 {
 			sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
@@ -122,6 +131,11 @@ func (db *DB) applySQLitePragmas(ctx context.Context) error {
 		"PRAGMA foreign_keys = ON;",
 		"PRAGMA journal_mode = WAL;",
 		"PRAGMA synchronous = NORMAL;",
+		"PRAGMA temp_store = MEMORY;",
+		"PRAGMA cache_size = -32768;",
+	}
+	if db.sqlitePath != ":memory:" {
+		pragmas = append(pragmas, "PRAGMA mmap_size = 268435456;")
 	}
 	for _, p := range pragmas {
 		if _, err := db.sql.ExecContext(ctx, p); err != nil {

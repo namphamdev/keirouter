@@ -17,7 +17,7 @@ import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recha
 import { api, type UsageInsights, type RecentActivity, type ProviderUsage } from "../lib/api";
 import { microsToUSD } from "../lib/format";
 import { PageHeader } from "../components/Layout";
-import { Card, SectionHeader, Spinner, StatCard, ErrorCard } from "../components/ui";
+import { Card, SectionHeader, StatCard, ErrorCard, Skeleton } from "../components/ui";
 
 const periods = [
   { value: "today", label: "Today" },
@@ -30,12 +30,16 @@ export function OverviewPage() {
   const insights = useQuery({
     queryKey: ["usage-insights", period],
     queryFn: () => api.usageInsights(period),
+    staleTime: 30_000,
+    placeholderData: (previous) => previous,
   });
 
   const budgets = useQuery({
     queryKey: ["budget-status"],
     queryFn: () => api.budgetStatus(),
+    staleTime: 30_000,
     refetchInterval: 60_000,
+    placeholderData: (previous) => previous,
   });
 
   const alerts = (budgets.data?.budgets ?? []).filter((b) => b.pct_used >= b.alert_pct);
@@ -103,13 +107,63 @@ export function OverviewPage() {
       />
 
       {insights.isLoading ? (
-        <Spinner />
+        <OverviewSkeleton />
       ) : insights.isError ? (
         <ErrorCard message="Failed to load usage data. Is the backend running?" />
       ) : (
         insights.data ? <InsightsDashboard data={insights.data} /> : null
       )}
     </>
+  );
+}
+
+// OverviewSkeleton mirrors the InsightsDashboard layout so the page shows its
+// shape while data loads, avoiding a blank spinner and layout shift on arrival.
+function OverviewSkeleton() {
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Card key={i} className="p-4">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="mt-3 h-8 w-20" />
+          </Card>
+        ))}
+      </div>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <Card className="lg:col-span-2 p-6">
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="mt-4 h-48 w-full" />
+        </Card>
+        <Card className="p-6">
+          <Skeleton className="h-4 w-24" />
+          <div className="mt-4 space-y-3">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-8 w-full" />
+            ))}
+          </div>
+        </Card>
+      </div>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <Card className="p-6">
+          <Skeleton className="h-4 w-28" />
+          <Skeleton className="mt-4 h-10 w-32" />
+          <div className="mt-4 space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-4 w-full" />
+            ))}
+          </div>
+        </Card>
+        <Card className="lg:col-span-2 p-6">
+          <Skeleton className="h-4 w-32" />
+          <div className="mt-4 space-y-2">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-6 w-full" />
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
   );
 }
 

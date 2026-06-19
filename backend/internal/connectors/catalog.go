@@ -96,10 +96,11 @@ func freeProviders() []ProviderSpec {
 	risk := "Uses a subscription/OAuth session not licensed for proxy use. Account may be restricted. Use at your own risk."
 	return []ProviderSpec{
 		{ID: "kiro", DisplayName: "Kiro AI", Alias: "kr", Dialect: core.DialectKiro,
-			BaseURL:  "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse",
-			AuthKind: "oauth", AuthModes: []string{"oauth"}, ServiceKinds: llm(),
+			BaseURL:  "https://runtime.us-east-1.kiro.dev/generateAssistantResponse",
+			AuthKind: "oauth", AuthModes: []string{"oauth", "api_key"}, ServiceKinds: llm(),
 			Color: "#FF6B35", Website: "https://kiro.dev", Deprecated: true, Notice: risk,
 			SkipValidation: true},
+
 		{ID: "gemini-cli", DisplayName: "Gemini CLI", Alias: "gc", Dialect: core.DialectGeminiCLI,
 			BaseURL:  "https://cloudcode-pa.googleapis.com/v1internal",
 			AuthKind: "oauth", AuthModes: []string{"oauth"}, ServiceKinds: llm(),
@@ -260,7 +261,7 @@ func apiKeyProviders() []ProviderSpec {
 			BaseURL: "", AuthKind: "api_key", ServiceKinds: llm(), Color: "#0078D4",
 			Website: "https://azure.microsoft.com/en-us/products/ai-services/openai-service"},
 		{ID: "commandcode", DisplayName: "Command Code", Alias: "cmc", Dialect: core.DialectCommandCode,
-			BaseURL: "https://api.commandcode.ai/alpha/generate",
+			BaseURL:  "https://api.commandcode.ai/alpha/generate",
 			AuthKind: "api_key", AuthModes: []string{"oauth", "api_key"}, ServiceKinds: llm(),
 			Color: "#000000", Website: "https://commandcode.ai", APIKeyURL: "https://commandcode.ai/studio",
 			Notice: "Use your Command Code API key from commandcode.ai/studio or run `cmd login` to get a CLI token. CLI subscriptions (Go, Pro, Max, Ultra) are supported."},

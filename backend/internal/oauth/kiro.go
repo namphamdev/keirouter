@@ -296,9 +296,110 @@ func parseKiroRefresh(raw []byte, fallbackRefresh string) (*Tokens, error) {
 	}, nil
 }
 
+// KiroListProfiles lists the CodeWhisperer profiles available to a bearer
+// credential (an OAuth access token or a long-lived API key) and returns the
+// best-matching profileArn. The CodeWhisperer endpoint speaks AWS JSON-1.0, so
+// the call is shaped with the x-amz-target header rather than a REST path. The
+// response field is either "arn" or "profileArn" depending on the surface, so
+// both are accepted. When multiple profiles are returned, the one whose ARN
+// region segment matches the requested region is preferred.
+func KiroListProfiles(ctx context.Context, accessToken, region string) (string, error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return "", fmt.Errorf("kiro: no access token")
+	}
+	if region == "" {
+		region = kiroDefaultRegion
+	}
+	endpoint := fmt.Sprintf("https://codewhisperer.%s.amazonaws.com", region)
+
+	raw, _ := json.Marshal(map[string]any{"maxResults": 10})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return "", fmt.Errorf("kiro: build list-profiles request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	req.Header.Set("x-amz-target", "AmazonCodeWhispererService.ListAvailableProfiles")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("kiro: list profiles request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("kiro: read list-profiles response: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("kiro: list profiles failed (%d): %s", resp.StatusCode, truncate(body, 300))
+	}
+
+	var parsed struct {
+		Profiles []struct {
+			ARN        string `json:"arn"`
+			ProfileARN string `json:"profileArn"`
+		} `json:"profiles"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", fmt.Errorf("kiro: parse list-profiles response: %w", err)
+	}
+
+	arnOf := func(i int) string {
+		if parsed.Profiles[i].ARN != "" {
+			return parsed.Profiles[i].ARN
+		}
+		return parsed.Profiles[i].ProfileARN
+	}
+	// Prefer a profile whose ARN region segment matches the requested region.
+	// ARN shape: arn:aws:codewhisperer:<region>:<account>:profile/<id>.
+	for i := range parsed.Profiles {
+		arn := arnOf(i)
+		if parts := strings.Split(arn, ":"); len(parts) > 3 && parts[3] == region {
+			return arn, nil
+		}
+	}
+	if len(parsed.Profiles) > 0 {
+		return arnOf(0), nil
+	}
+	// A successful (non-error) response with no profiles still means the
+	// credential authenticated — the call itself is the validation. Some keys
+	// expose no profile here yet are accepted by the chat surface, so the
+	// profileArn is best-effort: return empty rather than failing validation.
+	return "", nil
+}
+
+// KiroValidateAPIKey validates a long-lived CodeWhisperer API key by resolving
+// its profile via ListAvailableProfiles, then returns a Tokens value ready to
+// persist as a headless api_key connection. API keys carry no refresh token, so
+// only the access token, resolved profileArn, region, and auth method are set.
+func KiroValidateAPIKey(ctx context.Context, apiKey, region string) (*Tokens, error) {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return nil, fmt.Errorf("kiro: api key is required")
+	}
+	if region == "" {
+		region = kiroDefaultRegion
+	}
+	profileArn, err := KiroListProfiles(ctx, apiKey, region)
+	if err != nil {
+		return nil, fmt.Errorf("kiro: api key validation failed: %w", err)
+	}
+	return &Tokens{
+		AccessToken: apiKey,
+		Extra: map[string]string{
+			"kiro_auth_method": "api_key",
+			"kiro_region":      region,
+			"kiro_profile_arn": profileArn,
+			"profile_arn":      profileArn,
+		},
+	}, nil
+}
+
 // KiroValidateImportToken validates and imports a refresh token from the Kiro
 // IDE by refreshing it against the social auth service.
 func KiroValidateImportToken(ctx context.Context, refreshToken string) (*Tokens, error) {
+
 	refreshToken = strings.TrimSpace(refreshToken)
 	if !strings.HasPrefix(refreshToken, kiroImportTokenPrefix) {
 		return nil, fmt.Errorf("kiro: invalid token format; expected a token starting with %s…", kiroImportTokenPrefix)

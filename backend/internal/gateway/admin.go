@@ -1517,14 +1517,27 @@ func (s *Server) adminBudgetStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	now := time.Now()
+	scopes := make([]store.SpendScope, 0, len(budgets))
+	sinceByBudget := make([]time.Time, len(budgets))
+	for i, b := range budgets {
+		since := budget.PeriodStart(b.Period, now)
+		sinceByBudget[i] = since
+		scopes = append(scopes, store.SpendScope{Kind: b.ScopeKind, ScopeID: b.ScopeID, Since: since})
+	}
+	spendResults, err := s.usage.SpendAndTokensBatch(ctx, scopes)
+	if err != nil {
+		s.log.Error("budget status: batch spend lookup failed", "err", err)
+		spendResults = make([]store.SpendResult, len(budgets))
+	}
+
 	out := make([]map[string]any, 0, len(budgets))
-	for _, b := range budgets {
-		since := budget.PeriodStart(b.Period, time.Now())
-		spent, tokens, err := s.usage.SpendAndTokens(ctx, b.ScopeKind, b.ScopeID, since)
-		if err != nil {
-			s.log.Error("budget status: spend lookup failed", "budget_id", b.ID, "err", err)
-			spent = 0
-			tokens = 0
+	for i, b := range budgets {
+		since := sinceByBudget[i]
+		var spent, tokens int64
+		if i < len(spendResults) {
+			spent = spendResults[i].CostMicros
+			tokens = spendResults[i].Tokens
 		}
 
 		pctUsed := 0.0

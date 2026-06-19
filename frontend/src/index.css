@@ -257,6 +257,72 @@ a, button, select, summary, [role="button"], [role="switch"], [role="radio"], [r
   }
 }
 
+/* Skeleton shimmer — a moving highlight over a neutral block while data loads.
+   Used by the <Skeleton> placeholder so pages show their shape immediately
+   instead of an empty spinner, which makes loads feel faster. */
+@keyframes skeleton-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+.skeleton {
+  border-radius: 8px;
+  background-color: var(--bg-subtle);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--text-muted) 12%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+/* Top-of-page loading bar — an indeterminate sweep shown during route/data
+   transitions so a navigation click gives instant feedback even before the
+   next page's chunk and data are ready. */
+@keyframes route-bar-sweep {
+  0% { transform: translateX(-100%) scaleX(0.4); }
+  50% { transform: translateX(0%) scaleX(0.6); }
+  100% { transform: translateX(100%) scaleX(0.4); }
+}
+
+.route-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 100;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.route-progress::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--color-accent-500);
+  transform-origin: left center;
+  animation: route-bar-sweep 1s ease-in-out infinite;
+}
+
+/* Card press/hover micro-interactions. Apply `.interactive` to clickable
+   cards/rows for a subtle lift on hover and a gentle press on click. Pure CSS,
+   no JS, and disabled under prefers-reduced-motion via the guard below. */
+.interactive {
+  transition:
+    transform 0.15s ease-out,
+    box-shadow 0.15s ease-out,
+    background-color 0.15s ease-out;
+}
+.interactive:hover {
+  transform: translateY(-1px);
+}
+.interactive:active {
+  transform: translateY(0);
+}
+
 /* Respect user motion preferences. */
 @media (prefers-reduced-motion: no-preference) {
   main > div {

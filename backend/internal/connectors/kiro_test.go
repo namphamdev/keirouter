@@ -3,6 +3,7 @@ package connectors
 import (
 	"bytes"
 	"encoding/binary"
+	"strings"
 	"testing"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
@@ -202,4 +203,108 @@ func mustDecode(t *testing.T, frame []byte) *eventStreamFrame {
 		t.Fatalf("decode: %v", err)
 	}
 	return f
+}
+
+func TestKiroEndpoints_OAuthDefaultOrder(t *testing.T) {
+	c := NewKiro("kiro", kiroEndpoints[0])
+	got := c.endpoints(core.Credentials{})
+	if len(got) != len(kiroEndpoints) {
+		t.Fatalf("expected %d endpoints, got %d", len(kiroEndpoints), len(got))
+	}
+	// OAuth keeps the default order: kiro.dev leads.
+	if !strings.Contains(got[0], "kiro.dev") {
+		t.Errorf("oauth should lead with kiro.dev, got %s", got[0])
+	}
+}
+
+func TestKiroEndpoints_APIKeyPrefersAmazon(t *testing.T) {
+	c := NewKiro("kiro", kiroEndpoints[0])
+	got := c.endpoints(core.Credentials{Extra: map[string]string{"kiro_auth_method": "api_key"}})
+	if len(got) != len(kiroEndpoints) {
+		t.Fatalf("expected %d endpoints, got %d", len(kiroEndpoints), len(got))
+	}
+	// API-key auth must hit the amazonaws.com surface first; kiro.dev rejects it.
+	if !strings.Contains(got[0], "amazonaws.com") {
+		t.Errorf("api_key should lead with amazonaws.com, got %s", got[0])
+	}
+}
+
+func TestKiroEndpoints_CredentialBaseURLLeads(t *testing.T) {
+	c := NewKiro("kiro", kiroEndpoints[0])
+	custom := "https://relay.example.com/generateAssistantResponse"
+	got := c.endpoints(core.Credentials{BaseURL: custom})
+	if got[0] != custom {
+		t.Fatalf("explicit base url should lead, got %s", got[0])
+	}
+	// The custom URL must not be duplicated among the known endpoints.
+	for _, e := range got[1:] {
+		if e == custom {
+			t.Errorf("custom base url duplicated in fallback list")
+		}
+	}
+}
+
+func TestOrderAmazonFirst(t *testing.T) {
+	in := []string{
+		"https://runtime.us-east-1.kiro.dev/x",
+		"https://codewhisperer.us-east-1.amazonaws.com/x",
+		"https://q.us-east-1.amazonaws.com/x",
+	}
+	got := orderAmazonFirst(in)
+	if !strings.Contains(got[0], "amazonaws.com") || !strings.Contains(got[1], "amazonaws.com") {
+		t.Errorf("amazon hosts should come first: %v", got)
+	}
+	if !strings.Contains(got[2], "kiro.dev") {
+		t.Errorf("non-amazon host should come last: %v", got)
+	}
+	// No amazon hosts: returned unchanged.
+	only := []string{"https://runtime.us-east-1.kiro.dev/x"}
+	if out := orderAmazonFirst(only); out[0] != only[0] {
+		t.Errorf("single non-amazon host should be unchanged, got %v", out)
+	}
+}
+
+func TestKiroHeaders_APIKeyMarker(t *testing.T) {
+	c := NewKiro("kiro", kiroEndpoints[0])
+	h := c.headers(core.Credentials{
+		APIKey: "secret-key",
+		Extra:  map[string]string{"kiro_auth_method": "api_key"},
+	})
+	if h["Authorization"] != "Bearer secret-key" {
+		t.Errorf("api key should be sent as bearer, got %q", h["Authorization"])
+	}
+	if h["tokentype"] != "API_KEY" {
+		t.Errorf("api key requests must carry tokentype=API_KEY, got %q", h["tokentype"])
+	}
+}
+
+func TestKiroHeaders_OAuthHasNoTokenType(t *testing.T) {
+	c := NewKiro("kiro", kiroEndpoints[0])
+	h := c.headers(core.Credentials{AccessToken: "oauth-token"})
+	if h["Authorization"] != "Bearer oauth-token" {
+		t.Errorf("oauth should be sent as bearer, got %q", h["Authorization"])
+	}
+	if _, ok := h["tokentype"]; ok {
+		t.Errorf("oauth requests must not carry tokentype")
+	}
+}
+
+func TestKiroEndpointRetryable(t *testing.T) {
+	cases := []struct {
+		kind core.ErrorKind
+		want bool
+	}{
+		{core.ErrRateLimit, true},
+		{core.ErrUpstream, true},
+		{core.ErrTimeout, true},
+		{core.ErrAuth, false},
+		{core.ErrBadRequest, false},
+		{core.ErrQuotaExhausted, false},
+	}
+	for _, tc := range cases {
+		err := &core.ProviderError{Kind: tc.kind}
+		if got := kiroEndpointRetryable(err); got != tc.want {
+			t.Errorf("kiroEndpointRetryable(%s) = %v, want %v", tc.kind, got, tc.want)
+		}
+	}
 }

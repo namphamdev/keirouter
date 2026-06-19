@@ -18,6 +18,26 @@ export function Card({ children, className = "" }: { children: ReactNode; classN
   );
 }
 
+// Skeleton is a shimmering placeholder block sized via className. Showing a
+// page's shape while its data loads reads as faster than a centered spinner and
+// avoids layout shift when the real content arrives. The shimmer animation and
+// reduced-motion handling live in index.css (.skeleton).
+export function Skeleton({ className = "" }: { className?: string }) {
+  return <div className={`skeleton ${className}`} aria-hidden="true" />;
+}
+
+// SkeletonText renders a stack of skeleton lines for paragraph-like content.
+// The last line is shortened to mimic natural text flow.
+export function SkeletonText({ lines = 3, className = "" }: { lines?: number; className?: string }) {
+  return (
+    <div className={`space-y-2 ${className}`} aria-hidden="true">
+      {Array.from({ length: lines }).map((_, i) => (
+        <Skeleton key={i} className={`h-3.5 ${i === lines - 1 ? "w-2/3" : "w-full"}`} />
+      ))}
+    </div>
+  );
+}
+
 // SectionHeader is the in-card header with an optional rounded icon chip, used
 // across Settings/Endpoints-style panels in the attachment.
 export function SectionHeader({

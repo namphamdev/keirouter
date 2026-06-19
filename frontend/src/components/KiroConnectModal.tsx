@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Shield, Building2, FileUp, X, ArrowLeft } from "lucide-react";
+import { Shield, Building2, FileUp, KeyRound, X, ArrowLeft } from "lucide-react";
 import { api, type DeviceCode } from "../lib/api";
 import { Button, Input, Field, ErrorBanner } from "./ui";
 import { useToast } from "./Toast";
 
-type Method = "builder-id" | "idc" | "import";
+type Method = "builder-id" | "idc" | "import" | "api-key";
+
 
 // KiroConnectModal mirrors 9router's "Connect Kiro" flow: pick an auth method,
 // then either run an AWS SSO OIDC device authorization (Builder ID / IAM
@@ -60,7 +61,9 @@ export function KiroConnectModal({ onClose }: { onClose: () => void }) {
         {method === "builder-id" && <DeviceFlow method="builder-id" onClose={onClose} />}
         {method === "idc" && <IDCFlow onClose={onClose} />}
         {method === "import" && <ImportFlow onClose={onClose} />}
+        {method === "api-key" && <APIKeyFlow onClose={onClose} />}
       </div>
+
     </div>
   );
 }
@@ -88,9 +91,16 @@ function MethodSelect({ onSelect }: { onSelect: (m: Method) => void }) {
         description="Paste refresh token from Kiro IDE."
         onClick={() => onSelect("import")}
       />
+      <MethodCard
+        icon={KeyRound}
+        title="API Key"
+        description="Paste a headless CodeWhisperer API key. No refresh required."
+        onClick={() => onSelect("api-key")}
+      />
     </div>
   );
 }
+
 
 function MethodCard({
   icon: Icon,
@@ -273,8 +283,76 @@ function DeviceFlow({
   );
 }
 
+// APIKeyFlow takes a long-lived CodeWhisperer API key, validates it (by
+// resolving its profile upstream), and stores it as a headless connection.
+// Unlike the OAuth flows there is no refresh token; the key is used as-is.
+function APIKeyFlow({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [apiKey, setApiKey] = useState("");
+  const [region, setRegion] = useState("us-east-1");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+
+  const submit = async () => {
+    if (!apiKey.trim()) {
+      setError("Please enter an API key");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await api.kiroAPIKey(apiKey.trim(), region.trim() || undefined);
+      setDone(true);
+      qc.invalidateQueries({ queryKey: ["accounts"] });
+      toast.success("Kiro connected", "API key added successfully.");
+      setTimeout(onClose, 1200);
+    } catch (e) {
+      setError((e as Error).message);
+      toast.error("API key validation failed", (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (done) {
+    return <div className="px-6 py-6 text-sm">Connected. Refreshing accounts…</div>;
+  }
+
+  return (
+    <div className="space-y-4 px-6 py-5">
+      <p className="text-sm text-[var(--text-muted)]">
+        Paste a headless CodeWhisperer API key. It is validated against your
+        AWS profile and used directly, with no refresh.
+      </p>
+      <Field label="API Key">
+        <Input
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder="Your CodeWhisperer API key"
+          className="font-mono"
+        />
+      </Field>
+      <Field label="AWS Region">
+        <Input
+          value={region}
+          onChange={(e) => setRegion(e.target.value)}
+          placeholder="us-east-1"
+          className="font-mono"
+        />
+      </Field>
+      {error && <ErrorBanner message={error} />}
+      <Button className="w-full" onClick={submit} disabled={busy || !apiKey.trim()}>
+        {busy ? "Validating…" : "Connect with API Key"}
+      </Button>
+    </div>
+  );
+}
+
 // ImportFlow takes a refresh token exported from the Kiro IDE and validates it.
 function ImportFlow({ onClose }: { onClose: () => void }) {
+
   const qc = useQueryClient();
   const toast = useToast();
   const [token, setToken] = useState("");

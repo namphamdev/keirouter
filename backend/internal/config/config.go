@@ -214,8 +214,8 @@ func Default() Config {
 		},
 		Database: DatabaseConfig{
 			Driver:       "sqlite",
-			MaxOpenConns: 1, // sqlite: serialize writers to avoid SQLITE_BUSY
-			MaxIdleConns: 1,
+			MaxOpenConns: 4, // sqlite WAL permits concurrent readers; writes still serialize
+			MaxIdleConns: 4,
 		},
 		Security: SecurityConfig{
 			SessionTTL:       24 * time.Hour,

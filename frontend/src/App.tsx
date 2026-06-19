@@ -3,35 +3,32 @@ import { Routes, Route } from "react-router-dom";
 import { AuthGate } from "./components/AuthGate";
 import { Layout } from "./components/Layout";
 import { AdminBrandingProvider, PortalBrandingProvider } from "./contexts/BrandingContext";
+import { routeLoaders } from "./routePreload";
 
-// Routes are code-split: each page is a separate chunk loaded on demand. Heavy
-// deps (recharts, @xyflow/react) ride along only with the pages that use them,
-// so the first paint (Overview) no longer ships the whole app.
-const named = <T extends string>(p: Promise<Record<T, React.ComponentType<unknown>>>, key: T) =>
-  p.then((m) => ({ default: m[key] }));
-
-const OverviewPage = lazy(() => named(import("./pages/Overview"), "OverviewPage"));
-const ProvidersPage = lazy(() => named(import("./pages/Providers"), "ProvidersPage"));
-const ProviderDetailPage = lazy(() => named(import("./pages/ProviderDetail"), "ProviderDetailPage"));
-const ChainsPage = lazy(() => named(import("./pages/Chains"), "ChainsPage"));
-const KeysPage = lazy(() => named(import("./pages/Keys"), "KeysPage"));
-const PlansPage = lazy(() => named(import("./pages/Plans"), "PlansPage"));
-const SettingsPage = lazy(() => named(import("./pages/Settings"), "SettingsPage"));
-const EndpointsPage = lazy(() => named(import("./pages/Endpoints"), "EndpointsPage"));
-const UsagePage = lazy(() => named(import("./pages/Usage"), "UsagePage"));
-const QuotaPage = lazy(() => named(import("./pages/Quota"), "QuotaPage"));
-const CLIToolsPage = lazy(() => named(import("./pages/CLITools"), "CLIToolsPage"));
-const CLIToolDetailPage = lazy(() => named(import("./pages/CLIToolDetail"), "CLIToolDetailPage"));
-const MediaProvidersPage = lazy(() => named(import("./pages/MediaProviders"), "MediaProvidersPage"));
-const MediaProviderDetailPage = lazy(() => named(import("./pages/MediaProviderDetail"), "MediaProviderDetailPage"));
-const ProxyPoolsPage = lazy(() => named(import("./pages/ProxyPools"), "ProxyPoolsPage"));
-const SkillsPage = lazy(() => named(import("./pages/Skills"), "SkillsPage"));
-const ConsoleLogPage = lazy(() => named(import("./pages/ConsoleLog"), "ConsoleLogPage"));
-const SystemPage = lazy(() => named(import("./pages/System"), "SystemPage"));
-const OAuthCallbackPage = lazy(() => named(import("./pages/OAuthCallback"), "OAuthCallbackPage"));
-const KeyPortalPage = lazy(() => named(import("./pages/KeyPortal"), "KeyPortalPage"));
-const KeyDetailPage = lazy(() => named(import("./pages/KeyDetail"), "KeyDetailPage"));
-const GuardrailsPage = lazy(() => named(import("./pages/Guardrails"), "GuardrailsPage"));
+// Routes are code-split; loaders live in routePreload so navigation can warm
+// chunks before click without pulling page modules into the shell bundle.
+const OverviewPage = lazy(routeLoaders["/"]);
+const ProvidersPage = lazy(routeLoaders["/providers"]);
+const ProviderDetailPage = lazy(routeLoaders["/provider-detail"]);
+const ChainsPage = lazy(routeLoaders["/chains"]);
+const KeysPage = lazy(routeLoaders["/keys"]);
+const PlansPage = lazy(routeLoaders["/plans"]);
+const SettingsPage = lazy(routeLoaders["/settings"]);
+const EndpointsPage = lazy(routeLoaders["/endpoints"]);
+const UsagePage = lazy(routeLoaders["/usage"]);
+const QuotaPage = lazy(routeLoaders["/quota"]);
+const CLIToolsPage = lazy(routeLoaders["/cli-tools"]);
+const CLIToolDetailPage = lazy(routeLoaders["/cli-tool-detail"]);
+const MediaProvidersPage = lazy(routeLoaders["/media"]);
+const MediaProviderDetailPage = lazy(routeLoaders["/media-detail"]);
+const ProxyPoolsPage = lazy(routeLoaders["/proxy-pools"]);
+const SkillsPage = lazy(routeLoaders["/skills"]);
+const ConsoleLogPage = lazy(routeLoaders["/console"]);
+const SystemPage = lazy(routeLoaders["/system"]);
+const OAuthCallbackPage = lazy(routeLoaders["/oauth-callback"]);
+const KeyPortalPage = lazy(routeLoaders["/portal"]);
+const KeyDetailPage = lazy(routeLoaders["/key-detail"]);
+const GuardrailsPage = lazy(routeLoaders["/guardrails"]);
 
 function PageFallback() {
   return (

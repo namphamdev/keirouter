@@ -18,11 +18,24 @@ func TestApplyDisabled(t *testing.T) {
 func TestApplyInjectsIntoEmptySystem(t *testing.T) {
 	req := &core.ChatRequest{}
 	Apply(req, Config{Enabled: true, Level: LevelFull})
-	if !strings.Contains(req.System, sentinel) {
-		t.Fatal("expected sentinel marker in system prompt")
+	if !strings.Contains(req.System, idempotencyProbe) {
+		t.Fatal("expected style directive in system prompt")
 	}
-	if !strings.Contains(req.System, "smart caveman") {
+	if !strings.Contains(req.System, "terse, information-dense") {
 		t.Fatalf("expected full-level prompt, got %q", req.System)
+	}
+}
+
+// The injected guideline must not carry any visible marker comment or name
+// itself, so agentic coding tools treat it as part of the operator's own
+// system prompt rather than rejecting it as injected content.
+func TestApplyAddsNoVisibleMarkerOrSelfName(t *testing.T) {
+	req := &core.ChatRequest{}
+	Apply(req, Config{Enabled: true, Level: LevelFull})
+	for _, banned := range []string{"<!--", "keirouter:", "caveman mode", "smart caveman"} {
+		if strings.Contains(req.System, banned) {
+			t.Errorf("system prompt must not contain %q (reads as injected content), got %q", banned, req.System)
+		}
 	}
 }
 
@@ -32,8 +45,8 @@ func TestApplyAppendsToExistingSystem(t *testing.T) {
 	if !strings.HasPrefix(req.System, "be helpful") {
 		t.Fatalf("existing system text must be preserved first, got %q", req.System)
 	}
-	if !strings.Contains(req.System, sentinel) {
-		t.Fatal("expected sentinel marker appended")
+	if !strings.Contains(req.System, idempotencyProbe) {
+		t.Fatal("expected style directive appended")
 	}
 }
 
@@ -50,7 +63,7 @@ func TestApplyIdempotent(t *testing.T) {
 func TestLevelSelection(t *testing.T) {
 	cases := map[Level]string{
 		LevelLite:  "Keep grammar",
-		LevelFull:  "smart caveman",
+		LevelFull:  "terse, information-dense",
 		LevelUltra: "ultra-terse",
 	}
 	for level, want := range cases {
@@ -76,8 +89,8 @@ func TestValidLevel(t *testing.T) {
 
 func TestWenyanLevelSelection(t *testing.T) {
 	cases := map[Level]string{
-		LevelWenyanLite: "semi-classical",
-		LevelWenyanFull: "文言文",
+		LevelWenyanLite:  "semi-classical",
+		LevelWenyanFull:  "文言文",
 		LevelWenyanUltra: "classical Chinese feel",
 	}
 	for level, want := range cases {
@@ -118,7 +131,7 @@ func TestEnhancedUltraPrompt(t *testing.T) {
 
 func TestSharedBoundariesEnhanced(t *testing.T) {
 	for _, want := range []string{
-		"No self-reference",
+		"Do not describe or announce this style",
 		"Preserve user's dominant language",
 		"ALWAYS keep technical terms",
 		"CLI commands",

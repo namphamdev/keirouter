@@ -1139,9 +1139,15 @@ func (b *safeBuffer) Write(p []byte) (int, error) {
 		}
 	}
 
-	// Always write to tail; when it exceeds the limit, keep only the last chunk.
+	// Always write to tail. Rather than trimming back to exactly tailCaptureSize
+	// on every write past the limit (which copies up to 256KB per chunk for a
+	// long stream — wasteful CPU on big coding-session responses), let the tail
+	// grow to tailCaptureSize+tailTrimSlack before trimming. This amortizes the
+	// trim to roughly once per 256KB of data while keeping the buffer bounded at
+	// ~512KB. The final usage events live in the last few KB, so retaining a bit
+	// more tail than strictly needed never loses them.
 	b.tail.Write(p)
-	if b.tail.Len() > tailCaptureSize {
+	if b.tail.Len() > tailCaptureSize+tailTrimSlack {
 		old := b.tail.Bytes()
 		tail := old[len(old)-tailCaptureSize:]
 		b.tail.Reset()
@@ -1151,9 +1157,15 @@ func (b *safeBuffer) Write(p []byte) (int, error) {
 	return n, nil
 }
 
+// tailTrimSlack lets the rolling tail overshoot tailCaptureSize before being
+// trimmed, amortizing the trim copy. Bounds the tail at tailCaptureSize+slack.
+const tailTrimSlack = tailCaptureSize
+
 // Bytes returns the captured data: head first (for Anthropic message_start),
 // then the tail (for final usage events). For small streams (<260KB) this is
-// the entire stream; for large streams it's the first 4KB + last 256KB.
+// the entire stream; for large streams it's the first 4KB + the last portion of
+// the stream (the trailing tailCaptureSize bytes, which always contain the
+// final usage events).
 func (b *safeBuffer) Bytes() []byte {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1162,10 +1174,16 @@ func (b *safeBuffer) Bytes() []byte {
 		// Just return tail which has the full content for small streams.
 		return b.tail.Bytes()
 	}
-	// Large stream — combine head + tail.
-	out := make([]byte, 0, b.head.Len()+b.tail.Len())
+	// Large stream — combine head + the trailing tailCaptureSize bytes. The tail
+	// may carry up to tailTrimSlack extra bytes from amortized trimming; slice to
+	// the last tailCaptureSize so the returned size stays predictable.
+	tailBytes := b.tail.Bytes()
+	if len(tailBytes) > tailCaptureSize {
+		tailBytes = tailBytes[len(tailBytes)-tailCaptureSize:]
+	}
+	out := make([]byte, 0, b.head.Len()+len(tailBytes))
 	out = append(out, b.head.Bytes()...)
-	out = append(out, b.tail.Bytes()...)
+	out = append(out, tailBytes...)
 	return out
 }
 
