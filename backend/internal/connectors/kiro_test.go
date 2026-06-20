@@ -289,7 +289,78 @@ func TestKiroHeaders_OAuthHasNoTokenType(t *testing.T) {
 	}
 }
 
+func TestKiroResolveProfileArn(t *testing.T) {
+	cases := []struct {
+		name  string
+		creds core.Credentials
+		want  string
+	}{
+		{
+			name:  "oauth builder-id falls back to builder-id default",
+			creds: core.Credentials{Extra: map[string]string{"kiro_auth_method": "builder-id"}},
+			want:  kiroDefaultProfileArnBuilderID,
+		},
+		{
+			name:  "oauth idc falls back to builder-id default",
+			creds: core.Credentials{Extra: map[string]string{"kiro_auth_method": "idc"}},
+			want:  kiroDefaultProfileArnBuilderID,
+		},
+		{
+			name:  "imported social falls back to social default",
+			creds: core.Credentials{Extra: map[string]string{"kiro_auth_method": "imported"}},
+			want:  kiroDefaultProfileArnSocial,
+		},
+		{
+			name:  "google social falls back to social default",
+			creds: core.Credentials{Extra: map[string]string{"kiro_auth_method": "google"}},
+			want:  kiroDefaultProfileArnSocial,
+		},
+		{
+			name:  "no auth method falls back to builder-id default",
+			creds: core.Credentials{Extra: map[string]string{}},
+			want:  kiroDefaultProfileArnBuilderID,
+		},
+		{
+			name: "resolved kiro_profile_arn wins over default",
+			creds: core.Credentials{Extra: map[string]string{
+				"kiro_auth_method": "builder-id",
+				"kiro_profile_arn": "arn:aws:codewhisperer:us-east-1:111:profile/RESOLVED",
+			}},
+			want: "arn:aws:codewhisperer:us-east-1:111:profile/RESOLVED",
+		},
+		{
+			name: "resolved profile_arn used when kiro_profile_arn empty",
+			creds: core.Credentials{Extra: map[string]string{
+				"kiro_auth_method": "google",
+				"profile_arn":      "arn:aws:codewhisperer:us-east-1:222:profile/ALT",
+			}},
+			want: "arn:aws:codewhisperer:us-east-1:222:profile/ALT",
+		},
+		{
+			name: "api_key uses only resolved arn",
+			creds: core.Credentials{Extra: map[string]string{
+				"kiro_auth_method": "api_key",
+				"kiro_profile_arn": "arn:aws:codewhisperer:us-east-1:333:profile/KEY",
+			}},
+			want: "arn:aws:codewhisperer:us-east-1:333:profile/KEY",
+		},
+		{
+			name:  "api_key without resolved arn injects no default",
+			creds: core.Credentials{Extra: map[string]string{"kiro_auth_method": "api_key"}},
+			want:  "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := kiroResolveProfileArn(tc.creds); got != tc.want {
+				t.Errorf("kiroResolveProfileArn() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestKiroEndpointRetryable(t *testing.T) {
+
 	cases := []struct {
 		kind core.ErrorKind
 		want bool

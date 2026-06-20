@@ -53,6 +53,49 @@ func isKiroAPIKey(creds core.Credentials) bool {
 	return creds.Extra["kiro_auth_method"] == "api_key"
 }
 
+// Public default CodeWhisperer profile ARNs (us-east-1), keyed by auth method.
+// Used when an OAuth/social connection could not resolve its own profileArn.
+// Builder ID / IDC sign-ins and social (Google/GitHub/imported) sign-ins map to
+// different shared profiles. Kiro upstream now rejects a generateAssistantResponse
+// request without a profileArn (400 "profileArn is required for this request."),
+// so an OAuth/social connection must always carry one.
+const (
+	kiroDefaultProfileArnBuilderID = "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX"
+	kiroDefaultProfileArnSocial    = "arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK"
+)
+
+// kiroDefaultProfileArn resolves the shared default profileArn for a given OAuth
+// auth method. Social sign-ins (Google/GitHub/imported Kiro IDE tokens) map to
+// the social profile; Builder ID / IDC map to the builder-id profile.
+func kiroDefaultProfileArn(authMethod string) string {
+	switch authMethod {
+	case "google", "github", "imported", "social":
+		return kiroDefaultProfileArnSocial
+	default:
+		return kiroDefaultProfileArnBuilderID
+	}
+}
+
+// kiroResolveProfileArn returns the profileArn to attach to a chat request. For
+// API-key auth, only an ARN actually resolved for the key is used — never the
+// shared default, since an ARN not owned by the key's account is rejected with
+// 403. For OAuth/social auth the connection's resolved ARN is preferred, falling
+// back to the shared default keyed by auth method so the request always carries
+// a profileArn (the upstream 400s without one).
+func kiroResolveProfileArn(creds core.Credentials) string {
+	resolved := creds.Extra["kiro_profile_arn"]
+	if resolved == "" {
+		resolved = creds.Extra["profile_arn"]
+	}
+	if isKiroAPIKey(creds) {
+		return resolved
+	}
+	if resolved != "" {
+		return resolved
+	}
+	return kiroDefaultProfileArn(creds.Extra["kiro_auth_method"])
+}
+
 // kiroAPIKey resolves the raw API key from the credentials. The key may arrive
 // in the dedicated APIKey field or, for imported connections, as the access
 // token.
@@ -324,7 +367,7 @@ func (c *Kiro) FetchQuota(ctx context.Context, creds core.Credentials) (*QuotaRe
 	// CodeWhisperer 403 the request ("bearer token invalid"). OAuth/social may
 	// fall back to the default placeholder.
 	if profileArn == "" && !isAPIKey {
-		profileArn = "arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX"
+		profileArn = kiroDefaultProfileArn(authMethod)
 	}
 
 	authHeaders := map[string]string{
@@ -621,14 +664,14 @@ func (c *Kiro) Chat(ctx context.Context, req *core.ChatRequest, creds core.Crede
 // Stream performs a streaming call, parsing the AWS EventStream into canonical
 // chunks.
 func (c *Kiro) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
-	// API-key credentials are scoped to a CodeWhisperer profile resolved at
-	// connect time; the request body must carry that profileArn or the upstream
-	// rejects it with 403. OAuth/social tokens send no profileArn.
-	var profileArn string
-	if isKiroAPIKey(creds) {
-		profileArn = creds.Extra["kiro_profile_arn"]
-	}
+	// Every Kiro chat request must carry a profileArn — the upstream rejects a
+	// request without one (400 "profileArn is required for this request."). For
+	// API-key auth only the ARN resolved for the key is sent (a foreign ARN
+	// 403s). For OAuth/social the connection's resolved ARN is used, falling
+	// back to the shared default profile for the auth method.
+	profileArn := kiroResolveProfileArn(creds)
 	body, err := c.codec.RenderRequestWithProfile(req, profileArn)
+
 	if err != nil {
 		return nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
 	}
