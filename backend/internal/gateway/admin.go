@@ -91,6 +91,9 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/models/disabled", s.adminListDisabledModels)
 	r.Post("/models/disabled", s.adminDisableModels)
 	r.Delete("/models/disabled", s.adminEnableModels)
+	r.Get("/models/custom", s.adminListCustomModels)
+	r.Post("/models/custom", s.adminAddCustomModels)
+	r.Delete("/models/custom", s.adminRemoveCustomModels)
 
 	r.Get("/settings/endpoint", s.adminGetEndpointSettings)
 	r.Post("/settings/endpoint", s.adminUpdateEndpointSettings)
@@ -216,9 +219,10 @@ func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type modelInfo struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-		Kind string `json:"kind"`
+		ID     string `json:"id"`
+		Name   string `json:"name"`
+		Kind   string `json:"kind"`
+		Custom bool   `json:"custom,omitempty"`
 	}
 	modelKind := func(kind core.ServiceKind) core.ServiceKind {
 		if kind == "" {
@@ -272,6 +276,23 @@ func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
 				break // only use first valid account
 			}
 		}
+	}
+
+	// Per-provider custom models (user-defined ids supplementing the catalog).
+	for _, cm := range s.loadCustomModels(r.Context(), providerID) {
+		kind := modelKind(core.ServiceKind(cm.Kind))
+		if kindFilter != "" && kind != kindFilter {
+			continue
+		}
+		if seen[cm.ID] {
+			continue
+		}
+		name := cm.Name
+		if name == "" {
+			name = cm.ID
+		}
+		out = append(out, modelInfo{ID: cm.ID, Name: name, Kind: string(kind), Custom: true})
+		seen[cm.ID] = true
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"models": out})
@@ -1658,6 +1679,148 @@ func (s *Server) adminDeleteAlias(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---- custom provider models -------------------------------------------------
+
+const customModelsPrefix = "custom_models_" // + provider id
+
+type customModelEntry struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+	Kind string `json:"kind,omitempty"`
+}
+
+func normalizeCustomModelKind(kind string) string {
+	k := strings.ToLower(strings.TrimSpace(kind))
+	if k == "" {
+		return string(core.ServiceLLM)
+	}
+	if !core.ValidServiceKind(core.ServiceKind(k)) {
+		return string(core.ServiceLLM)
+	}
+	return k
+}
+
+func (s *Server) loadCustomModels(ctx context.Context, provider string) []customModelEntry {
+	if s.settings == nil {
+		return nil
+	}
+	raw, err := s.settings.Get(ctx, customModelsPrefix+provider)
+	if err != nil || raw == "" {
+		return nil
+	}
+	var entries []customModelEntry
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return nil
+	}
+	return entries
+}
+
+func (s *Server) saveCustomModels(ctx context.Context, provider string, entries []customModelEntry) error {
+	if s.settings == nil {
+		return nil
+	}
+	raw, err := json.Marshal(entries)
+	if err != nil {
+		return err
+	}
+	return s.settings.Set(ctx, customModelsPrefix+provider, string(raw))
+}
+
+func mergeCustomModels(existing []customModelEntry, add []customModelEntry) []customModelEntry {
+	byID := map[string]customModelEntry{}
+	order := make([]string, 0, len(existing)+len(add))
+	for _, e := range existing {
+		id := strings.TrimSpace(e.ID)
+		if id == "" {
+			continue
+		}
+		if _, ok := byID[id]; !ok {
+			order = append(order, id)
+		}
+		byID[id] = customModelEntry{ID: id, Name: strings.TrimSpace(e.Name), Kind: normalizeCustomModelKind(e.Kind)}
+	}
+	for _, e := range add {
+		id := strings.TrimSpace(e.ID)
+		if id == "" {
+			continue
+		}
+		if _, ok := byID[id]; !ok {
+			order = append(order, id)
+		}
+		byID[id] = customModelEntry{ID: id, Name: strings.TrimSpace(e.Name), Kind: normalizeCustomModelKind(e.Kind)}
+	}
+	out := make([]customModelEntry, 0, len(order))
+	for _, id := range order {
+		out = append(out, byID[id])
+	}
+	return out
+}
+
+func (s *Server) adminListCustomModels(w http.ResponseWriter, r *http.Request) {
+	provider := r.URL.Query().Get("provider")
+	if provider == "" {
+		writeError(w, http.StatusBadRequest, "provider query param is required")
+		return
+	}
+	entries := s.loadCustomModels(r.Context(), provider)
+	writeJSON(w, http.StatusOK, map[string]any{"models": entries})
+}
+
+func (s *Server) adminAddCustomModels(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Provider string             `json:"providerAlias"`
+		Models   []customModelEntry `json:"models"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.Provider == "" {
+		writeError(w, http.StatusBadRequest, "providerAlias is required")
+		return
+	}
+	if len(body.Models) == 0 {
+		writeError(w, http.StatusBadRequest, "models is required")
+		return
+	}
+	existing := s.loadCustomModels(r.Context(), body.Provider)
+	merged := mergeCustomModels(existing, body.Models)
+	if err := s.saveCustomModels(r.Context(), body.Provider, merged); err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": merged})
+}
+
+func (s *Server) adminRemoveCustomModels(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Provider string   `json:"providerAlias"`
+		IDs      []string `json:"ids"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.Provider == "" {
+		writeError(w, http.StatusBadRequest, "providerAlias is required")
+		return
+	}
+	remove := map[string]bool{}
+	for _, id := range body.IDs {
+		remove[strings.TrimSpace(id)] = true
+	}
+	existing := s.loadCustomModels(r.Context(), body.Provider)
+	var kept []customModelEntry
+	for _, e := range existing {
+		if !remove[e.ID] {
+			kept = append(kept, e)
+		}
+	}
+	if err := s.saveCustomModels(r.Context(), body.Provider, kept); err != nil {
+		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": kept})
 }
 
 // ---- disabled models --------------------------------------------------------

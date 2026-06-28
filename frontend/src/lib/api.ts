@@ -852,7 +852,7 @@ export const api = {
 
   providers: () => request<{ providers: Provider[] }>("GET", "/providers"),
   providerModels: (id: string, kind?: string) =>
-    request<{ models: { id: string; name: string; kind: string }[] }>(
+    request<{ models: { id: string; name: string; kind: string; custom?: boolean }[] }>(
       "GET",
       `/providers/${id}/models${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`,
     ),
@@ -998,6 +998,18 @@ export const api = {
     request<{ ids: string[] }>("POST", "/models/disabled", { providerAlias, ids }),
   enableModels: (providerAlias: string, ids: string[]) =>
     request<{ ids: string[] }>("DELETE", "/models/disabled", { providerAlias, ids }),
+
+  listCustomModels: (provider: string) =>
+    request<{ models: { id: string; name?: string; kind?: string }[] }>(
+      "GET",
+      `/models/custom?provider=${encodeURIComponent(provider)}`,
+    ),
+  addCustomModels: (
+    providerAlias: string,
+    models: { id: string; name?: string; kind?: string }[],
+  ) => request<{ models: { id: string; name?: string; kind?: string }[] }>("POST", "/models/custom", { providerAlias, models }),
+  removeCustomModels: (providerAlias: string, ids: string[]) =>
+    request<{ models: { id: string; name?: string; kind?: string }[] }>("DELETE", "/models/custom", { providerAlias, ids }),
 
   // Update check (queries GitHub for the latest release + changelog).
   updateCheck: () => request<UpdateInfo>("GET", "/update/check"),

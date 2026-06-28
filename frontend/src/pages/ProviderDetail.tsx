@@ -96,6 +96,9 @@ export function ProviderDetailPage() {
   const [modelSearchQuery, setModelSearchQuery] = useState("");
   const [modelPage, setModelPage] = useState(1);
   const MODELS_PER_PAGE = 12;
+  const [customModelId, setCustomModelId] = useState("");
+  const [customModelName, setCustomModelName] = useState("");
+  const [customModelKind, setCustomModelKind] = useState("llm");
 
   // Multi-select state for bulk enable/disable. Holds the ids of selected
   // models; selection persists across pagination and search changes.
@@ -113,16 +116,26 @@ export function ProviderDetailPage() {
     });
   };
 
+  const modelList = models.data?.models ?? [];
+  const customModelIdSet = useMemo(
+    () => new Set(modelList.filter((m) => m.custom).map((m) => m.id)),
+    [modelList],
+  );
+  const selectedCustomIds = useMemo(
+    () => [...selectedModelIds].filter((mid) => customModelIdSet.has(mid)),
+    [selectedModelIds, customModelIdSet],
+  );
+
   const filteredModels = useMemo(() => {
-    if (!models.data?.models) return [];
-    if (!modelSearchQuery.trim()) return models.data.models;
+    if (!modelList.length) return [];
+    if (!modelSearchQuery.trim()) return modelList;
     const lowerQ = modelSearchQuery.toLowerCase();
-    return models.data.models.filter(m => 
-      m.id.toLowerCase().includes(lowerQ) || 
+    return modelList.filter(m =>
+      m.id.toLowerCase().includes(lowerQ) ||
       (m.name && m.name.toLowerCase().includes(lowerQ)) ||
       (m.kind && m.kind.toLowerCase().includes(lowerQ))
     );
-  }, [models.data?.models, modelSearchQuery]);
+  }, [modelList, modelSearchQuery]);
 
   useEffect(() => {
     setModelPage(1);
@@ -237,6 +250,27 @@ export function ProviderDetailPage() {
       toast.success("Models re-enabled", "Selected models are available for routing again.");
     },
     onError: (e: Error) => toast.error("Couldn't enable models", e.message),
+  });
+
+  const addCustomModelMut = useMutation({
+    mutationFn: (models: { id: string; name?: string; kind?: string }[]) => api.addCustomModels(id!, models),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["provider-models", id] });
+      setCustomModelId("");
+      setCustomModelName("");
+      toast.success("Custom model added", "The model appears in Available Models and can be used for routing.");
+    },
+    onError: (e: Error) => toast.error("Couldn't add model", e.message),
+  });
+
+  const removeCustomModelsMut = useMutation({
+    mutationFn: (ids: string[]) => api.removeCustomModels(id!, ids),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["provider-models", id] });
+      setSelectedModelIds(new Set());
+      toast.success("Custom models removed", "Removed user-defined models from this provider.");
+    },
+    onError: (e: Error) => toast.error("Couldn't remove models", e.message),
   });
 
   const updateRouting = useMutation({
@@ -482,12 +516,77 @@ export function ProviderDetailPage() {
         </Card>
 
         {/* Available Models */}
-        {models.data?.models && models.data.models.length > 0 && (
-          <Card>
-            <CardHeader
-              title="Available Models"
-              description={`${models.data.models.length} model${models.data.models.length === 1 ? "" : "s"} configured for this provider.`}
-            />
+        <Card>
+          <CardHeader
+            title="Available Models"
+            description={
+              modelList.length > 0
+                ? `${modelList.length} model${modelList.length === 1 ? "" : "s"} configured for this provider.`
+                : "No catalog models yet. Add a custom model id below (e.g. for Ollama or a private gateway)."
+            }
+          />
+          <form
+            className="flex flex-col gap-3 border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-3 sm:flex-row sm:flex-wrap sm:items-end"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const mid = customModelId.trim();
+              if (!mid || addCustomModelMut.isPending) return;
+              addCustomModelMut.mutate([
+                {
+                  id: mid,
+                  name: customModelName.trim() || undefined,
+                  kind: customModelKind,
+                },
+              ]);
+            }}
+          >
+            <div className="min-w-[10rem] flex-1">
+              <Field label="Model id">
+                <Input
+                  value={customModelId}
+                  onChange={(e) => setCustomModelId(e.target.value)}
+                  placeholder="my-local-model"
+                  className="h-8 text-sm font-mono"
+                />
+              </Field>
+            </div>
+            <div className="min-w-[10rem] flex-1">
+              <Field label="Display name (optional)">
+                <Input
+                  value={customModelName}
+                  onChange={(e) => setCustomModelName(e.target.value)}
+                  placeholder="My Local Model"
+                  className="h-8 text-sm"
+                />
+              </Field>
+            </div>
+            <div className="w-36">
+              <Field label="Kind">
+              <select
+                value={customModelKind}
+                onChange={(e) => setCustomModelKind(e.target.value)}
+                className="h-8 w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-2 text-xs text-[var(--text)] outline-none focus:border-[var(--color-accent-500)]"
+              >
+                <option value="llm">LLM</option>
+                <option value="embedding">Embedding</option>
+                <option value="image">Image</option>
+                <option value="tts">TTS</option>
+                <option value="stt">STT</option>
+                <option value="search">Search</option>
+                <option value="fetch">Fetch</option>
+              </select>
+            </Field>
+            </div>
+            <Button
+              type="submit"
+              className="h-8 shrink-0 px-3 text-xs"
+              disabled={!customModelId.trim() || addCustomModelMut.isPending}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add model
+            </Button>
+          </form>
+          {modelList.length > 0 && (
             <div className="flex flex-col gap-3 border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="relative w-full max-w-sm">
                 <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
@@ -546,6 +645,17 @@ export function ProviderDetailPage() {
                   <ToggleLeft className="h-3.5 w-3.5 text-[var(--text-muted)]" />
                   Disable
                 </Button>
+                {selectedCustomIds.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    className="h-8 px-3 text-xs text-[color:var(--color-danger)]"
+                    onClick={() => removeCustomModelsMut.mutate(selectedCustomIds)}
+                    disabled={removeCustomModelsMut.isPending}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Remove custom
+                  </Button>
+                )}
                 {selectedModelIds.size > 0 && (
                   <Button
                     variant="ghost"
@@ -557,32 +667,34 @@ export function ProviderDetailPage() {
                 )}
               </div>
             </div>
-            {filteredModels.length === 0 ? (
-              <div className="px-6 py-12 text-center text-sm text-[var(--text-muted)] border-t border-[var(--border)]">
-                No models found matching "{modelSearchQuery}"
-              </div>
-            ) : (
-              <div className={`grid grid-cols-1 gap-px overflow-hidden border-t border-[var(--border)] bg-[var(--border)] sm:grid-cols-2 lg:grid-cols-3 ${totalModelPages <= 1 ? "rounded-b-2xl" : ""}`}>
-                {paginatedModels.map((m) => (
-                  <ModelCell
-                    key={m.id}
-                    model={m}
-                    provider={provider}
-                    disabled={disabledModelIds.has(m.id)}
-                    selected={selectedModelIds.has(m.id)}
-                    onToggleSelect={() => toggleModelSelection(m.id)}
-                    onToggleDisable={() => {
-                      if (disabledModelIds.has(m.id)) {
-                        enableModelsMut.mutate([m.id]);
-                      } else {
-                        disableModelsMut.mutate([m.id]);
-                      }
-                    }}
-                  />
-                ))}
-              </div>
-            )}
-            {totalModelPages > 0 && (
+          )}
+          {modelList.length > 0 && filteredModels.length === 0 && (
+            <div className="px-6 py-12 text-center text-sm text-[var(--text-muted)] border-t border-[var(--border)]">
+              No models found matching "{modelSearchQuery}"
+            </div>
+          )}
+          {modelList.length > 0 && filteredModels.length > 0 && (
+            <div className={`grid grid-cols-1 gap-px overflow-hidden border-t border-[var(--border)] bg-[var(--border)] sm:grid-cols-2 lg:grid-cols-3 ${totalModelPages <= 1 ? "rounded-b-2xl" : ""}`}>
+              {paginatedModels.map((m) => (
+                <ModelCell
+                  key={m.id}
+                  model={m}
+                  provider={provider}
+                  disabled={disabledModelIds.has(m.id)}
+                  selected={selectedModelIds.has(m.id)}
+                  onToggleSelect={() => toggleModelSelection(m.id)}
+                  onToggleDisable={() => {
+                    if (disabledModelIds.has(m.id)) {
+                      enableModelsMut.mutate([m.id]);
+                    } else {
+                      disableModelsMut.mutate([m.id]);
+                    }
+                  }}
+                />
+              ))}
+            </div>
+          )}
+          {modelList.length > 0 && totalModelPages > 0 && (
               <div className="flex items-center justify-between rounded-b-2xl border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-3">
                 <span className="text-xs text-[var(--text-muted)]">
                   Showing {(modelPage - 1) * MODELS_PER_PAGE + 1} to {Math.min(modelPage * MODELS_PER_PAGE, filteredModels.length)} of {filteredModels.length} models
@@ -606,9 +718,8 @@ export function ProviderDetailPage() {
                   </Button>
                 </div>
               </div>
-            )}
-          </Card>
-        )}
+          )}
+        </Card>
       </div>
 
       {oauthOpen && oauthProvider && (
@@ -1549,7 +1660,7 @@ function ModelCell({
   onToggleSelect,
   onToggleDisable,
 }: {
-  model: { id: string; name: string; kind: string };
+  model: { id: string; name: string; kind: string; custom?: boolean };
   provider: Provider;
   disabled?: boolean;
   selected?: boolean;
@@ -1580,7 +1691,7 @@ function ModelCell({
           )}
           <div className={`h-1.5 w-1.5 rounded-full ${disabled ? "bg-ink-400 dark:bg-ink-600" : "bg-accent-500 shadow-[0_0_8px_var(--color-accent-500)]"}`} />
           <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-            {model.kind || "Model"}
+            {model.custom ? "Custom" : model.kind || "Model"}
           </span>
         </div>
         <div className="flex items-center gap-0.5">
