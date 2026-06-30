@@ -43,6 +43,32 @@ func NewQwen(id, defaultBaseURL string) *Qwen {
 func (c *Qwen) ID() string            { return c.id }
 func (c *Qwen) Dialect() core.Dialect { return core.DialectOpenAI }
 
+// neutralizeThinkingToolChoice relaxes an incompatible tool_choice when Qwen
+// thinking is active. Qwen rejects tool_choice="required" or a forced-tool
+// object while reasoning is enabled, so it is downgraded to "auto" (the model
+// still sees the tools and may call them). Applied to the per-attempt request,
+// so it never mutates shared state across attempts.
+func (c *Qwen) neutralizeThinkingToolChoice(req *core.ChatRequest) {
+	if req.Reasoning == nil {
+		return
+	}
+	switch strings.ToLower(req.Reasoning.Effort) {
+	case "", "none", "off":
+		return
+	}
+	switch tc := req.ToolChoice.(type) {
+	case nil:
+		return
+	case string:
+		if tc == "required" {
+			req.ToolChoice = "auto"
+		}
+	default:
+		// Any object form (forced tool) is incompatible — relax to auto.
+		req.ToolChoice = "auto"
+	}
+}
+
 // endpoint resolves the chat/completions URL, honoring a token-bound resource
 // URL host when supplied (using portal.qwen.ai for a foreign shard yields 401).
 func (c *Qwen) endpoint(creds core.Credentials) string {
@@ -128,6 +154,7 @@ func (c *Qwen) Validate(ctx context.Context, creds core.Credentials) error {
 
 func (c *Qwen) Chat(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (*core.ChatResponse, error) {
 	req.Stream = false
+	c.neutralizeThinkingToolChoice(req)
 	body, err := c.codec.RenderRequest(req)
 	if err != nil {
 		return nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
@@ -147,6 +174,7 @@ func (c *Qwen) Chat(ctx context.Context, req *core.ChatRequest, creds core.Crede
 
 func (c *Qwen) Stream(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (<-chan core.StreamChunk, error) {
 	req.Stream = true
+	c.neutralizeThinkingToolChoice(req)
 	body, err := c.codec.RenderRequest(req)
 	if err != nil {
 		return nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}
@@ -164,6 +192,7 @@ func (c *Qwen) Stream(ctx context.Context, req *core.ChatRequest, creds core.Cre
 // for zero-copy same-dialect piping.
 func (c *Qwen) StreamRaw(ctx context.Context, req *core.ChatRequest, creds core.Credentials, cfg core.StreamConfig) (io.ReadCloser, http.Header, error) {
 	req.Stream = true
+	c.neutralizeThinkingToolChoice(req)
 	body, err := c.codec.RenderRequest(req)
 	if err != nil {
 		return nil, nil, &core.ProviderError{Kind: core.ErrInternal, Provider: c.id, Model: req.Model, Message: err.Error(), Cause: err}

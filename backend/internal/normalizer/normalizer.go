@@ -14,8 +14,9 @@ package normalizer
 
 import (
 	"fmt"
-	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 	"regexp"
+
+	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 )
@@ -29,6 +30,7 @@ func Apply(req *core.ChatRequest) {
 	if req == nil {
 		return
 	}
+	DedupeBuiltinTools(req)
 	SanitizeToolCallIDs(req)
 	FixMissingToolResults(req)
 }

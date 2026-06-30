@@ -20,10 +20,11 @@ func (GeminiCodec) Dialect() core.Dialect { return core.DialectGemini }
 // ---- wire types -------------------------------------------------------------
 
 type gemRequest struct {
-	Contents          []gemContent  `json:"contents"`
-	SystemInstruction *gemContent   `json:"systemInstruction,omitempty"`
-	Tools             []gemTool     `json:"tools,omitempty"`
-	GenerationConfig  *gemGenConfig `json:"generationConfig,omitempty"`
+	Contents          []gemContent    `json:"contents"`
+	SystemInstruction *gemContent     `json:"systemInstruction,omitempty"`
+	Tools             []gemTool       `json:"tools,omitempty"`
+	ToolConfig        json.RawMessage `json:"toolConfig,omitempty"`
+	GenerationConfig  *gemGenConfig   `json:"generationConfig,omitempty"`
 }
 
 type gemGenConfig struct {
@@ -172,6 +173,14 @@ func (GeminiCodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
 			})
 		}
 		out.Tools = []gemTool{{FunctionDeclarations: decls}}
+
+		// Render tool_choice as a functionCallingConfig only when tools are
+		// declared; an allowed-name mode with no tools is rejected.
+		if tc := openAIToolChoiceToGemini(req.ToolChoice, sanitizeGeminiName); tc != nil {
+			if raw, err := json.Marshal(tc); err == nil {
+				out.ToolConfig = raw
+			}
+		}
 	}
 	for _, m := range req.Messages {
 		out.Contents = append(out.Contents, renderGemContent(m, callIDToName))
