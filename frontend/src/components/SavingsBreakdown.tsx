@@ -49,7 +49,11 @@ export function TokenSavingsBreakdown({ savings, totalRequests, insights, period
   const maxBytes = Math.max(...rules.map((r) => r.bytes_saved), 1);
   const totalCavemanPct = totalRequests > 0 ? ((savings.caveman_requests / totalRequests) * 100).toFixed(1) : "0";
   const totalTersePct = totalRequests > 0 ? ((savings.terse_requests / totalRequests) * 100).toFixed(0) : "0";
-  const hasSavings = savings.slim_bytes_saved > 0 || savings.caveman_requests > 0 || savings.terse_requests > 0 || rules.length > 0;
+  // New savers. Old payloads predate these fields, so coalesce missing to 0.
+  const headroomTokensSaved = savings.headroom_tokens_saved ?? 0;
+  const ponytailRequests = savings.ponytail_requests ?? 0;
+  const totalPonytailPct = totalRequests > 0 ? ((ponytailRequests / totalRequests) * 100).toFixed(0) : "0";
+  const hasSavings = savings.slim_bytes_saved > 0 || savings.caveman_requests > 0 || savings.terse_requests > 0 || headroomTokensSaved > 0 || ponytailRequests > 0 || rules.length > 0;
   // Prefer the backend's blended USD estimate; fall back to a rough $3/M rate
   // for older payloads that predate the usd_saved field.
   const usdSaved = savings.usd_saved ?? (savings.slim_tokens_saved / 1_000_000) * 3;
@@ -73,6 +77,12 @@ export function TokenSavingsBreakdown({ savings, totalRequests, insights, period
             <span className="flex items-center gap-1.5">
               <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
               TRSE {totalTersePct}%
+            </span>
+          )}
+          {ponytailRequests > 0 && (
+            <span className="flex items-center gap-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-teal-500" />
+              PONY {totalPonytailPct}%
             </span>
           )}
           </div>
@@ -112,6 +122,22 @@ export function TokenSavingsBreakdown({ savings, totalRequests, insights, period
             ))
           )}
         </div>
+        {(headroomTokensSaved > 0 || ponytailRequests > 0) && (
+          <div className="mt-6 grid grid-cols-2 gap-4 border-t border-[var(--border)] pt-4">
+            <div className="flex flex-col">
+              <span className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Headroom Tokens Saved</span>
+              <span className="text-lg font-light tabular-nums text-[var(--text)]">
+                {fmtNum(headroomTokensSaved)} <span className="ml-1 text-xs font-medium text-[var(--text-muted)]">tokens</span>
+              </span>
+            </div>
+            <div className="flex flex-col text-right">
+              <span className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Ponytail Requests</span>
+              <span className="text-lg font-light tabular-nums text-[var(--text)]">
+                {fmtNum(ponytailRequests)} <span className="ml-1 text-xs font-medium text-[var(--text-muted)]">requests</span>
+              </span>
+            </div>
+          </div>
+        )}
         <ClientBreakdown clients={savings.by_client || []} />
         <div className="mt-6 flex items-center justify-between border-t border-[var(--border)] pt-4">
           <div className="flex flex-col">

@@ -49,4 +49,5 @@ data/
 .vscode/*
 !.vscode/extensions.json
 *.swp
+.kiro/*
 node_modules/

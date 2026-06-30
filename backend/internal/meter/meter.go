@@ -110,9 +110,11 @@ type Event struct {
 	TTFT      time.Duration // time-to-first-token (0 if not measured)
 
 	// Token-saving analytics.
-	SlimStats     *SlimSnapshot // nil when RTK did not fire
-	CavemanActive bool          // caveman output compression was active
-	TerseActive   bool          // terse output compression was active
+	SlimStats      *SlimSnapshot     // nil when RTK did not fire
+	CavemanActive  bool              // caveman output compression was active
+	TerseActive    bool              // terse output compression was active
+	HeadroomStats  *HeadroomSnapshot // nil when Headroom did not yield non-phantom savings
+	PonytailActive bool              // ponytail output injection was active
 }
 
 // SlimSnapshot captures the RTK slimmer's per-request compression results.
@@ -120,6 +122,15 @@ type SlimSnapshot struct {
 	BytesSaved  int
 	TokensSaved int
 	Rules       string // comma-separated rule names that fired
+}
+
+// HeadroomSnapshot captures the Headroom compressor's per-request input-side
+// savings. It is only populated when Headroom achieved real (non-phantom)
+// savings; nil indicates no savings should be recorded for this request.
+type HeadroomSnapshot struct {
+	TokensSaved int
+	BytesSaved  int
+	Active      bool
 }
 
 // resolvePrice looks up the price for a provider/model pair. It tries
@@ -192,12 +203,18 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 		TTFTMS:           int(ev.TTFT.Milliseconds()),
 		CavemanActive:    ev.CavemanActive,
 		TerseActive:      ev.TerseActive,
+		PonytailActive:   ev.PonytailActive,
 		CreatedAt:        time.Now(),
 	}
 	if ev.SlimStats != nil {
 		rec.SlimBytesSaved = ev.SlimStats.BytesSaved
 		rec.SlimTokensSaved = ev.SlimStats.TokensSaved
 		rec.SlimRules = ev.SlimStats.Rules
+	}
+	if ev.HeadroomStats != nil {
+		rec.HeadroomTokensSaved = ev.HeadroomStats.TokensSaved
+		rec.HeadroomBytesSaved = ev.HeadroomStats.BytesSaved
+		rec.HeadroomActive = ev.HeadroomStats.Active
 	}
 	if err := m.recordUsage(ctx, rec); err != nil {
 		return cost, err

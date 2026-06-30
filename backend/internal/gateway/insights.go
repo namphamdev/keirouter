@@ -222,17 +222,20 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 	for _, cs := range clientSavings {
 		// Skip clients that produced no optimization at all, so the breakdown
 		// shows only where optimization actually helped.
-		if cs.SlimTokensSaved == 0 && cs.CavemanRequests == 0 && cs.TerseRequests == 0 {
+		if cs.SlimTokensSaved == 0 && cs.CavemanRequests == 0 && cs.TerseRequests == 0 &&
+			cs.HeadroomTokensSaved == 0 && cs.PonytailRequests == 0 {
 			continue
 		}
 		byClient = append(byClient, map[string]any{
-			"client":           cs.Client,
-			"requests":         cs.Requests,
-			"bytes_saved":      cs.SlimBytesSaved,
-			"tokens_saved":     cs.SlimTokensSaved,
-			"usd_saved":        usdPerToken(cs.SlimTokensSaved),
-			"caveman_requests": cs.CavemanRequests,
-			"terse_requests":   cs.TerseRequests,
+			"client":                cs.Client,
+			"requests":              cs.Requests,
+			"bytes_saved":           cs.SlimBytesSaved,
+			"tokens_saved":          cs.SlimTokensSaved,
+			"usd_saved":             usdPerToken(cs.SlimTokensSaved),
+			"caveman_requests":      cs.CavemanRequests,
+			"terse_requests":        cs.TerseRequests,
+			"headroom_tokens_saved": cs.HeadroomTokensSaved,
+			"ponytail_requests":     cs.PonytailRequests,
 		})
 	}
 
@@ -251,14 +254,17 @@ func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
 			"since":              since,
 		},
 		"savings": map[string]any{
-			"slim_bytes_saved":   sum.SlimBytesSaved,
-			"slim_tokens_saved":  sum.SlimTokensSaved,
-			"caveman_requests":   sum.CavemanRequests,
-			"terse_requests":     sum.TerseRequests,
-			"usd_saved":          usdPerToken(sum.SlimTokensSaved),
-			"usd_saved_estimate": true,
-			"rules":              rules,
-			"by_client":          byClient,
+			"slim_bytes_saved":      sum.SlimBytesSaved,
+			"slim_tokens_saved":     sum.SlimTokensSaved,
+			"caveman_requests":      sum.CavemanRequests,
+			"terse_requests":        sum.TerseRequests,
+			"headroom_tokens_saved": sum.HeadroomTokensSaved,
+			"headroom_requests":     sum.HeadroomRequests,
+			"ponytail_requests":     sum.PonytailRequests,
+			"usd_saved":             usdPerToken(sum.SlimTokensSaved),
+			"usd_saved_estimate":    true,
+			"rules":                 rules,
+			"by_client":             byClient,
 		},
 		"providers": providers,
 		"recent":    recentRows,
@@ -524,8 +530,7 @@ func (s *Server) adminUsageStream(w http.ResponseWriter, r *http.Request) {
 
 // adminConsoleLog returns the buffered log lines from the console log.
 func (s *Server) adminConsoleLog(w http.ResponseWriter, r *http.Request) {
-	lines := s.consoleLog.Lines()
-	writeJSON(w, http.StatusOK, map[string]any{"logs": lines})
+	writeJSON(w, http.StatusOK, map[string]any{"logs": s.consoleLog.Entries()})
 }
 
 // ---- proxy pools ------------------------------------------------------------

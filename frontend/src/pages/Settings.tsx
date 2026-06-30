@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Sparkles, Zap, MessageSquare, Layers, Route, Wifi, Monitor, Database, Clock,
-  ArrowUpCircle, CheckCircle2, ExternalLink,
+  ArrowUpCircle, CheckCircle2, ExternalLink, XCircle, Terminal,
   Gauge, Eye, EyeOff, KeyRound, Download, Upload, ShieldCheck, Info,
   Palette, Shield,
 } from "lucide-react";
-import { api, type EndpointSettings, type BrandingSettings } from "../lib/api";
+import { api, type EndpointSettings, type BrandingSettings, type HeadroomTestResult } from "../lib/api";
 import { ChangelogMarkdown } from "../components/ChangelogMarkdown";
 import { PALETTES, getPaletteScales } from "../lib/palettes";
 import { applyShadeScale, generateShades } from "../lib/color-utils";
@@ -82,6 +82,17 @@ const terseHints: Record<string, string> = {
   aggressive: "Bare technical minimum.",
 };
 
+const ponytailOptions = [
+  { value: "lite", label: "Lite" },
+  { value: "full", label: "Full" },
+  { value: "ultra", label: "Ultra" },
+];
+const ponytailHints: Record<string, string> = {
+  lite: "Light nudge toward minimal code.",
+  full: "Balanced lazy-senior-dev bias.",
+  ultra: "Maximum bias toward the smallest change.",
+};
+
 const rtkFilterOptions = [
   { value: "none", label: "Off" },
   { value: "minimal", label: "Minimal" },
@@ -137,7 +148,7 @@ export function SettingsPage() {
           <TabBar tabs={settingsTabs} active={tab} onChange={setTab} />
 
           <div className="mt-6">
-            {tab === "saving" && <SavingTab local={local} update={update} />}
+            {tab === "saving" && <SavingTab local={local} update={update} setLocal={setLocal} />}
             {tab === "routing" && <RoutingTab local={local} update={update} />}
             {tab === "network" && <NetworkTab local={local} update={update} />}
             {tab === "branding" && <BrandingTab />}
@@ -156,13 +167,155 @@ export function SettingsPage() {
 }
 
 // ── Token Saving Tab ────────────────────────────────────────────────
+const HEADROOM_TIMEOUT_MIN = 1000;
+const HEADROOM_TIMEOUT_MAX = 60000;
+const PONYTAIL_LEVELS = ["lite", "full", "ultra"] as const;
+
+const SAVER_VALIDATION_MESSAGES = {
+  headroomUrl: "Proxy URL is required when Headroom is enabled.",
+  headroomTimeout: `Timeout must be a whole number between ${HEADROOM_TIMEOUT_MIN} and ${HEADROOM_TIMEOUT_MAX} ms.`,
+  ponytailLevel: `Ponytail level must be one of: ${PONYTAIL_LEVELS.join(", ")}.`,
+} as const;
+
+type SaverErrors = {
+  headroom_url?: string;
+  headroom_timeout_ms?: string;
+  ponytail_level?: string;
+};
+
+// validateSaverSettings derives client-side validation errors for the
+// Headroom/Ponytail controls. Checks only apply
+// while the relevant saver is enabled, mirroring the visible controls.
+function validateSaverSettings(s: EndpointSettings): SaverErrors {
+  const errors: SaverErrors = {};
+  if (s.headroom_enabled && !(s.headroom_url ?? "").trim()) {
+    errors.headroom_url = SAVER_VALIDATION_MESSAGES.headroomUrl;
+  }
+  if (s.headroom_enabled) {
+    const t = s.headroom_timeout_ms;
+    if (!Number.isInteger(t) || t < HEADROOM_TIMEOUT_MIN || t > HEADROOM_TIMEOUT_MAX) {
+      errors.headroom_timeout_ms = SAVER_VALIDATION_MESSAGES.headroomTimeout;
+    }
+  }
+  if (s.ponytail_enabled && !PONYTAIL_LEVELS.includes(s.ponytail_level as (typeof PONYTAIL_LEVELS)[number])) {
+    errors.ponytail_level = SAVER_VALIDATION_MESSAGES.ponytailLevel;
+  }
+  return errors;
+}
+
+function saverPatch(s: EndpointSettings): Partial<EndpointSettings> {
+  return {
+    headroom_enabled: s.headroom_enabled,
+    headroom_url: s.headroom_url,
+    headroom_compress_user_messages: s.headroom_compress_user_messages,
+    headroom_timeout_ms: s.headroom_timeout_ms,
+    ponytail_enabled: s.ponytail_enabled,
+    ponytail_level: s.ponytail_level,
+  };
+}
+
+// HeadroomInstallHelp explains how to install and run a local Headroom proxy.
+// Headroom is the open-source headroom-ai proxy; KeiRouter calls its
+// /v1/compress endpoint. Shown inside the Headroom card so operators can get a
+// proxy running before pointing KeiRouter at it.
+function HeadroomInstallHelp() {
+  return (
+    <div className="border-t border-[var(--border)] px-6 py-4">
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <Terminal className="h-4 w-4 text-[var(--text-muted)]" />
+          Don&apos;t have a Headroom proxy yet?
+        </div>
+        <p className="mt-1 text-xs text-[var(--text-muted)]">
+          Headroom is a local, open-source compression proxy. The{" "}
+          <code className="rounded bg-[var(--bg-elevated)] px-1 py-0.5">headroom</code> CLI ships with the
+          Python package (the npm package is a library only). Install it with pipx, then start it:
+        </p>
+        <pre className="mt-2 overflow-x-auto rounded-lg bg-[var(--bg-elevated)] px-3 py-2 text-xs leading-relaxed text-[var(--text)]">
+          <code>{`pipx install "headroom-ai[all]"   # needs Python 3.10+ (or: pip install --user)
+pipx ensurepath                   # add headroom to PATH, then restart your shell
+headroom proxy --port 8787
+headroom doctor                   # verify it's working`}</code>
+        </pre>
+        <p className="mt-2 text-xs text-[var(--text-muted)]">
+          Then set <span className="font-medium text-[var(--text)]">Proxy URL</span> to{" "}
+          <code className="rounded bg-[var(--bg-elevated)] px-1 py-0.5">http://localhost:8787</code>.
+        </p>
+        <a
+          href="https://github.com/headroomlabs-ai/headroom"
+          target="_blank"
+          rel="noreferrer"
+          className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-secondary-600 hover:underline dark:text-secondary-400"
+        >
+          Installation guide <ExternalLink className="h-3 w-3" />
+        </a>
+      </div>
+    </div>
+  );
+}
+
+// HeadroomTestConnection validates that the configured proxy is actually
+// running by probing its /v1/compress endpoint via the backend. The backend
+// returns a masked endpoint and never leaks credentials.
+function HeadroomTestConnection({ url, timeoutMs }: { url: string; timeoutMs: number }) {
+  const [result, setResult] = useState<HeadroomTestResult | null>(null);
+  const test = useMutation({
+    mutationFn: () => api.testHeadroom({ url, timeout_ms: timeoutMs }),
+    onSuccess: setResult,
+    onError: (e) =>
+      setResult({ ok: false, reachable: false, status: 0, latency_ms: 0, endpoint: "", message: (e as Error).message }),
+  });
+  const disabled = !url.trim() || test.isPending;
+  return (
+    <div className="border-t border-[var(--border)] px-6 py-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="ghost" disabled={disabled} onClick={() => test.mutate()}>
+          {test.isPending ? "Testing…" : "Test connection"}
+        </Button>
+        {result && (
+          <span
+            className={`inline-flex items-center gap-1.5 text-xs ${
+              result.ok ? "text-[color:var(--color-success)]" : "text-[color:var(--color-danger)]"
+            }`}
+          >
+            {result.ok ? <CheckCircle2 className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+            {result.message}
+            {result.latency_ms > 0 && <span className="text-[var(--text-muted)]">({result.latency_ms} ms)</span>}
+          </span>
+        )}
+      </div>
+      <p className="mt-2 text-xs text-[var(--text-muted)]">
+        Checks that the proxy at the Proxy URL above responds on <code>/v1/compress</code>.
+      </p>
+    </div>
+  );
+}
+
 function SavingTab({
   local,
   update,
+  setLocal,
 }: {
   local: EndpointSettings;
   update: (patch: Partial<EndpointSettings>) => void;
+  setLocal: React.Dispatch<React.SetStateAction<EndpointSettings | null>>;
 }) {
+  const [saverErrors, setSaverErrors] = useState<SaverErrors>({});
+
+  // saverUpdate validates the merged Headroom/Ponytail state before persisting.
+  // Invalid values are reflected locally (so the operator sees what they typed)
+  // and surfaced as inline errors, but they are NOT persisted.
+  const saverUpdate = (patch: Partial<EndpointSettings>) => {
+    const next = { ...local, ...patch };
+    const errors = validateSaverSettings(next);
+    setSaverErrors(errors);
+    if (Object.keys(errors).length === 0) {
+      update(saverPatch(next));
+    } else {
+      setLocal(next);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <Card>
@@ -236,6 +389,93 @@ function SavingTab({
               value={local.terse_level}
               onChange={(v) => update({ terse_level: v })}
               options={terseOptions}
+            />
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <SectionHeader
+          title="Headroom input compression"
+          description="Compresses request messages through an external Headroom proxy before they reach the model. Fail-open — any proxy error leaves the request untouched."
+          icon={Zap}
+          iconTone="neutral"
+        />
+        <div className="flex items-center justify-between border-t border-[var(--border)] px-6 py-4">
+          <span className="text-sm font-medium">Enable Headroom</span>
+          <Toggle checked={local.headroom_enabled} onChange={(v) => saverUpdate({ headroom_enabled: v })} />
+        </div>
+        {local.headroom_enabled && (
+          <>
+            <div className="border-t border-[var(--border)] px-6 py-4">
+              <Field label="Proxy URL">
+                <Input
+                  type="text"
+                  placeholder="https://headroom.example.com"
+                  value={local.headroom_url}
+                  onChange={(e) => saverUpdate({ headroom_url: e.target.value })}
+                  aria-invalid={!!saverErrors.headroom_url}
+                />
+                {saverErrors.headroom_url && (
+                  <p className="text-xs text-[color:var(--color-danger)]">{saverErrors.headroom_url}</p>
+                )}
+              </Field>
+            </div>
+            <div className="flex items-center justify-between border-t border-[var(--border)] px-6 py-4">
+              <div>
+                <p className="text-sm font-medium">Compress user messages</p>
+                <p className="mt-0.5 text-xs text-[var(--text-muted)]">Also send user messages to the proxy for compression.</p>
+              </div>
+              <Toggle
+                checked={local.headroom_compress_user_messages}
+                onChange={(v) => saverUpdate({ headroom_compress_user_messages: v })}
+              />
+            </div>
+            <div className="border-t border-[var(--border)] px-6 py-4">
+              <Field label="Timeout (ms)">
+                <Input
+                  type="number"
+                  min={1000}
+                  max={60000}
+                  value={Number.isFinite(local.headroom_timeout_ms) ? local.headroom_timeout_ms : ""}
+                  onChange={(e) => saverUpdate({ headroom_timeout_ms: e.target.valueAsNumber })}
+                  aria-invalid={!!saverErrors.headroom_timeout_ms}
+                />
+                {saverErrors.headroom_timeout_ms && (
+                  <p className="text-xs text-[color:var(--color-danger)]">{saverErrors.headroom_timeout_ms}</p>
+                )}
+              </Field>
+            </div>
+            <HeadroomTestConnection url={local.headroom_url} timeoutMs={local.headroom_timeout_ms} />
+          </>
+        )}
+        <HeadroomInstallHelp />
+      </Card>
+
+      <Card>
+        <SectionHeader
+          title="Ponytail output compression"
+          description="Injects a lazy-senior-developer system prompt that biases the model toward minimal code. Layers on top of Terse or Caveman."
+          icon={MessageSquare}
+          iconTone="neutral"
+        />
+        <div className="flex items-center justify-between border-t border-[var(--border)] px-6 py-4">
+          <span className="text-sm font-medium">Enable Ponytail</span>
+          <Toggle checked={local.ponytail_enabled} onChange={(v) => saverUpdate({ ponytail_enabled: v })} />
+        </div>
+        {local.ponytail_enabled && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] px-6 py-4">
+            <div>
+              <p className="text-sm font-medium">Ponytail level</p>
+              <p className="mt-0.5 text-xs text-[var(--text-muted)]">{ponytailHints[local.ponytail_level]}</p>
+              {saverErrors.ponytail_level && (
+                <p className="mt-0.5 text-xs text-[color:var(--color-danger)]">{saverErrors.ponytail_level}</p>
+              )}
+            </div>
+            <SegmentedControl
+              value={local.ponytail_level}
+              onChange={(v) => saverUpdate({ ponytail_level: v as "lite" | "full" | "ultra" })}
+              options={ponytailOptions}
             />
           </div>
         )}

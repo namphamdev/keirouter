@@ -25,10 +25,12 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/core"
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
 	"github.com/mydisha/keirouter/backend/internal/guardrails"
+	"github.com/mydisha/keirouter/backend/internal/headroom"
 	"github.com/mydisha/keirouter/backend/internal/limits"
 	"github.com/mydisha/keirouter/backend/internal/meter"
 	"github.com/mydisha/keirouter/backend/internal/normalizer"
 	"github.com/mydisha/keirouter/backend/internal/observ"
+	"github.com/mydisha/keirouter/backend/internal/ponytail"
 	"github.com/mydisha/keirouter/backend/internal/slimmer"
 	"github.com/mydisha/keirouter/backend/internal/terse"
 )
@@ -51,6 +53,7 @@ type Pipeline struct {
 	meter      *meter.Meter
 	budget     *budget.Engine
 	slimmer    *slimmer.Engine
+	headroom   *headroom.Compressor
 	metrics    *observ.Metrics
 	cache      *cache.Cache
 	embedder   cache.Embedder
@@ -97,6 +100,7 @@ func New(d Deps) *Pipeline {
 		meter:      d.Meter,
 		budget:     d.Budget,
 		slimmer:    d.Slimmer,
+		headroom:   headroom.New(log),
 		metrics:    d.Metrics,
 		cache:      d.Cache,
 		embedder:   d.Embedder,
@@ -145,6 +149,11 @@ type Options struct {
 	Slimmer slimmer.Config
 	Terse   terse.Config
 	Caveman caveman.Config
+	// Headroom (input side) calls an external proxy to compress messages;
+	// Ponytail (output side) injects a system-prompt block biasing toward
+	// minimal output. Both run inside applyTokenSaving before format translation.
+	Headroom headroom.Config
+	Ponytail ponytail.Config
 	// Limits carries already-resolved per-key rate limits. Zero values mean unlimited.
 	Limits limits.EffectiveLimits
 }
@@ -215,11 +224,11 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 		p.metrics.RecordCache(false)
 	}
 
-	slimStats := p.applyTokenSaving(req, opts)
+	slimStats, hrStats := p.applyTokenSaving(ctx, req, opts)
 	if slimStats != nil {
 		p.log.Debug("slimmer stats", "saved", slimStats.Saved(), "hits", len(slimStats.Hits))
 	}
-	save := buildSaveState(slimStats, opts)
+	save := buildSaveState(slimStats, hrStats, opts)
 
 	required := capability.Required(req)
 	attempts, err := p.planWithCooldownRetry(ctx, req.Metadata.TenantID, opts.Targets, required, opts.PlanOpts)
@@ -365,8 +374,8 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 		return nil, &core.ProviderError{Kind: core.ErrPolicyBlocked, Message: gres.Reason}
 	}
 
-	slimStats := p.applyTokenSaving(req, opts)
-	save := buildSaveState(slimStats, opts)
+	slimStats, hrStats := p.applyTokenSaving(ctx, req, opts)
+	save := buildSaveState(slimStats, hrStats, opts)
 
 	required := capability.Required(req)
 	scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
@@ -898,11 +907,17 @@ func (p *Pipeline) planWithCooldownRetry(ctx context.Context, tenantID string, t
 	return attempts, err
 }
 
-// applyTokenSaving runs the input-side (slimmer/RTK) and output-side
-// (terse, caveman) token-saving transforms in place. Terse and caveman both
-// inject system-prompt directives; if both are enabled, terse runs first and
-// caveman appends after, but in practice only one output-saver is used.
-func (p *Pipeline) applyTokenSaving(req *core.ChatRequest, opts Options) *slimmer.Stats {
+// applyTokenSaving runs the input-side (slimmer/RTK, headroom) and output-side
+// (terse, caveman, ponytail) token-saving transforms in place, in a fixed
+// deterministic order before format translation:
+//
+//	normalizer -> slimmer -> headroom (input) -> terse -> caveman -> ponytail (output)
+//
+// Terse and caveman both inject system-prompt directives; if both are enabled,
+// terse runs first and caveman appends after, but in practice only one
+// output-saver is used. Ponytail appends its block last, preserving any
+// existing directives. Headroom is fail-open and never returns an error.
+func (p *Pipeline) applyTokenSaving(ctx context.Context, req *core.ChatRequest, opts Options) (*slimmer.Stats, *headroom.Stats) {
 	// Normalize tool call IDs and fix missing tool results before any
 	// downstream processing. This ensures Anthropic-compatible IDs and
 	// complete tool_use/tool_result pairs.
@@ -915,17 +930,27 @@ func (p *Pipeline) applyTokenSaving(req *core.ChatRequest, opts Options) *slimme
 			p.log.Debug("slimmer compressed request", "saved_bytes", stats.Saved(), "hits", len(stats.Hits))
 		}
 	}
+
+	var hrStats *headroom.Stats
+	if p.headroom != nil && opts.Headroom.Enabled {
+		// Fail-open: never returns an error; leaves req untouched on failure.
+		hrStats = p.headroom.Compress(ctx, req, opts.Headroom)
+	}
+
 	terse.Apply(req, opts.Terse)
 	caveman.Apply(req, opts.Caveman)
-	return stats
+	ponytail.Apply(req, opts.Ponytail)
+	return stats, hrStats
 }
 
 // saveState captures which token-saving features were active and their results
 // for a single request, so the meter can persist them.
 type saveState struct {
-	slimSnap *meter.SlimSnapshot
-	caveman  bool
-	terse    bool
+	slimSnap     *meter.SlimSnapshot
+	headroomSnap *meter.HeadroomSnapshot
+	caveman      bool
+	terse        bool
+	ponytail     bool
 }
 
 // splitRuleNames splits a comma-separated rule string into individual names.
@@ -948,10 +973,16 @@ func splitRuleNames(s string) []string {
 
 // buildSaveState converts pipeline-level token-saving results into a snapshot
 // suitable for the meter. Returns nil when no features were active.
-func buildSaveState(stats *slimmer.Stats, opts Options) *saveState {
+//
+// The Headroom snapshot is populated only when the compressor achieved real
+// (non-phantom) token savings; in every other case headroomSnap stays nil so
+// the meter records zero tokens/bytes and HeadroomActive=false. The Ponytail
+// flag mirrors opts.Ponytail.Enabled.
+func buildSaveState(stats *slimmer.Stats, hr *headroom.Stats, opts Options) *saveState {
 	save := &saveState{
-		caveman: opts.Caveman.Enabled,
-		terse:   opts.Terse.Enabled,
+		caveman:  opts.Caveman.Enabled,
+		terse:    opts.Terse.Enabled,
+		ponytail: opts.Ponytail.Enabled,
 	}
 	if stats != nil && stats.Saved() > 0 {
 		// Build comma-separated rule names from hits.
@@ -972,7 +1003,16 @@ func buildSaveState(stats *slimmer.Stats, opts Options) *saveState {
 			Rules:       ruleNames,
 		}
 	}
-	if save.slimSnap == nil && !save.caveman && !save.terse {
+	// Populate the Headroom snapshot only for real, non-phantom savings
+	// (values already clamped >= 0 by headroom.Stats).
+	if hr != nil && hr.Compressed && hr.TokensSaved > 0 && !hr.Phantom {
+		save.headroomSnap = &meter.HeadroomSnapshot{
+			TokensSaved: hr.TokensSaved,
+			BytesSaved:  hr.BytesSaved,
+			Active:      true,
+		}
+	}
+	if save.slimSnap == nil && save.headroomSnap == nil && !save.caveman && !save.terse && !save.ponytail {
 		return nil
 	}
 	return save
@@ -1007,6 +1047,8 @@ func (p *Pipeline) recordWithTTFT(ctx context.Context, meta core.RequestMetadata
 		ev.SlimStats = save.slimSnap
 		ev.CavemanActive = save.caveman
 		ev.TerseActive = save.terse
+		ev.HeadroomStats = save.headroomSnap
+		ev.PonytailActive = save.ponytail
 	}
 	cost, err := p.meter.Record(ctx, ev)
 	if err != nil {

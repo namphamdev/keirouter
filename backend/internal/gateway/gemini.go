@@ -90,6 +90,8 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 		Slimmer:  s.slimmerConfig(),
 		Terse:    s.terseConfig(),
 		Caveman:  s.cavemanConfig(),
+		Headroom: s.headroomConfig(),
+		Ponytail: s.ponytailConfig(),
 	}
 
 	if req.Stream {
