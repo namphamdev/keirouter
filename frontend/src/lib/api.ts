@@ -96,6 +96,12 @@ export interface EndpointSettings {
   caveman_level: string;
   terse_enabled: boolean;
   terse_level: string;
+  headroom_enabled: boolean;
+  headroom_url: string;
+  headroom_compress_user_messages: boolean;
+  headroom_timeout_ms: number;
+  ponytail_enabled: boolean;
+  ponytail_level: "lite" | "full" | "ultra";
   routing_strategy: string;
   sticky_limit: number;
   combo_strategy: string;
@@ -114,6 +120,18 @@ export interface ProviderRoutingSettings {
   routing_strategy: "inherit" | "fill-first" | "round-robin" | "smart-round-robin" | string;
   sticky_limit: number;
   affinity_ttl_minutes: number;
+}
+
+// HeadroomTestResult is returned by POST /settings/headroom-test and reports
+// whether the configured Headroom proxy is reachable and behaving correctly.
+// endpoint is always masked (no credentials/query string).
+export interface HeadroomTestResult {
+  ok: boolean;
+  reachable: boolean;
+  status: number;
+  latency_ms: number;
+  endpoint: string;
+  message: string;
 }
 
 export interface OAuthProvider {
@@ -326,6 +344,10 @@ export interface ClientSaving {
   usd_saved: number;
   caveman_requests: number;
   terse_requests: number;
+  // Headroom/Ponytail per-client savings. Optional for backward-compat with
+  // payloads recorded before these savers existed; treat missing as 0.
+  headroom_tokens_saved?: number;
+  ponytail_requests?: number;
 }
 
 export interface TokenSavings {
@@ -335,6 +357,11 @@ export interface TokenSavings {
   terse_requests: number;
   usd_saved?: number;
   usd_saved_estimate?: boolean;
+  // Headroom/Ponytail summary savings. Optional for backward-compat with
+  // payloads recorded before these savers existed; treat missing as 0.
+  headroom_tokens_saved?: number;
+  ponytail_requests?: number;
+  headroom_requests?: number;
   rules: RuleSaving[];
   by_client?: ClientSaving[];
 }
@@ -408,8 +435,15 @@ export interface QuotaAccount {
   updated_at: string;
 }
 
-// Console log now uses raw text lines (like 9router).
-// The /api/console endpoint returns { logs: string[] }.
+// Console log uses structured entries streamed via SSE (/api/console/stream)
+// and fetched as history from /api/console, which returns { logs: ConsoleLogEntry[] }.
+export interface ConsoleLogEntry {
+  seq: number;
+  time: string; // HH:MM:SS.mmm
+  level: string; // DEBUG | INFO | WARN | ERROR | LOG
+  msg: string; // human-readable summary
+  detail?: string; // optional technical detail, revealed on expand
+}
 
 export interface ProxyPool {
   id: string;
@@ -1018,7 +1052,7 @@ export const api = {
   quota: (period: string) =>
     request<{ accounts: QuotaAccount[]; since: string }>("GET", `/quota?period=${period}&tz=${browserTZ()}`),
 
-  consoleLog: () => request<{ logs: string[] }>("GET", "/console"),
+  consoleLog: () => request<{ logs: ConsoleLogEntry[] }>("GET", "/console"),
 
   cliTools: (model?: string) =>
     request<CLIToolsResponse>("GET", model ? `/cli-tools?model=${encodeURIComponent(model)}` : "/cli-tools"),
@@ -1044,6 +1078,8 @@ export const api = {
   endpointSettings: () => request<EndpointSettings>("GET", "/settings/endpoint"),
   updateEndpointSettings: (patch: Partial<EndpointSettings>) =>
     request<EndpointSettings>("POST", "/settings/endpoint", patch),
+  testHeadroom: (body?: { url?: string; timeout_ms?: number }) =>
+    request<HeadroomTestResult>("POST", "/settings/headroom-test", body ?? {}),
 
   accessSettings: () => request<AccessSettings>("GET", "/settings/access"),
   updateAccessSettings: (patch: Partial<Omit<AccessSettings, "endpoint_url">>) =>

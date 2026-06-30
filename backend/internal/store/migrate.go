@@ -66,6 +66,16 @@ func (db *DB) runMigration(ctx context.Context, version, body string) error {
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			// Tolerate an "ADD COLUMN" whose column already exists. This makes
+			// migrations idempotent against the case where a migration file was
+			// renamed/renumbered after being applied to a database: the new
+			// version is not yet recorded in schema_migrations, so it re-runs,
+			// but the column it adds is already present. The desired end state
+			// (the column exists) is already satisfied, so we skip the
+			// statement instead of aborting. Any other failure still rolls back.
+			if isAddColumnAlreadyExists(stmt, err) {
+				continue
+			}
 			return fmt.Errorf("statement failed: %w\n%s", err, stmt)
 		}
 	}
@@ -75,6 +85,24 @@ func (db *DB) runMigration(ctx context.Context, version, body string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// isAddColumnAlreadyExists reports whether err is the "column already exists"
+// error produced by attempting an "ALTER TABLE ... ADD COLUMN ..." for a column
+// that is already present. It is scoped to ADD COLUMN statements so genuine
+// errors on other statements are never swallowed. The message substrings cover
+// both engines: modernc SQLite emits "duplicate column name: <col>" and
+// Postgres emits "column \"<col>\" of relation \"<table>\" already exists".
+func isAddColumnAlreadyExists(stmt string, err error) bool {
+	if err == nil {
+		return false
+	}
+	if !strings.Contains(strings.ToUpper(stmt), "ADD COLUMN") {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "duplicate column name") ||
+		strings.Contains(msg, "already exists")
 }
 
 func (db *DB) appliedVersions(ctx context.Context) (map[string]struct{}, error) {

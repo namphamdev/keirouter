@@ -10,20 +10,16 @@ import {
   Copy,
   Check,
   ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { PageHeader } from "../components/Layout";
 import { Card, Button, EmptyState } from "../components/ui";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR" | "LOG";
+import type { ConsoleLogEntry } from "../lib/api";
 
-interface ParsedLine {
-  raw: string;
-  time: string;
-  level: LogLevel;
-  message: string;
-}
+type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR" | "LOG";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -58,58 +54,86 @@ const LEVELS: LogLevel[] = ["DEBUG", "INFO", "WARN", "ERROR"];
 
 const MAX_LINES = 500;
 
-const ROW_HEIGHT = 24; // approximate px per row (leading-[1.6] ~ 20.8px + 3px*2 padding)
+const ROW_HEIGHT = 24; // approximate px per collapsed row
 
-// ── Parsing ──────────────────────────────────────────────────────────────────
-
-// Matches [HH:MM:SS.mmm] [LEVEL] message
-const LINE_RE = /^\[(\d{2}:\d{2}:\d{2}\.\d{3})\]\s*\[(\w+)\]\s*(.*)/;
-
-function parseLine(raw: string): ParsedLine {
-  const m = raw.match(LINE_RE);
-  if (m) {
-    return { raw, time: m[1], level: m[2] as LogLevel, message: m[3] };
+// Normalize an arbitrary server level string into a known LogLevel.
+function normalizeLevel(level: string): LogLevel {
+  const up = (level || "").toUpperCase();
+  if (up === "DEBUG" || up === "INFO" || up === "WARN" || up === "ERROR") {
+    return up;
   }
-  // Continuation line (e.g. "  └─ error details") or unstructured
-  return { raw, time: "", level: "LOG", message: raw };
+  return "LOG";
 }
 
 // ── Memoized log row ─────────────────────────────────────────────────────────
 
 const LogRow = memo(function LogRow({
-  line,
+  entry,
   index,
+  expanded,
+  onToggle,
 }: {
-  line: ParsedLine;
+  entry: ConsoleLogEntry;
   index: number;
+  expanded: boolean;
+  onToggle: (seq: number) => void;
 }) {
+  const level = normalizeLevel(entry.level);
+  const hasDetail = !!entry.detail && entry.detail.trim().length > 0;
+
   return (
     <div
-      className={`flex border-b border-l-2 border-[var(--border)]/40 transition-colors hover:bg-[var(--bg-subtle)] ${LEVEL_BORDER[line.level]}`}
-      style={{ minHeight: ROW_HEIGHT }}
+      className={`border-b border-l-2 border-[var(--border)]/40 transition-colors ${LEVEL_BORDER[level]}`}
     >
-      {/* Line number */}
-      <div className="w-[3.5rem] shrink-0 select-none px-3 py-[3px] text-right text-[11px] text-[var(--text-muted)]/50">
-        {index + 1}
+      {/* Summary line */}
+      <div
+        className={`flex ${hasDetail ? "cursor-pointer" : ""} hover:bg-[var(--bg-subtle)]`}
+        style={{ minHeight: ROW_HEIGHT }}
+        onClick={hasDetail ? () => onToggle(entry.seq) : undefined}
+      >
+        {/* Line number */}
+        <div className="w-[3.5rem] shrink-0 select-none px-3 py-[3px] text-right text-[11px] text-[var(--text-muted)]/50">
+          {index + 1}
+        </div>
+        {/* Timestamp */}
+        <div className="w-[6.5rem] shrink-0 px-2 py-[3px] whitespace-nowrap text-[var(--text-muted)]">
+          {entry.time || "\u00A0"}
+        </div>
+        {/* Level badge */}
+        <div className="w-[3.5rem] shrink-0 px-1 py-[3px]">
+          {level !== "LOG" && (
+            <span
+              className={`inline-block rounded px-1.5 text-[11px] font-bold leading-normal ${LEVEL_TEXT[level]} ${LEVEL_BG[level]}`}
+            >
+              {level}
+            </span>
+          )}
+        </div>
+        {/* Message */}
+        <div className="min-w-0 flex-1 px-2 py-[3px] break-words text-[var(--text)]">
+          <HighlightMessage message={entry.msg} />
+        </div>
+        {/* Detail toggle */}
+        <div className="w-[5rem] shrink-0 px-2 py-[3px] text-right">
+          {hasDetail && (
+            <span className="inline-flex items-center gap-0.5 text-[11px] text-[var(--text-muted)] hover:text-[var(--text)]">
+              <ChevronRight
+                className={`h-3 w-3 transition-transform ${expanded ? "rotate-90" : ""}`}
+              />
+              detail
+            </span>
+          )}
+        </div>
       </div>
-      {/* Timestamp */}
-      <div className="w-[6.5rem] shrink-0 px-2 py-[3px] whitespace-nowrap text-[var(--text-muted)]">
-        {line.time || "\u00A0"}
-      </div>
-      {/* Level badge */}
-      <div className="w-[3.5rem] shrink-0 px-1 py-[3px]">
-        {line.level !== "LOG" && (
-          <span
-            className={`inline-block rounded px-1.5 text-[11px] font-bold leading-normal ${LEVEL_TEXT[line.level]} ${LEVEL_BG[line.level]}`}
-          >
-            {line.level}
-          </span>
-        )}
-      </div>
-      {/* Message */}
-      <div className="min-w-0 flex-1 px-2 py-[3px] break-all text-[var(--text)]">
-        <HighlightMessage message={line.message} />
-      </div>
+
+      {/* Expanded detail block */}
+      {hasDetail && expanded && (
+        <div className="border-t border-[var(--border)]/30 bg-[var(--bg-subtle)]/60 py-2 pr-4 pl-[13.5rem]">
+          <pre className="whitespace-pre-wrap break-words text-[12px] leading-[1.5] text-[var(--text-muted)]">
+            {entry.detail}
+          </pre>
+        </div>
+      )}
     </div>
   );
 });
@@ -139,14 +163,6 @@ const HighlightMessage = memo(function HighlightMessage({
             </span>
           );
         }
-        // Dim arrows and decorative symbols
-        if (/^[→✔✖▶└─\s]+$/.test(part)) {
-          return (
-            <span key={i} className="text-[var(--text-muted)]/60">
-              {part}
-            </span>
-          );
-        }
         return <span key={i}>{part}</span>;
       })}
     </>
@@ -156,13 +172,14 @@ const HighlightMessage = memo(function HighlightMessage({
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function ConsoleLogPage() {
-  const [logs, setLogs] = useState<string[]>([]);
+  const [entries, setEntries] = useState<ConsoleLogEntry[]>([]);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [activeLevels, setActiveLevels] = useState<Set<LogLevel>>(
     new Set(LEVELS),
   );
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [autoScroll, setAutoScroll] = useState(true);
   const [copied, setCopied] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -178,15 +195,16 @@ export function ConsoleLogPage() {
     es.onmessage = (e) => {
       const msg = JSON.parse(e.data);
       if (msg.type === "init") {
-        setLogs(msg.logs || []);
+        setEntries(msg.logs || []);
         setLoading(false);
       } else if (msg.type === "line") {
-        setLogs((prev) => {
-          const next = [...prev, msg.line];
+        setEntries((prev) => {
+          const next = [...prev, msg.log as ConsoleLogEntry];
           return next.length > MAX_LINES ? next.slice(-MAX_LINES) : next;
         });
       } else if (msg.type === "clear") {
-        setLogs([]);
+        setEntries([]);
+        setExpanded(new Set());
       }
     };
 
@@ -197,21 +215,24 @@ export function ConsoleLogPage() {
 
   // ── Filtering ────────────────────────────────────────────────────────────
 
-  const parsed = useMemo(() => logs.map(parseLine), [logs]);
-
   const filtered = useMemo(() => {
-    let list = parsed;
+    let list = entries;
     if (activeLevels.size < LEVELS.length) {
-      list = list.filter(
-        (l) => activeLevels.has(l.level) || l.level === "LOG",
-      );
+      list = list.filter((l) => {
+        const lvl = normalizeLevel(l.level);
+        return activeLevels.has(lvl) || lvl === "LOG";
+      });
     }
     if (search) {
       const q = search.toLowerCase();
-      list = list.filter((l) => l.raw.toLowerCase().includes(q));
+      list = list.filter(
+        (l) =>
+          l.msg.toLowerCase().includes(q) ||
+          (l.detail || "").toLowerCase().includes(q),
+      );
     }
     return list;
-  }, [parsed, activeLevels, search]);
+  }, [entries, activeLevels, search]);
 
   // ── Stats ────────────────────────────────────────────────────────────────
 
@@ -223,9 +244,9 @@ export function ConsoleLogPage() {
       ERROR: 0,
       LOG: 0,
     };
-    for (const l of parsed) counts[l.level]++;
+    for (const l of entries) counts[normalizeLevel(l.level)]++;
     return counts;
-  }, [parsed]);
+  }, [entries]);
 
   // ── Virtualizer ──────────────────────────────────────────────────────────
 
@@ -270,7 +291,19 @@ export function ConsoleLogPage() {
   };
 
   const handleCopy = async () => {
-    const text = filtered.map((l) => l.raw).join("\n");
+    const text = filtered
+      .map((l) => {
+        const head = `${l.time} ${normalizeLevel(l.level)} ${l.msg}`;
+        if (l.detail && l.detail.trim()) {
+          const indented = l.detail
+            .split("\n")
+            .map((line) => "    " + line)
+            .join("\n");
+          return `${head}\n${indented}`;
+        }
+        return head;
+      })
+      .join("\n");
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
@@ -279,6 +312,18 @@ export function ConsoleLogPage() {
       /* ignore */
     }
   };
+
+  const toggleExpand = useCallback((seq: number) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(seq)) {
+        next.delete(seq);
+      } else {
+        next.add(seq);
+      }
+      return next;
+    });
+  }, []);
 
   const toggleLevel = (level: LogLevel) => {
     setActiveLevels((prev) => {
@@ -308,7 +353,7 @@ export function ConsoleLogPage() {
         icon={ScrollText}
         description={
           connected
-            ? `${logs.length} lines · live`
+            ? `${entries.length} lines · live`
             : "Connecting…"
         }
         action={
@@ -328,7 +373,7 @@ export function ConsoleLogPage() {
               )}
               {copied ? "Copied" : "Copy"}
             </Button>
-            <Button variant="ghost" onClick={handleClear} disabled={logs.length === 0}>
+            <Button variant="ghost" onClick={handleClear} disabled={entries.length === 0}>
               <Trash2 className="h-4 w-4" />
               Clear
             </Button>
@@ -389,7 +434,7 @@ export function ConsoleLogPage() {
           <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
             {search && (
               <span>
-                {filtered.length}/{logs.length} matched
+                {filtered.length}/{entries.length} matched
               </span>
             )}
             <button
@@ -418,7 +463,7 @@ export function ConsoleLogPage() {
           <div className="flex items-center justify-center py-12">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--border)] border-t-accent-500" />
           </div>
-        ) : filtered.length === 0 && logs.length === 0 ? (
+        ) : filtered.length === 0 && entries.length === 0 ? (
           <EmptyState
             title="No console logs yet"
             hint="Requests will appear here once traffic flows through KeiRouter."
@@ -443,10 +488,10 @@ export function ConsoleLogPage() {
               }}
             >
               {virtualizer.getVirtualItems().map((virtualRow) => {
-                const line = filtered[virtualRow.index];
+                const entry = filtered[virtualRow.index];
                 return (
                   <div
-                    key={virtualRow.key}
+                    key={entry.seq}
                     data-index={virtualRow.index}
                     ref={virtualizer.measureElement}
                     style={{
@@ -457,7 +502,12 @@ export function ConsoleLogPage() {
                       transform: `translateY(${virtualRow.start}px)`,
                     }}
                   >
-                    <LogRow line={line} index={virtualRow.index} />
+                    <LogRow
+                      entry={entry}
+                      index={virtualRow.index}
+                      expanded={expanded.has(entry.seq)}
+                      onToggle={toggleExpand}
+                    />
                   </div>
                 );
               })}

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,6 +62,11 @@ type App struct {
 	guardrailRetention *guardrails.RetentionSweeper
 	meter              *meter.Meter
 	healthChecker      *healthcheck.Checker
+
+	// bg tracks long-lived background workers that touch the DB (oauth
+	// keepalive, health checker, cooldown sweeper) so shutdown can wait for
+	// them to return before closing the store, avoiding a use-after-close race.
+	bg sync.WaitGroup
 }
 
 // Build constructs the application from configuration. It opens the database,
@@ -336,43 +342,43 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	}, log, db.Accounts(), db.Health(), connRegistry, v)
 
 	gw := gateway.New(gateway.Deps{
-		Config:          cfg,
-		Logger:          log,
-		Version:         version,
-		Updates:         update.NewChecker(version, ""),
-		DB:              db,
-		Identity:        idSvc,
-		Auth:            authSvc,
-		Pipeline:        pipe,
-		Conns:           connRegistry,
-		Chains:          db.Chains(),
-		Aliases:         db.Aliases(),
-		Accounts:        db.Accounts(),
-		Pools:           db.ProxyPools(),
-		Budgets:         db.Budgets(),
-		BudgetEngine:    bud,
-		Usage:           db.Usage(),
-		Resources:       db.Resources(),
-		Settings:        db.Settings(),
-		Vault:           v,
-		Codecs:          codecs,
-		Metrics:         metrics,
-		FrontendDir:     frontendDir,
-		DataDir:         dataDir,
-		CfManager:       cfManager,
-		TsManager:       tsManager,
-		UsageHub:        uh,
-		TimeoutNotifier: timeoutNotifier,
-		ProxyNotifier:   proxyNotifier,
-		RateLimiter:     limiter,
-		Refresher:       tokenRefresher,
+		Config:               cfg,
+		Logger:               log,
+		Version:              version,
+		Updates:              update.NewChecker(version, ""),
+		DB:                   db,
+		Identity:             idSvc,
+		Auth:                 authSvc,
+		Pipeline:             pipe,
+		Conns:                connRegistry,
+		Chains:               db.Chains(),
+		Aliases:              db.Aliases(),
+		Accounts:             db.Accounts(),
+		Pools:                db.ProxyPools(),
+		Budgets:              db.Budgets(),
+		BudgetEngine:         bud,
+		Usage:                db.Usage(),
+		Resources:            db.Resources(),
+		Settings:             db.Settings(),
+		Vault:                v,
+		Codecs:               codecs,
+		Metrics:              metrics,
+		FrontendDir:          frontendDir,
+		DataDir:              dataDir,
+		CfManager:            cfManager,
+		TsManager:            tsManager,
+		UsageHub:             uh,
+		TimeoutNotifier:      timeoutNotifier,
+		ProxyNotifier:        proxyNotifier,
+		RateLimiter:          limiter,
+		Refresher:            tokenRefresher,
 		Guardrails:           guardrailEngine,
 		GuardrailRepo:        db.Guardrails(),
 		GuardrailLogs:        db.GuardrailLogs(),
 		GuardrailHub:         guardrailLogHub,
 		GuardrailTenantFlags: guardrailTenantPolicy,
-		Health:          db.Health(),
-		HealthChecker:   healthChecker,
+		Health:               db.Health(),
+		HealthChecker:        healthChecker,
 	})
 
 	srv := &http.Server{
@@ -451,19 +457,31 @@ func seedFreeAccounts(ctx context.Context, accounts *store.AccountRepo, log *slo
 func (a *App) Run(ctx context.Context) error {
 	// Launch the OAuth keepalive loop so tokens stay fresh between requests.
 	if a.keepAlive != nil {
-		go a.keepAlive.Run(ctx)
+		a.bg.Add(1)
+		go func() {
+			defer a.bg.Done()
+			a.keepAlive.Run(ctx)
+		}()
 	}
 	if a.meter != nil {
 		a.meter.StartAsync(ctx)
 	}
 	if a.healthChecker != nil {
-		go a.healthChecker.Run(ctx, store.DefaultTenantID)
+		a.bg.Add(1)
+		go func() {
+			defer a.bg.Done()
+			a.healthChecker.Run(ctx, store.DefaultTenantID)
+		}()
 	}
 
 	// Background cooldown sweeper: periodically clears expired cooldowns so
 	// accounts recover automatically without a restart.
 	if a.accounts != nil {
-		go a.runCooldownSweeper(ctx)
+		a.bg.Add(1)
+		go func() {
+			defer a.bg.Done()
+			a.runCooldownSweeper(ctx)
+		}()
 	}
 
 	errCh := make(chan error, 1)
@@ -491,6 +509,13 @@ func (a *App) Run(ctx context.Context) error {
 		if err := a.server.Shutdown(shutdownCtx); err != nil {
 			return err
 		}
+		// Wait for background workers that query the DB (oauth keepalive, health
+		// checker, cooldown sweeper) to return before closing the store. They
+		// observe ctx cancellation and exit promptly; the bounded wait prevents
+		// a slow in-flight worker from hanging shutdown while still closing the
+		// use-after-close window against db.Close() (a pure-Go SQLite handle can
+		// crash if a query races a Close).
+		a.waitForBackground(5 * time.Second)
 		// Drain pending guardrail audit and usage rows before closing the DB.
 		if a.guardrailRetention != nil {
 			a.guardrailRetention.Stop(2 * time.Second)
@@ -691,6 +716,22 @@ func buildPricing() map[string]meter.Price {
 // cooldownSweepInterval is how often the background sweeper checks for expired
 // cooldowns. Short enough to recover within seconds; long enough to be trivial.
 const cooldownSweepInterval = 15 * time.Second
+
+// waitForBackground blocks until all tracked background workers have returned
+// or the timeout elapses, whichever comes first. Bounding the wait keeps
+// shutdown responsive even if a worker is stuck in a slow network call.
+func (a *App) waitForBackground(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		a.bg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		a.log.Warn("background workers did not stop within timeout; proceeding with shutdown")
+	}
+}
 
 // runCooldownSweeper periodically clears expired cooldowns so accounts auto-
 // recover after rate-limit / auth errors without requiring a restart.

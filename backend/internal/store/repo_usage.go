@@ -35,20 +35,21 @@ func (r *UsageRepo) RecordBatch(ctx context.Context, records []UsageRecord) erro
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	const cols = 22
+	const cols = 26
 	var b strings.Builder
 	b.WriteString(`INSERT INTO usage_records
 		(id, tenant_id, project_id, api_key_id, provider, model, account_id, client,
 		 prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
 		 cost_micros, cache_hit, latency_ms, ttft_ms,
 		 slim_bytes_saved, slim_tokens_saved, slim_rules, caveman_active, terse_active,
+		 headroom_tokens_saved, headroom_bytes_saved, headroom_active, ponytail_active,
 		 created_at) VALUES `)
 	args := make([]any, 0, len(records)*cols)
 	for i, u := range records {
 		if i > 0 {
 			b.WriteString(",")
 		}
-		b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 		args = append(args, usageArgs(u)...)
 	}
 	q := r.db.rebind(b.String())
@@ -70,8 +71,9 @@ func insertUsage(ctx context.Context, exec interface {
 			 prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
 			 cost_micros, cache_hit, latency_ms, ttft_ms,
 			 slim_bytes_saved, slim_tokens_saved, slim_rules, caveman_active, terse_active,
+			 headroom_tokens_saved, headroom_bytes_saved, headroom_active, ponytail_active,
 			 created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err := exec.ExecContext(ctx, q, usageArgs(u)...)
 	return err
 }
@@ -83,6 +85,7 @@ func usageArgs(u UsageRecord) []any {
 		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.CacheWriteTokens,
 		u.CostMicros, boolToInt(u.CacheHit), u.LatencyMS, u.TTFTMS,
 		u.SlimBytesSaved, u.SlimTokensSaved, u.SlimRules, boolToInt(u.CavemanActive), boolToInt(u.TerseActive),
+		u.HeadroomTokensSaved, u.HeadroomBytesSaved, boolToInt(u.HeadroomActive), boolToInt(u.PonytailActive),
 		formatTime(u.CreatedAt),
 	}
 }
@@ -210,6 +213,10 @@ type Summary struct {
 	SlimTokensSaved  int64 // total estimated tokens saved by RTK
 	CavemanRequests  int64 // requests where caveman was active
 	TerseRequests    int64 // requests where terse was active
+
+	HeadroomTokensSaved int64 // SUM(headroom_tokens_saved)
+	HeadroomRequests    int64 // SUM(headroom_active)
+	PonytailRequests    int64 // SUM(ponytail_active)
 }
 
 // Summarize returns aggregate usage for a tenant since the given time.
@@ -229,7 +236,10 @@ func (r *UsageRepo) Summarize(ctx context.Context, tenantID string, since time.T
 			COALESCE(SUM(slim_bytes_saved), 0),
 			COALESCE(SUM(slim_tokens_saved), 0),
 			COALESCE(SUM(caveman_active), 0),
-			COALESCE(SUM(terse_active), 0)
+			COALESCE(SUM(terse_active), 0),
+			COALESCE(SUM(headroom_tokens_saved), 0),
+			COALESCE(SUM(headroom_active), 0),
+			COALESCE(SUM(ponytail_active), 0)
 		FROM usage_records
 		WHERE tenant_id = ? AND created_at >= ?`)
 	var s Summary
@@ -237,7 +247,8 @@ func (r *UsageRepo) Summarize(ctx context.Context, tenantID string, since time.T
 		&s.TotalRequests, &s.PromptTokens, &s.CompletionTokens,
 		&s.CachedTokens, &s.CacheWriteTokens, &s.CostMicros, &s.CacheHits, &s.AvgTTFTMS,
 		&s.AvgLatencyMS, &s.SuccessCount,
-		&s.SlimBytesSaved, &s.SlimTokensSaved, &s.CavemanRequests, &s.TerseRequests)
+		&s.SlimBytesSaved, &s.SlimTokensSaved, &s.CavemanRequests, &s.TerseRequests,
+		&s.HeadroomTokensSaved, &s.HeadroomRequests, &s.PonytailRequests)
 	if err != nil {
 		return Summary{}, fmt.Errorf("store: summarize usage: %w", err)
 	}
@@ -262,7 +273,10 @@ func (r *UsageRepo) SummarizeByKey(ctx context.Context, keyID string, since time
 			COALESCE(SUM(slim_bytes_saved), 0),
 			COALESCE(SUM(slim_tokens_saved), 0),
 			COALESCE(SUM(caveman_active), 0),
-			COALESCE(SUM(terse_active), 0)
+			COALESCE(SUM(terse_active), 0),
+			COALESCE(SUM(headroom_tokens_saved), 0),
+			COALESCE(SUM(headroom_active), 0),
+			COALESCE(SUM(ponytail_active), 0)
 		FROM usage_records
 		WHERE api_key_id = ? AND created_at >= ?`)
 	var s Summary
@@ -270,7 +284,8 @@ func (r *UsageRepo) SummarizeByKey(ctx context.Context, keyID string, since time
 		&s.TotalRequests, &s.PromptTokens, &s.CompletionTokens,
 		&s.CachedTokens, &s.CacheWriteTokens, &s.CostMicros, &s.CacheHits, &s.AvgTTFTMS,
 		&s.AvgLatencyMS, &s.SuccessCount,
-		&s.SlimBytesSaved, &s.SlimTokensSaved, &s.CavemanRequests, &s.TerseRequests)
+		&s.SlimBytesSaved, &s.SlimTokensSaved, &s.CavemanRequests, &s.TerseRequests,
+		&s.HeadroomTokensSaved, &s.HeadroomRequests, &s.PonytailRequests)
 	if err != nil {
 		return Summary{}, fmt.Errorf("store: summarize usage by key: %w", err)
 	}
@@ -336,7 +351,13 @@ type RecentRecord struct {
 	SlimRules        string // comma-separated rule names that fired
 	CavemanActive    bool
 	TerseActive      bool
-	CreatedAt        time.Time
+
+	HeadroomTokensSaved int  // tokens saved by Headroom (non-phantom)
+	HeadroomBytesSaved  int  // bytes saved by Headroom
+	HeadroomActive      bool // Headroom produced non-phantom savings
+	PonytailActive      bool // Ponytail injection was active
+
+	CreatedAt time.Time
 }
 
 // Recent returns the most recent usage records for a tenant, newest first.
@@ -348,6 +369,7 @@ func (r *UsageRepo) Recent(ctx context.Context, tenantID string, limit int) ([]R
 		SELECT id, provider, model, prompt_tokens, completion_tokens, cached_tokens,
 		       cache_write_tokens, cost_micros, cache_hit, latency_ms, ttft_ms,
 		       slim_bytes_saved, slim_tokens_saved, slim_rules, caveman_active, terse_active,
+		       headroom_tokens_saved, headroom_bytes_saved, headroom_active, ponytail_active,
 		       created_at
 		FROM usage_records
 		WHERE tenant_id = ?
@@ -362,20 +384,24 @@ func (r *UsageRepo) Recent(ctx context.Context, tenantID string, limit int) ([]R
 	var out []RecentRecord
 	for rows.Next() {
 		var (
-			rec                      RecentRecord
-			cacheHit, caveman, terse int
-			createdAt                string
+			rec                            RecentRecord
+			cacheHit, caveman, terse       int
+			headroomActive, ponytailActive int
+			createdAt                      string
 		)
 		if err := rows.Scan(&rec.ID, &rec.Provider, &rec.Model, &rec.PromptTokens,
 			&rec.CompletionTokens, &rec.CachedTokens, &rec.CacheWriteTokens,
 			&rec.CostMicros, &cacheHit, &rec.LatencyMS, &rec.TTFTMS,
 			&rec.SlimBytesSaved, &rec.SlimTokensSaved, &rec.SlimRules, &caveman, &terse,
+			&rec.HeadroomTokensSaved, &rec.HeadroomBytesSaved, &headroomActive, &ponytailActive,
 			&createdAt); err != nil {
 			return nil, err
 		}
 		rec.CacheHit = cacheHit != 0
 		rec.CavemanActive = caveman != 0
 		rec.TerseActive = terse != 0
+		rec.HeadroomActive = headroomActive != 0
+		rec.PonytailActive = ponytailActive != 0
 		rec.CreatedAt = parseTime(createdAt)
 		out = append(out, rec)
 	}
@@ -666,6 +692,9 @@ type ClientSavings struct {
 	SlimTokensSaved int64 // estimated tokens saved by RTK (bytes/4)
 	CavemanRequests int64 // requests where caveman was active
 	TerseRequests   int64 // requests where terse was active
+
+	HeadroomTokensSaved int64 // tokens saved by Headroom
+	PonytailRequests    int64 // requests where Ponytail was active
 }
 
 // SavingsByClient returns per-client optimization savings for a tenant since
@@ -679,7 +708,9 @@ func (r *UsageRepo) SavingsByClient(ctx context.Context, tenantID string, since 
 			COALESCE(SUM(slim_bytes_saved), 0),
 			COALESCE(SUM(slim_tokens_saved), 0),
 			COALESCE(SUM(caveman_active), 0),
-			COALESCE(SUM(terse_active), 0)
+			COALESCE(SUM(terse_active), 0),
+			COALESCE(SUM(headroom_tokens_saved), 0),
+			COALESCE(SUM(ponytail_active), 0)
 		FROM usage_records
 		WHERE tenant_id = ? AND created_at >= ?
 		GROUP BY client
@@ -694,7 +725,8 @@ func (r *UsageRepo) SavingsByClient(ctx context.Context, tenantID string, since 
 	for rows.Next() {
 		var c ClientSavings
 		if err := rows.Scan(&c.Client, &c.Requests, &c.SlimBytesSaved,
-			&c.SlimTokensSaved, &c.CavemanRequests, &c.TerseRequests); err != nil {
+			&c.SlimTokensSaved, &c.CavemanRequests, &c.TerseRequests,
+			&c.HeadroomTokensSaved, &c.PonytailRequests); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

@@ -3,6 +3,8 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +13,8 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/caveman"
 	"github.com/mydisha/keirouter/backend/internal/connectors"
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
+	"github.com/mydisha/keirouter/backend/internal/headroom"
+	"github.com/mydisha/keirouter/backend/internal/ponytail"
 	"github.com/mydisha/keirouter/backend/internal/slimmer"
 	"github.com/mydisha/keirouter/backend/internal/terse"
 )
@@ -35,6 +39,16 @@ type EndpointSettings struct {
 	// the compact TERSE format for token-efficient context.
 	TerseEnabled bool   `json:"terse_enabled"`
 	TerseLevel   string `json:"terse_level"`
+
+	// Headroom (input-side proxy compression).
+	HeadroomEnabled              bool   `json:"headroom_enabled"`
+	HeadroomURL                  string `json:"headroom_url"`
+	HeadroomCompressUserMessages bool   `json:"headroom_compress_user_messages"`
+	HeadroomTimeoutMs            int    `json:"headroom_timeout_ms"`
+
+	// Ponytail (output-side system-prompt injection).
+	PonytailEnabled bool   `json:"ponytail_enabled"`
+	PonytailLevel   string `json:"ponytail_level"` // "lite" | "full" | "ultra"
 
 	// Routing strategy fields.
 	RoutingStrategy  string `json:"routing_strategy"`   // "fill-first" | "round-robin" | "smart-round-robin"
@@ -67,19 +81,25 @@ type EndpointSettings struct {
 // defaultEndpointSettings returns the defaults: RTK on, caveman/terse off.
 func defaultEndpointSettings() EndpointSettings {
 	return EndpointSettings{
-		RTKEnabled:           true,
-		RTKFilterLevel:       "none",
-		CavemanEnabled:       false,
-		CavemanLevel:         string(caveman.LevelFull),
-		TerseEnabled:         false,
-		TerseLevel:           "medium",
-		StickyLimit:          3,
-		ComboStrategy:        "fallback",
-		ComboStickyLimit:     1,
-		OutboundProxyEnabled: false,
-		OutboundProxyURL:     "",
-		OutboundNoProxy:      "",
-		RateLimitsEnabled:    true,
+		RTKEnabled:                   true,
+		RTKFilterLevel:               "none",
+		CavemanEnabled:               false,
+		CavemanLevel:                 string(caveman.LevelFull),
+		TerseEnabled:                 false,
+		TerseLevel:                   "medium",
+		HeadroomEnabled:              false,
+		HeadroomURL:                  "",
+		HeadroomCompressUserMessages: false,
+		HeadroomTimeoutMs:            3000,
+		PonytailEnabled:              false,
+		PonytailLevel:                string(ponytail.LevelFull),
+		StickyLimit:                  3,
+		ComboStrategy:                "fallback",
+		ComboStickyLimit:             1,
+		OutboundProxyEnabled:         false,
+		OutboundProxyURL:             "",
+		OutboundNoProxy:              "",
+		RateLimitsEnabled:            true,
 		// Timeout defaults (ms). Generous bounds to
 		// accommodate slow upstream providers and reasoning models.
 		// Keep account routing context-sticky by default: repeated turns from
@@ -152,6 +172,15 @@ func (s *Server) loadEndpointSettings(ctx context.Context) EndpointSettings {
 	if es.RequestTimeoutMs == 0 {
 		es.RequestTimeoutMs = def.RequestTimeoutMs
 	}
+	// Backfill saver defaults for settings that predate this feature. The
+	// remaining Headroom/Ponytail fields use Go zero-values (false/"") that
+	// already match their defaults.
+	if es.HeadroomTimeoutMs == 0 {
+		es.HeadroomTimeoutMs = def.HeadroomTimeoutMs
+	}
+	if es.PonytailLevel == "" {
+		es.PonytailLevel = def.PonytailLevel
+	}
 	return es
 }
 
@@ -176,11 +205,73 @@ func (s *Server) cavemanConfig() caveman.Config {
 	return caveman.Config{Enabled: es.CavemanEnabled, Level: caveman.Level(es.CavemanLevel)}
 }
 
+// headroomConfig resolves Headroom (input-side proxy compression) settings.
+func (s *Server) headroomConfig() headroom.Config {
+	es := s.loadEndpointSettings(context.Background())
+	return headroom.Config{
+		Enabled:              es.HeadroomEnabled,
+		URL:                  es.HeadroomURL,
+		CompressUserMessages: es.HeadroomCompressUserMessages,
+		Timeout:              time.Duration(es.HeadroomTimeoutMs) * time.Millisecond,
+	}
+}
+
+// ponytailConfig resolves Ponytail (output-side system-prompt injection) settings.
+func (s *Server) ponytailConfig() ponytail.Config {
+	es := s.loadEndpointSettings(context.Background())
+	return ponytail.Config{Enabled: es.PonytailEnabled, Level: ponytail.Level(es.PonytailLevel)}
+}
+
 // ---- admin endpoints --------------------------------------------------------
 
 // adminGetEndpointSettings returns the current token-saving preferences.
 func (s *Server) adminGetEndpointSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.loadEndpointSettings(r.Context()))
+}
+
+// adminTestHeadroom probes a Headroom proxy to confirm it is running. It accepts
+// an optional JSON body {"url": "...", "timeout_ms": N}; when omitted it falls
+// back to the saved Headroom settings. This lets the dashboard validate a proxy
+// before (or after) saving, without ever leaking credentials: the probe result
+// only carries a masked endpoint.
+func (s *Server) adminTestHeadroom(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		URL       *string `json:"url"`
+		TimeoutMs *int    `json:"timeout_ms"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+	}
+
+	es := s.loadEndpointSettings(r.Context())
+
+	url := es.HeadroomURL
+	if body.URL != nil {
+		url = *body.URL
+	}
+	if strings.TrimSpace(url) == "" {
+		writeError(w, http.StatusBadRequest, "headroom_url is required to test the connection")
+		return
+	}
+
+	timeoutMs := es.HeadroomTimeoutMs
+	if body.TimeoutMs != nil {
+		timeoutMs = *body.TimeoutMs
+	}
+	if timeoutMs < 1000 || timeoutMs > 60000 {
+		writeError(w, http.StatusBadRequest, "headroom_timeout_ms must be between 1000 and 60000 ms")
+		return
+	}
+
+	result := headroom.New(nil).Probe(r.Context(), headroom.Config{
+		Enabled: true,
+		URL:     url,
+		Timeout: time.Duration(timeoutMs) * time.Millisecond,
+	})
+	writeJSON(w, http.StatusOK, result)
 }
 
 // adminUpdateEndpointSettings persists token-saving preferences. It accepts a
@@ -193,12 +284,20 @@ func (s *Server) adminUpdateEndpointSettings(w http.ResponseWriter, r *http.Requ
 	current := s.loadEndpointSettings(r.Context())
 
 	var patch struct {
-		RTKEnabled              *bool   `json:"rtk_enabled"`
-		RTKFilterLevel          *string `json:"rtk_filter_level"`
-		CavemanEnabled          *bool   `json:"caveman_enabled"`
-		CavemanLevel            *string `json:"caveman_level"`
-		TerseEnabled            *bool   `json:"terse_enabled"`
-		TerseLevel              *string `json:"terse_level"`
+		RTKEnabled     *bool   `json:"rtk_enabled"`
+		RTKFilterLevel *string `json:"rtk_filter_level"`
+		CavemanEnabled *bool   `json:"caveman_enabled"`
+		CavemanLevel   *string `json:"caveman_level"`
+		TerseEnabled   *bool   `json:"terse_enabled"`
+		TerseLevel     *string `json:"terse_level"`
+
+		HeadroomEnabled              *bool   `json:"headroom_enabled"`
+		HeadroomURL                  *string `json:"headroom_url"`
+		HeadroomCompressUserMessages *bool   `json:"headroom_compress_user_messages"`
+		HeadroomTimeoutMs            *int    `json:"headroom_timeout_ms"`
+		PonytailEnabled              *bool   `json:"ponytail_enabled"`
+		PonytailLevel                *string `json:"ponytail_level"`
+
 		RoutingStrategy         *string `json:"routing_strategy"`
 		StickyLimit             *int    `json:"sticky_limit"`
 		ComboStrategy           *string `json:"combo_strategy"`
@@ -247,6 +346,39 @@ func (s *Server) adminUpdateEndpointSettings(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		current.TerseLevel = *patch.TerseLevel
+	}
+	if patch.HeadroomEnabled != nil {
+		current.HeadroomEnabled = *patch.HeadroomEnabled
+	}
+	if patch.HeadroomURL != nil {
+		current.HeadroomURL = *patch.HeadroomURL
+	}
+	if patch.HeadroomCompressUserMessages != nil {
+		current.HeadroomCompressUserMessages = *patch.HeadroomCompressUserMessages
+	}
+	if patch.HeadroomTimeoutMs != nil {
+		if *patch.HeadroomTimeoutMs < 1000 || *patch.HeadroomTimeoutMs > 60000 {
+			writeError(w, http.StatusBadRequest, "headroom_timeout_ms must be between 1000 and 60000 ms")
+			return
+		}
+		current.HeadroomTimeoutMs = *patch.HeadroomTimeoutMs
+	}
+	if patch.PonytailEnabled != nil {
+		current.PonytailEnabled = *patch.PonytailEnabled
+	}
+	if patch.PonytailLevel != nil {
+		if !ponytail.ValidLevel(ponytail.Level(*patch.PonytailLevel)) {
+			writeError(w, http.StatusBadRequest, "ponytail_level must be lite, full, or ultra")
+			return
+		}
+		current.PonytailLevel = *patch.PonytailLevel
+	}
+	// Headroom requires a proxy URL when enabled. Validate the effective value
+	// after merging so partial patches (enabling without a URL, or clearing the
+	// URL while enabled) are rejected before persistence.
+	if current.HeadroomEnabled && strings.TrimSpace(current.HeadroomURL) == "" {
+		writeError(w, http.StatusBadRequest, "headroom_url is required when Headroom is enabled")
+		return
 	}
 	if patch.RoutingStrategy != nil {
 		normalized, ok := normalizeAccountRoutingStrategy(*patch.RoutingStrategy)

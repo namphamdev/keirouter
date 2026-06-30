@@ -94,6 +94,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 
 	r.Get("/settings/endpoint", s.adminGetEndpointSettings)
 	r.Post("/settings/endpoint", s.adminUpdateEndpointSettings)
+	r.Post("/settings/headroom-test", s.adminTestHeadroom)
 	r.Get("/settings/access", s.adminGetAccessSettings)
 	r.Post("/settings/access", s.adminUpdateAccessSettings)
 	r.Get("/settings/database", s.adminExportDatabase)
@@ -1801,8 +1802,8 @@ func (s *Server) adminConsoleStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	// Send initial history.
-	lines := s.consoleLog.Lines()
-	initData, _ := json.Marshal(map[string]any{"type": "init", "logs": lines})
+	entries := s.consoleLog.Entries()
+	initData, _ := json.Marshal(map[string]any{"type": "init", "logs": entries})
 	fmt.Fprintf(w, "data: %s\n\n", initData)
 	flusher.Flush()
 
@@ -1824,7 +1825,7 @@ func (s *Server) adminConsoleStream(w http.ResponseWriter, r *http.Request) {
 			if ev.Clear {
 				data, _ = json.Marshal(map[string]any{"type": "clear"})
 			} else {
-				data, _ = json.Marshal(map[string]any{"type": "line", "line": ev.Line})
+				data, _ = json.Marshal(map[string]any{"type": "line", "log": ev.Entry})
 			}
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
@@ -1866,7 +1867,7 @@ func (s *Server) adminExportDatabase(w http.ResponseWriter, r *http.Request) {
 		}
 		if portable {
 			if err := s.exportPortableSecrets(out, a, passphrase); err != nil {
-				s.consoleLog.Logf("ERROR", "portable export failed for account %s: %v", a.ID, err)
+				s.consoleLog.Log("ERROR", fmt.Sprintf("Portable export failed for account %s", a.ID), err.Error())
 				writeError(w, http.StatusInternalServerError, "portable export failed: cannot re-key account "+a.ID+" (master key mismatch?)")
 				return
 			}
@@ -2030,7 +2031,7 @@ func (s *Server) adminImportDatabase(w http.ResponseWriter, r *http.Request) {
 				}
 				if portable {
 					if err := s.importPortableSecrets(&acc, a.PortableSecret, passphrase); err != nil {
-						s.consoleLog.Logf("ERROR", "portable import failed for account %s: %v", acc.ID, err)
+						s.consoleLog.Log("ERROR", fmt.Sprintf("Portable import failed for account %s", acc.ID), err.Error())
 						writeError(w, http.StatusBadRequest, "portable import failed: wrong passphrase or corrupt backup")
 						return
 					}

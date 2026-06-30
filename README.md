@@ -21,37 +21,67 @@
 
 ---
 
-Hey there! 👋 Welcome to **KeiRouter**.
+## So, what's the deal? 🤔
 
-If you're using AI coding tools like Claude Code, Cursor, Cline, or literally any app that talks to OpenAI or Anthropic, you know the struggle: juggling API keys, hitting rate limits, and watching your token costs explode.
+You use AI coding tools — Claude Code, Cursor, Cline, or honestly anything that talks to OpenAI or Anthropic. And you know the headaches: a drawer full of API keys, rate limits that hit at the worst time, and a token bill that keeps creeping up.
 
-**KeiRouter fixes that.**
+**KeiRouter is the smart middleman that makes all of that someone else's problem.** Point your tools at one local endpoint and let it handle the boring stuff — routing each request to the right model, failing over the moment a provider taps out, caching repeat questions, and squeezing oversized prompts down *before* they ever cost you a token.
 
-You just point all your AI tools to one local endpoint on your machine. KeiRouter acts as your smart middleman—routing requests to the right AI models, automatically falling back if a service goes down, caching repeated questions to save money, and compressing big chunks of text before they even reach the AI!
+Oh, and it's written in Go. So it sips memory (~20 MB), boots instantly, ships as a single binary, and comes with a dashboard that's actually nice to look at. ✨
 
-It's built with Go, which means it’s incredibly lightweight (using barely ~20MB of RAM) and starts up instantly. Plus, it comes with a beautiful dashboard to manage everything. ✨
+> **Heads up:** KeiRouter is under active development. Peek at [Architecture](#-architecture) to see what's wired up today.
 
-> **Status:** Active development. See the [Architecture](#architecture) section for what's implemented.
+---
 
-## 🌟 Why you'll love KeiRouter
+## 📑 What's inside
 
-- 🔀 **One Endpoint to Rule Them All:** Your apps only need to speak OpenAI or Anthropic. KeiRouter handles translating your requests to whatever provider you actually want to use behind the scenes.
-- 🛡️ **Never Stop Coding:** Hit a rate limit? Provider down? KeiRouter automatically falls back to your backup models so your workflow never gets interrupted.
-- 💸 **Save Serious Cash:** 
-  - **Input Compression:** It shrinks massive logs, code diffs, and file structures before sending them to the LLM. 
-  - **Output Compression:** Tell the AI to speak in "terse mode" to cut out all the yapping and just give you the code.
-  - **Savings Dashboard:** See exactly how much money you've saved with a detailed breakdown of input and output compression ratios.
-- 💰 **Budget Engine:** Set per-key or per-organization USD and token hard limits with auto-cutoff to prevent unexpected bills.
-- 🚦 **Rate Limiting:** Protect your gateway and upstream quotas with per-key RPM, TPM, and concurrency caps. Use global defaults or assign limits through reusable plans.
-- 🛡️ **Guardrails (PII, Injection, Toxicity, Topics, Bias):** Content-safety policies layered global → provider → model → chain → API key. Indonesian-aware PII recognizers (NIK, NPWP, +62 phone), prompt-injection detection, bilingual toxicity + bias scoring, and streaming-output scanning. Bring-your-own-engine: OpenAI Moderation, Microsoft Presidio sidecar, or stay 100% offline.
-- 📋 **Plans & Policy Templates:** Create reusable budget templates with spend limits, token limits, rate limits, reset periods, allowed models, and alert thresholds. Assign plans to API keys so you define the rules once and apply them everywhere.
-- 🎨 **Branding & White-Label:** Customize the entire dashboard and portal with your own name, logo, favicon, tagline, and color palette. Perfect for teams and organizations that want a white-labeled AI gateway.
-- 🛠️ **Skills System:** Enhance your LLM interactions with built-in skills (Web Search, Image Generation, Text-to-Speech, etc.) natively routed through the gateway.
-- 🔧 **CLI Tools Auto-Config:** KeiRouter generates ready-to-paste configuration snippets for 11+ coding tools—Claude Code, Cursor, Cline, GitHub Copilot, DeepSeek, KiloCode, and more.
-- 🔐 **Super Secure:** Your API keys are encrypted with military-grade envelope encryption (AES-256-GCM). We never store plain text keys. Your local dashboard is also protected by a secure password and HMAC session cookies. Includes SSRF protection on all outbound requests.
-- 📊 **Track Everything:** Wondering where your money is going? The beautiful dashboard gives you a detailed Quota Tracker, Provider usage breakdowns, real-time API Key monitoring, TTFT (time-to-first-token) metrics, and per-key usage summaries.
-- ⚡ **Lightning Fast Caching:** Ask the same question twice? The semantic cache (powered by embeddings) remembers the answer and gives it back to you instantly, for exactly $0.00.
-- 🌐 **Usage Portal:** Give your team members a dedicated portal to view their own API key usage, quota, and token savings—no admin access needed.
+- [Highlights](#-the-good-stuff)
+- [Quick Start](#-quick-start)
+  - [Prerequisites](#prerequisites)
+  - [Pick your install](#pick-your-install)
+  - [First login](#first-login)
+  - [Connect your tools](#connect-your-tools)
+- [Token Savings](#-token-savings-where-the-money-hides)
+- [Smart Routing (Chains)](#-smart-routing-chains)
+- [Beyond Chat](#-it-does-more-than-chat)
+- [Connect via OAuth](#-skip-the-keys-oauth)
+- [Plans & Budgets](#-plans--budgets)
+- [Rate Limiting](#-rate-limiting)
+- [Guardrails](#-guardrails)
+- [Branding & White-Label](#-make-it-yours-branding)
+- [CLI Tools Auto-Config](#-cli-tools-auto-config)
+- [Usage Portal](#-usage-portal)
+- [Supported Providers](#-supported-providers-60)
+- [Configuration](#-configuration)
+- [Architecture](#-architecture)
+- [Security](#-security)
+- [Development & Contributing](#-hack-on-it)
+- [License](#-license)
+
+---
+
+## ⭐ The good stuff
+
+**Routing & reliability**
+- 🔀 **One endpoint, every provider** — Your apps speak OpenAI or Anthropic; KeiRouter quietly translates to whatever you actually want to use.
+- 🛡️ **Never stop coding** — Provider down? Rate limited? Fallback chains keep you moving like nothing happened.
+- ⚡ **Semantic cache** — Ask the same thing twice and the embedding-powered cache hands it back instantly, for a glorious $0.00.
+
+**Cost control**
+- 💸 **Five token savers** — Two on the way in, three on the way out, all on a live savings dashboard. Details in [Token Savings](#-token-savings-where-the-money-hides).
+- 💰 **Budget engine** — Per-key or per-org USD and token hard limits, with an auto-cutoff so surprise bills stay fictional.
+- 🚦 **Rate limiting** — Per-key RPM, TPM, and concurrency caps via global defaults or reusable plans.
+- 📋 **Plans & templates** — Set the rules once, slap them on any key.
+
+**Safety & governance**
+- 🛡️ **Guardrails** — PII, prompt-injection, toxicity, topics, and bias detectors layered global → provider → model → chain → key, with mid-stream output scanning and a fully-offline mode.
+- 🔐 **Locked down by default** — AES-256-GCM envelope encryption for credentials, a password-gated dashboard, HMAC sessions, and SSRF protection on outbound calls.
+
+**Operations & UX**
+- 📊 **See everything** — Quota tracker, provider breakdowns, live key monitoring, TTFT metrics, and per-key summaries.
+- 🎨 **White-label it** — Rebrand the dashboard and portal with your own name, logo, and palette.
+- 🛠️ **Skills & CLI auto-config** — Built-in skills plus copy-paste configs for 12+ coding tools.
+- 🌐 **Usage portal** — A no-admin-needed view so teammates can track their own usage and savings.
 
 <p align="center">
   <img src="assets/keirouter-providers-banner.png" alt="Manage AI Providers" width="800">
@@ -61,220 +91,196 @@ It's built with Go, which means it’s incredibly lightweight (using barely ~20M
   <img src="assets/keirouter-usage-banner.png" alt="Intelligent Routing & Topology" width="800">
 </p>
 
-## 🚀 Let's get started!
+---
 
-### 1. Install & Run
+## 🚀 Quick Start
 
-**Homebrew (macOS & Linux):**
+### Prerequisites
+
+Grab whichever path matches what's already on your machine — no need to install things you won't use:
+
+| Method | You'll need | Great for |
+|---|---|---|
+| **Homebrew** | macOS or Linux with Homebrew | The fastest way to a prebuilt binary |
+| **From source** | Go 1.24+ and Node.js 20+ | Local hacking / latest `main` |
+| **Docker** | Just Docker | Clean, isolated runs |
+| **Docker Compose** | Docker + Docker Compose | VPS / production / Coolify |
+
+### Pick your install
+
+<details open>
+<summary><strong>Option A — Homebrew (macOS &amp; Linux)</strong> · the easy button</summary>
+
 ```bash
 brew tap mydisha/keirouter https://github.com/mydisha/keirouter
 brew install keirouter
+
+keirouter -bootstrap   # mint your first API key (printed once — don't blink)
+keirouter              # fire up the server on :20180
 ```
+</details>
 
-Then:
-```bash
-keirouter -bootstrap   # create your first API key
-keirouter              # start server on :20180
-```
+<details>
+<summary><strong>Option B — One-line from source</strong> · for the tinkerers</summary>
 
-**One-Line (from source):**
+Needs **Go 1.24+** and **Node.js 20+**. No cloning, no `.env`, no config wrangling:
 
-Make sure you have Go 1.24+ and Node.js 20+, then paste this:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mydisha/keirouter/main/scripts/quickstart.sh | bash
 ```
 
-That's it! No manual cloning, no `.env`, no config files. Everything is automatic:
-- Clones the repo to `~/keirouter`
-- Installs dependencies
-- Starts backend on `:20180` and dashboard on `:5180`
-- Default dashboard password: `keirouter`
+It clones the repo to `~/keirouter`, installs everything, and starts the backend on `:20180` and the dashboard on `:5180`.
 
-> **Already have the repo?** Just run `make setup` in the project root.
+> Already cloned it? Just `make setup` from the project root and you're off.
+</details>
 
-**Prefer Docker?** No Go/Node.js needed:
+<details>
+<summary><strong>Option C — Docker</strong> · no Go/Node, no problem</summary>
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mydisha/keirouter/main/scripts/install.sh | bash -s -- --docker
 ```
+</details>
 
-**VPS / Coolify / Production?**
+<details>
+<summary><strong>Option D — Docker Compose</strong> · ship it (VPS / production / Coolify)</summary>
+
 ```bash
 git clone https://github.com/mydisha/keirouter.git
 cd keirouter
-cp .env.example .env   # set KEIROUTER_MASTER_KEY for production
+cp .env.example .env       # set KEIROUTER_MASTER_KEY before going to prod
 docker compose up -d --build
 ```
 
-See [deploy/README.md](deploy/README.md) for VPS, Postgres, and Coolify notes.
+VPS, PostgreSQL, and Coolify notes live in [deploy/README.md](deploy/README.md).
+</details>
 
-### 2. Set up your Dashboard
-For the local quickstart, open **http://localhost:5180**. For Docker or the installed production server, open **http://localhost:20180**.
-Log in with the default password: `keirouter` (it will ask you to change this immediately for security).
+### First login
 
-You can also create an API key directly from the terminal without the dashboard:
+| How you installed | Open this | Password |
+|---|---|---|
+| From source (quickstart / `make setup`) | http://localhost:5180 | `keirouter` |
+| Homebrew / Docker / production | http://localhost:20180 | `keirouter` |
+
+It'll nudge you to change that password the second you log in (please do 🙏). Allergic to UIs? Mint a key straight from the terminal:
+
 ```bash
-keirouter -bootstrap   # prints a kr_ key once
+keirouter -bootstrap   # prints a kr_ key, once
 ```
 
-### 3. Connect your tools
-In your favorite AI tool (like Cursor or Claude Code), set it up like this:
+### Connect your tools
+
+In your AI tool of choice (Cursor, Claude Code, Cline, you name it), set:
+
 - **Base URL:** `http://localhost:20180/v1`
-- **API Key:** Use the `kr_` key you generated in the dashboard or via bootstrap
-- **Model:** Type the provider and model (e.g., `openai/gpt-4o`) or the name of a fallback chain you created!
+- **API Key:** the `kr_` key from the dashboard or `-bootstrap`
+- **Model:** a provider model like `openai/gpt-4o`, or the name of a fallback [chain](#-smart-routing-chains) you cooked up
+
+That's it. You're routing.
+
+---
+
+## 💸 Token Savings (where the money hides)
+
+Every request runs through a deterministic token-saving pipeline **before** it gets translated to the provider's format — so the savings work the same no matter which provider you land on. There are **five savers**, each independently toggleable from **Settings → Token Saving**, and a dashboard that shows you exactly how much you clawed back.
+
+| Saver | Side | The pitch |
+|---|---|---|
+| **RTK / Slimmer** | Input | Shrinks chunky tool output (diffs, greps, listings, build logs) locally before it ever leaves your machine. |
+| **Headroom** | Input | Routes request messages through an external [Headroom](https://github.com/headroomlabs-ai/headroom) proxy for deeper compression. *Fail-open* — if the proxy sneezes, your request sails through untouched. Also sniffs out "phantom savings" so only real wins get counted. |
+| **Terse** | Output | Drops a concise-output directive so the model skips the small talk and gives you the goods. |
+| **Caveman** | Output | Terse's stronger cousin (Wenyan / 文言文 levels included) — trims output tokens by 65–75%. |
+| **Ponytail** | Output | Injects a "lazy senior dev" system prompt (`lite` / `full` / `ultra`) that nudges the model toward the smallest possible change. Stacks on top of Terse or Caveman. |
+
+> Terse and Caveman both inject a system directive, so they're mutually exclusive — pick one. Ponytail happily layers on top of either.
+
+**Pipeline order:** `normalizer → RTK → Headroom → Terse / Caveman → Ponytail → provider translation`.
+
+### Getting Headroom running
+
+Headroom is its own open-source compression proxy. KeiRouter just calls its `/v1/compress` endpoint, so you spin it up locally first. One gotcha worth shouting about: the **`headroom` CLI lives in the Python package** — the npm package is a library only, so `npm install -g headroom-ai` will leave you staring at `command not found`. Don't say we didn't warn you. 😉
+
+```bash
+# The clean way: pipx isolates the CLI and sorts out your PATH (needs Python 3.10+)
+pipx install "headroom-ai[all]"
+pipx ensurepath               # puts headroom on your PATH — then restart your shell
+
+headroom proxy --port 8787    # start the proxy
+headroom doctor               # make sure it's actually happy
+```
+
+On Ubuntu and `pip` is fighting you (PEP 668 blocks global installs)? Go `--user` and make sure `~/.local/bin` is on your `PATH`:
+
+```bash
+pip install --user "headroom-ai[all]"
+export PATH="$HOME/.local/bin:$PATH"   # drop this in ~/.zshrc or ~/.bashrc
+```
+
+Then over in **Settings → Token Saving → Headroom**: flip it on, set the **Proxy URL** to `http://localhost:8787`, and hit **Test connection** to confirm the handshake. Green check? You're golden.
+
+---
 
 ## 🧠 Smart Routing (Chains)
-Instead of just picking one model, you can create a "Chain" in the dashboard. 
 
-For example, a chain named `coding` could try:
-1. `openai/gpt-4o` (First choice)
-2. `deepseek/deepseek-chat` (If GPT-4o fails or hits a rate limit)
+Why bet on one model when you can have a backup plan? Build a **chain** in the dashboard. Say you name one `coding`:
 
-Then, in your app, just set the model to `chain:coding` (or just `coding`) and let KeiRouter do the heavy lifting!
+1. `openai/gpt-4o` — your first pick
+2. `deepseek/deepseek-chat` — steps in if the first one rate-limits or face-plants
 
-## 🔌 What else can it do?
-KeiRouter isn't just for chat! It supports everything:
-- **Image Generation** (`/v1/images/generations`)
-- **Speech-to-Text** (`/v1/audio/transcriptions`)
-- **Text-to-Speech** (`/v1/audio/speech`)
-- **Web Search & Fetching** (`/v1/search`, `/v1/web/fetch`)
-- **Embeddings** (`/v1/embeddings`)
+Then just set your app's model to `chain:coding` (or plain `coding`) and let KeiRouter sweat the failover.
 
-## 🔑 Connect via OAuth (No API Keys needed!)
-Tired of copying API keys? You can connect providers like Claude, GitHub Copilot, Gemini CLI, and more directly from the Connections page using OAuth. Just click, sign in, and KeiRouter handles securely refreshing your tokens in the background!
+---
 
-Supported OAuth/custom-auth flows include:
-- **Claude** — Anthropic OAuth
-- **GitHub Copilot** — GitHub device flow
-- **Gemini CLI** — Google device flow
-- **KiloCode** — Custom device-auth
-- **Qoder** — PKCE device-token flow
-- **CodeBuddy** (Tencent) — Browser-poll flow
-- **Cursor** — Token import flow
+## 🔌 It does more than chat
 
-## 📋 Plans & Budget Templates
-Plans let you define reusable budget policies that can be assigned to any API key. Instead of configuring limits per key, create a plan once and apply it everywhere.
+Chat completions are just the start. KeiRouter proxies the whole buffet:
 
-Each plan defines:
-- **Spend Limit** — USD budget cap (in micro-dollars for precision)
-- **Token Limit** — Maximum token usage
-- **RPM Limit** — Maximum requests per minute for each assigned API key (`0` means unlimited)
-- **TPM Limit** — Maximum estimated tokens per minute for each assigned API key (`0` means unlimited)
-- **Concurrency Limit** — Maximum in-flight requests for each assigned API key (`0` means unlimited)
-- **Reset Period** — `daily`, `weekly`, `monthly`, or `total`
-- **Allowed Models** — Restrict to specific models using wildcard patterns (e.g., `claude-*`, `gpt-4*`); empty means all models allowed
-- **Alert Threshold** — Percentage (1–100) at which alerts fire before budget exhaustion
-- **Hard Cutoff** — When enabled, requests are blocked once the budget is exhausted; when disabled, usage is tracked but not enforced
+| Capability | Endpoint |
+|---|---|
+| Image generation | `/v1/images/generations` |
+| Speech-to-text | `/v1/audio/transcriptions` |
+| Text-to-speech | `/v1/audio/speech` |
+| Embeddings | `/v1/embeddings` |
+| Web search | `/v1/search` |
+| Web fetch | `/v1/web/fetch` |
 
-A default plan is automatically created for each tenant. Plans can be managed from the dashboard's Plans page and assigned to API keys in the Keys settings.
+---
 
-## 🛡️ Guardrails
+## 🔑 Skip the keys: OAuth
 
-KeiRouter ships a built-in content-safety layer that runs detectors against every request and response. Policies are layered **global → provider → model → chain → API key** and merged at request time, so the most specific override wins.
+Copy-pasting API keys gets old fast. Connect providers straight from the **Connections** page with OAuth — sign in once, and KeiRouter quietly refreshes your tokens in the background.
 
-**Detectors out of the box:**
+| Provider | Flow |
+|---|---|
+| **Claude** | Anthropic OAuth |
+| **GitHub Copilot** | GitHub device flow |
+| **Gemini CLI** | Google device flow |
+| **KiloCode** | Custom device-auth |
+| **Qoder** | PKCE device-token flow |
+| **CodeBuddy** (Tencent) | Browser-poll flow |
+| **Cursor** | Token import flow |
 
-| Detector | What it catches | Default engine | Optional engine |
-|---|---|---|---|
-| **PII** | Email, phone, credit card, IBAN, IP, URL, **NIK / NPWP / Indonesian passport** | Native Go (Presidio-compatible) | Microsoft Presidio HTTP sidecar (PERSON / LOCATION / multilingual) |
-| **Prompt Injection** | Ignore-previous, role override, DAN, prompt-leak, safety bypass | Native regex catalog | — |
-| **Topics** | Allow-list / block-list of conversation topics | Keyword + n-gram match | Embedding similarity (semantic paraphrase detection) |
-| **Toxicity** | Profanity, hate speech, harassment, violence, sexual — bilingual id+en | Native keyword catalog | OpenAI Moderation API |
-| **Bias** (outbound) | Political, gender, ethnic, religious bias in LLM responses | Native bilingual lexicon | — |
+---
 
-**Actions per detector:** `log_only`, `warn`, `mask` (rewrite the prompt/response), or `block` (refuse with `policy_blocked`). The strictest action across detectors wins.
+## 📋 Plans & Budgets
 
-**Strategies for PII:** `redact` (`<PII>`), `replace` (`<EMAIL_ADDRESS>`), `mask` (keep edges, asterisk middle), `hash`, `anonymize`, or `block`.
+Plans are reusable budget policies you can stamp onto any API key — write the rules once, apply them everywhere. Each plan covers:
 
-**Streaming-safe:** A sliding 256-char buffer scans assistant text as chunks arrive — PII leaks or toxic output get caught mid-stream and the connection is cancelled with a policy error.
+- **Spend limit** — USD cap (micro-dollar precision, because pennies add up)
+- **Token limit** — max token usage
+- **RPM / TPM / Concurrency limits** — per assigned key (`0` = unlimited)
+- **Reset period** — `daily`, `weekly`, `monthly`, or `total`
+- **Allowed models** — wildcard patterns like `claude-*`, `gpt-4*` (empty = everything's fair game)
+- **Alert threshold** — get pinged at 1–100% of budget
+- **Hard cutoff** — block requests when the budget's gone, or just track and let it ride
 
-**Observability:** Every decision lands in the **Audit Logs** tab with full findings (entity, score, redaction). The dashboard streams new rows live via SSE. Prometheus exposes `keirouter_guardrail_decisions_total{detector,action}` and `keirouter_guardrail_eval_seconds{detector}` at `/metrics`.
+Every tenant gets a default plan out of the box. Manage them on the **Plans** page and assign them in **Keys** settings.
 
-**Compliance & hardening:**
-- **GDPR / data residency:** A per-tenant `allow_external_engines` flag forces all detectors back to their native engines so no data ever leaves the KeiRouter process.
-- **Audit retention:** `KEIROUTER_GUARDRAILS__AUDIT_RETENTION_DAYS=90` runs an hourly sweeper to drop old rows.
-- **Test endpoint rate-limited:** 10 req/min per session to prevent ReDoS / enumeration abuse.
+---
 
-**Starter templates** ship in the dashboard's "From template" picker: Indonesia PII · Strict safety · Compliance audit (log-only) · Public chatbot · Compliance alerts-only. Policies can also be exported as a JSON bundle and imported on another instance.
+## 🚦 Rate Limiting
 
-**Optional Presidio sidecar:**
-
-```bash
-docker compose -f compose.yaml -f compose.postgres.yaml -f compose.presidio.yaml up -d
-```
-
-Then set any PII policy's engine to `presidio` from the dashboard to unlock NER-based detection (`PERSON`, `LOCATION`, full multilingual coverage).
-
-## 🎨 Branding & White-Label
-Make KeiRouter your own! The branding system lets you customize the entire look and feel of both the admin dashboard and the public-facing Usage Portal.
-
-Customizable settings include:
-- **App Name** — Replace "KeiRouter" with your organization's name
-- **Logo URL** — Your custom logo (SVG/PNG)
-- **Favicon URL** — Custom browser tab icon
-- **Tagline** — Short text shown on the portal login screen
-- **Color Palette** — Choose from predefined palettes: `sage-terra`, `ocean`, `midnight`, and more
-
-All branding settings are managed from the **Settings → Branding** tab in the dashboard.
-
-## 🔧 CLI Tools Auto-Config
-KeiRouter can generate ready-to-paste configuration snippets for your favorite AI coding tools. Visit the **CLI Tools** page in the dashboard to get the exact config you need for:
-
-Claude Code · Cursor · Cline · GitHub Copilot · DeepSeek · KiloCode · OpenCode · OpenClaw · Hermes · JCode · Droid · CodeBuddy
-
-Just copy the snippet, paste it into your tool's config, and you're connected!
-
-## 🌐 Usage Portal
-The Usage Portal gives your team members a dedicated, non-admin view to monitor their own API usage. Each user can:
-- View their API key's quota and spend
-- Track token usage over time
-- See token savings from input/output compression
-- Monitor their assigned plan limits
-
-The portal is accessible at `/portal` and requires only the API key to log in—no admin credentials needed.
-
-<a name="architecture"></a>
-## 🛠️ Architecture for the curious
-Curious how it works under the hood? Here's the life of a request:
-1. **Gateway:** Receives your HTTP request and parses the AI dialect (OpenAI, Anthropic, Gemini, etc.).
-2. **Guardrails (inbound):** Runs PII / injection / toxicity / topics detectors against the prompt. Block → refuse; Mask → rewrite the prompt in place.
-3. **Pipeline:** Compresses your inputs (Slimmer), injects cost-saving prompts (Terse mode), and checks your budget limits.
-4. **Dispatch:** Picks the best provider account and handles fallbacks.
-5. **Connector & Transform:** Talks to the provider and translates the response back into the format your tool expects.
-6. **Guardrails (outbound):** Scans the response (or each chunk for streams) for leaked PII, biased phrasing, or toxic content. Block → cancel; Mask → rewrite the response.
-7. **Meter:** Logs how many tokens you used so you can view it on the dashboard.
-
-## 🌐 Supported Providers (60+)
-KeiRouter connects to a massive roster of AI providers out of the box. Here's the full list:
-
-**🧠 LLM / Chat Providers:**
-
-| Category | Providers |
-|----------|-----------|
-| **Major Cloud** | OpenAI, Anthropic, Google Gemini, Vertex AI, Azure OpenAI, AWS (Kiro) |
-| **Free / Free Tier** | OpenRouter (27+ free models), NVIDIA NIM, Ollama (Cloud & Local), Cloudflare Workers AI, BytePlus ModelArk |
-| **China / Asia** | DeepSeek, Qwen (Alibaba), GLM, Kimi (Moonshot), MiniMax, Volcengine Ark, Xiaomi MiMo, SiliconFlow, iFlow |
-| **OAuth / IDE** | Claude Code, GitHub Copilot, Cursor IDE, Cline, Kilo Code, OpenAI Codex, CodeBuddy (Tencent), Kimi Coding |
-| **Performance** | Groq, Cerebras, SambaNova, DeepInfra |
-| **Specialized** | xAI (Grok), Mistral, Perplexity, Cohere, AI21 Labs, Reka AI |
-| **Aggregators** | Together AI, Fireworks AI, Nebius AI, OpenCode, AIML API, Vercel AI Gateway |
-| **Emerging** | Blackbox AI, Chutes AI, Hyperbolic, Lepton AI, Kluster AI, MorphLLM, LongCat, Puter AI, GLHF, SumoPod, Scaleway, NLP Cloud, and many more |
-| **Custom** | Any OpenAI-compatible or Anthropic-compatible endpoint (self-hosted, proxy, etc.) |
-
-**🎨 Media & Search Providers:**
-
-| Type | Providers |
-|------|-----------|
-| **Image Generation** | OpenAI DALL·E, Gemini Imagen, Cloudflare, Fal.ai, Stability AI, Black Forest Labs, Recraft, Topaz, Runway ML, NanoBanana, HuggingFace, SD WebUI, ComfyUI |
-| **Text-to-Speech** | OpenAI TTS, NVIDIA NIM, ElevenLabs, Deepgram, Cartesia, PlayHT, AWS Polly, Google TTS, Edge TTS, Inworld, Coqui, Tortoise |
-| **Speech-to-Text** | OpenAI Whisper, Groq Whisper, Deepgram, AssemblyAI, Gemini STT, HuggingFace |
-| **Embeddings** | OpenAI, Gemini, Mistral, Together AI, Fireworks AI, Nebius, Voyage AI, Jina AI, OpenRouter |
-| **Web Search** | Tavily, Exa, Serper, Brave Search, SearXNG, Perplexity, xAI, Google PSE, Linkup, SearchAPI, You.com, OpenAI |
-| **Web Fetch** | Tavily, Exa, Firecrawl, Jina Reader |
-
-## ⚙️ Configuration
-By default, KeiRouter uses an embedded SQLite database (zero config required!). If you are deploying it for a team, you can use PostgreSQL. Just copy `config.example.yaml` and run with `-config`, or use environment variables like `KEIROUTER_SERVER__PORT=8080`. Docker/Coolify examples live in [deploy/README.md](deploy/README.md).
-
-Enable the local in-memory rate limiter for single-instance deployments:
+Keep your gateway (and your upstream quotas) from getting hammered with per-key RPM, TPM, and concurrency caps. For a single-instance setup, the in-memory limiter is all you need:
 
 ```yaml
 limits:
@@ -287,22 +293,139 @@ limits:
   cleanup_interval: 1m
 ```
 
-Default limits apply only to API keys without an assigned plan. When a key has a plan, the plan's `rpm_limit`, `tpm_limit`, and `concurrency_limit` take precedence; `0` means unlimited.
+Those defaults only apply to keys **without** a plan. The moment a key has one, the plan's `rpm_limit`, `tpm_limit`, and `concurrency_limit` take over (`0` = unlimited).
 
-## 🔒 Security Notes
-- The admin API (`/api/*`) is restricted to your local machine by default. If you expose it to the internet, put it behind a reverse proxy and set a stable `master_key`!
-- **Don't lose your master key!** It is the root of trust for all your encrypted credentials.
+---
 
-## 🧑‍💻 Development & Contributing
-Want to hack on KeiRouter?
+## 🛡️ Guardrails
+
+A built-in content-safety layer runs detectors against every request and response. Policies stack **global → provider → model → chain → API key** and merge at request time, so the most specific rule wins.
+
+| Detector | Catches | Default engine | Optional engine |
+|---|---|---|---|
+| **PII** | Email, phone, credit card, IBAN, IP, URL, **NIK / NPWP / Indonesian passport** | Native Go (Presidio-compatible) | Microsoft Presidio HTTP sidecar |
+| **Prompt Injection** | Ignore-previous, role override, DAN, prompt-leak, safety bypass | Native regex catalog | — |
+| **Topics** | Allow-list / block-list of topics | Keyword + n-gram | Embedding similarity |
+| **Toxicity** | Profanity, hate, harassment, violence, sexual (id + en) | Native catalog | OpenAI Moderation API |
+| **Bias** (outbound) | Political, gender, ethnic, religious bias in responses | Native bilingual lexicon | — |
+
+- **Actions:** `log_only`, `warn`, `mask` (rewrite it), or `block` (refuse it). Strictest action across detectors wins.
+- **PII strategies:** `redact`, `replace`, `mask`, `hash`, `anonymize`, or `block`.
+- **Streaming-safe:** a sliding 256-char buffer scans assistant output as it streams and pulls the plug mid-sentence if something leaks.
+- **Observability:** every decision shows up in **Audit Logs** (live via SSE); Prometheus serves `keirouter_guardrail_decisions_total` and `keirouter_guardrail_eval_seconds` at `/metrics`.
+- **Compliance:** a per-tenant `allow_external_engines` flag forces every detector offline; `KEIROUTER_GUARDRAILS__AUDIT_RETENTION_DAYS` controls retention; the test endpoint is capped at 10 req/min.
+
+Starter templates ship in the dashboard's "From template" picker (Indonesia PII · Strict safety · Compliance audit · Public chatbot · Alerts-only), and you can export/import policies as a JSON bundle.
+
+Want NER-based PII detection (`PERSON`, `LOCATION`, full multilingual)? Spin up the optional **Presidio sidecar**:
+
 ```bash
-make setup   # First time: installs deps + starts backend (:20180) and dashboard (:5180)
-make dev     # After first time: just starts the servers
+docker compose -f compose.yaml -f compose.postgres.yaml -f compose.presidio.yaml up -d
 ```
-Contributions are always welcome! Check out [CONTRIBUTING.md](CONTRIBUTING.md) to see how you can get involved.
 
-## 🛡️ Security Vulnerabilities
-If you find a security issue, please check [SECURITY.md](SECURITY.md) instead of opening a public issue.
+Then flip any PII policy's engine to `presidio` in the dashboard.
+
+---
+
+## 🎨 Make it yours: Branding
+
+Rebrand the admin dashboard *and* the public Usage Portal from **Settings → Branding**:
+
+- **App name** — swap "KeiRouter" for your own
+- **Logo & favicon URLs** — your SVG/PNG, your vibe
+- **Tagline** — the line on the portal login screen
+- **Color palette** — `sage-terra`, `ocean`, `midnight`, and friends
+
+---
+
+## 🔧 CLI Tools Auto-Config
+
+The **CLI Tools** page spits out ready-to-paste config snippets for the usual suspects:
+
+> Claude Code · Cursor · Cline · GitHub Copilot · DeepSeek · KiloCode · OpenCode · OpenClaw · Hermes · JCode · Droid · CodeBuddy
+
+Copy, paste into your tool's config, done.
+
+---
+
+## 🌐 Usage Portal
+
+A dedicated, no-admin-required view at `/portal` where teammates keep an eye on their own usage — quota and spend, token usage over time, compression savings, and plan limits. All it asks for is the API key. No keys to the kingdom required.
+
+---
+
+## 🌐 Supported Providers (60+)
+
+**🧠 LLM / Chat**
+
+| Category | Providers |
+|----------|-----------|
+| **Major Cloud** | OpenAI, Anthropic, Google Gemini, Vertex AI, Azure OpenAI, AWS (Kiro) |
+| **Free / Free Tier** | OpenRouter (27+ free models), NVIDIA NIM, Ollama (Cloud & Local), Cloudflare Workers AI, BytePlus ModelArk |
+| **China / Asia** | DeepSeek, Qwen (Alibaba), GLM, Kimi (Moonshot), MiniMax, Volcengine Ark, Xiaomi MiMo, SiliconFlow, iFlow |
+| **OAuth / IDE** | Claude Code, GitHub Copilot, Cursor IDE, Cline, Kilo Code, OpenAI Codex, CodeBuddy (Tencent), Kimi Coding |
+| **Performance** | Groq, Cerebras, SambaNova, DeepInfra |
+| **Specialized** | xAI (Grok), Mistral, Perplexity, Cohere, AI21 Labs, Reka AI |
+| **Aggregators** | Together AI, Fireworks AI, Nebius AI, OpenCode, AIML API, Vercel AI Gateway |
+| **Emerging** | Blackbox AI, Chutes AI, Hyperbolic, Lepton AI, Kluster AI, MorphLLM, LongCat, Puter AI, GLHF, SumoPod, Scaleway, NLP Cloud, and many more |
+| **Custom** | Any OpenAI- or Anthropic-compatible endpoint (self-hosted, proxy, etc.) |
+
+**🎨 Media & Search**
+
+| Type | Providers |
+|------|-----------|
+| **Image Generation** | OpenAI DALL·E, Gemini Imagen, Cloudflare, Fal.ai, Stability AI, Black Forest Labs, Recraft, Topaz, Runway ML, NanoBanana, HuggingFace, SD WebUI, ComfyUI |
+| **Text-to-Speech** | OpenAI TTS, NVIDIA NIM, ElevenLabs, Deepgram, Cartesia, PlayHT, AWS Polly, Google TTS, Edge TTS, Inworld, Coqui, Tortoise |
+| **Speech-to-Text** | OpenAI Whisper, Groq Whisper, Deepgram, AssemblyAI, Gemini STT, HuggingFace |
+| **Embeddings** | OpenAI, Gemini, Mistral, Together AI, Fireworks AI, Nebius, Voyage AI, Jina AI, OpenRouter |
+| **Web Search** | Tavily, Exa, Serper, Brave Search, SearXNG, Perplexity, xAI, Google PSE, Linkup, SearchAPI, You.com, OpenAI |
+| **Web Fetch** | Tavily, Exa, Firecrawl, Jina Reader |
+
+---
+
+## ⚙️ Configuration
+
+Out of the box, KeiRouter runs on an embedded **SQLite** database — zero config, zero fuss. Running it for a team? Switch to **PostgreSQL**: copy `config.example.yaml` and run with `-config`, or use environment variables like `KEIROUTER_SERVER__PORT=8080`. Docker/Coolify examples are in [deploy/README.md](deploy/README.md).
+
+---
+
+## 🛠️ Architecture
+
+Curious what happens after you hit send? Here's the life of a request:
+
+1. **Gateway** — takes your HTTP request and figures out the dialect (OpenAI, Anthropic, Gemini, …).
+2. **Guardrails (inbound)** — runs PII / injection / toxicity / topics detectors; block → refuse, mask → rewrite the prompt on the spot.
+3. **Pipeline** — runs the [token savers](#-token-savings-where-the-money-hides) (RTK → Headroom → Terse/Caveman → Ponytail) and checks your budget.
+4. **Dispatch** — picks the best provider account and juggles fallbacks.
+5. **Connector & Transform** — calls the provider, then translates the answer back into your tool's format.
+6. **Guardrails (outbound)** — scans the response (or each stream chunk) for leaked PII, bias, or toxicity; block → cancel, mask → rewrite.
+7. **Meter** — logs token usage and savings so the dashboard has something pretty to show.
+
+---
+
+## 🔒 Security
+
+- The admin API (`/api/*`) only listens to localhost by default. Exposing it? Put it behind a reverse proxy and set a stable `master_key`.
+- **Guard your master key with your life** — it's the root of trust for every encrypted credential.
+- Credentials sit behind AES-256-GCM envelope encryption; the dashboard uses password auth + HMAC session cookies; outbound requests get SSRF protection.
+
+Found a security issue? Please follow [SECURITY.md](SECURITY.md) instead of opening a public issue. 🙏
+
+---
+
+## 🧑‍💻 Hack on it
+
+```bash
+make setup   # first time: installs deps + starts backend (:20180) and dashboard (:5180)
+make dev     # after that: just start the servers
+make test    # run the backend test suite
+make build   # build the backend binary + frontend assets
+```
+
+PRs and ideas are always welcome — start with [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
 
 ## 📄 License
-MIT License - See [LICENSE](LICENSE) for details.
+
+MIT — see [LICENSE](LICENSE). Go build something cool. 🛠️

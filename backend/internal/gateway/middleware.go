@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -36,16 +37,18 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		key, err := s.identity.Authenticate(r.Context(), token)
 		if err != nil {
 			if errors.Is(err, identity.ErrUnauthorized) {
-				s.consoleLog.Logf("WARN", "auth rejected: invalid key for %s %s", r.Method, r.URL.Path)
+				s.consoleLog.Log("WARN", "Rejected request · invalid API key",
+					fmt.Sprintf("%s %s", r.Method, r.URL.Path))
 				writeError(w, http.StatusUnauthorized, "invalid API key")
 				return
 			}
 			s.log.Error("auth lookup failed", "err", err)
-			s.consoleLog.Logf("ERROR", "auth lookup failed: %v", err)
+			s.consoleLog.Log("ERROR", "Authentication lookup failed", err.Error())
 			writeError(w, http.StatusInternalServerError, "authentication error")
 			return
 		}
-		s.consoleLog.Logf("DEBUG", "auth ok: key=%s (%s) · %s %s", key.Name, key.ID, r.Method, r.URL.Path)
+		s.consoleLog.Log("DEBUG", fmt.Sprintf("Authenticated key %q", key.Name),
+			fmt.Sprintf("Key:     %s (%s)\nRequest: %s %s", key.Name, key.ID, r.Method, r.URL.Path))
 
 		ctx := context.WithValue(r.Context(), apiKeyCtxKey, key)
 		next.ServeHTTP(w, r.WithContext(ctx))

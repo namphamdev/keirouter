@@ -27,6 +27,52 @@ func TestMigrate_Idempotent(t *testing.T) {
 	require.NoError(t, db.Migrate(context.Background()))
 }
 
+// TestMigrate_ToleratesPreexistingAddColumn reproduces the renamed-migration
+// hazard: a migration file was renumbered after being applied to a database, so
+// its new version is not recorded in schema_migrations and re-runs, but the
+// column it adds is already present. runMigration must treat the duplicate
+// "ADD COLUMN" as already-satisfied instead of aborting startup.
+func TestMigrate_ToleratesPreexistingAddColumn(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, config.DatabaseConfig{Driver: "sqlite", DSN: ":memory:"}, t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	// Run the real migrations to get a fully-migrated schema.
+	require.NoError(t, db.Migrate(ctx))
+
+	// Simulate the orphaned state: forget that a column-adding migration ran
+	// while leaving its column in place. Re-running the migration would then
+	// attempt to ADD an already-existing column.
+	_, err = db.sql.ExecContext(ctx,
+		"DELETE FROM schema_migrations WHERE version = '0022_headroom_ponytail_savings'")
+	require.NoError(t, err)
+
+	// Migrate again: the duplicate ADD COLUMN must be tolerated, not fatal.
+	require.NoError(t, db.Migrate(ctx))
+
+	// And the migration is recorded again so future runs skip it.
+	applied, err := db.appliedVersions(ctx)
+	require.NoError(t, err)
+	_, ok := applied["0022_headroom_ponytail_savings"]
+	require.True(t, ok, "migration should be recorded after the tolerated re-run")
+}
+
+// TestMigrate_RealErrorsStillFail ensures the duplicate-column tolerance is
+// tightly scoped: a genuinely broken statement still aborts the migration.
+func TestMigrate_RealErrorsStillFail(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, config.DatabaseConfig{Driver: "sqlite", DSN: ":memory:"}, t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = db.sql.ExecContext(ctx, migrationsTable)
+	require.NoError(t, err)
+
+	err = db.runMigration(ctx, "9999_bad", "SELECT * FROM table_that_does_not_exist;")
+	require.Error(t, err)
+}
+
 func TestAPIKeyRepo_CRUD(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
