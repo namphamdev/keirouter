@@ -659,10 +659,30 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 
 	// Get current period summary scoped to this specific key.
 	now := time.Now()
-	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-	summary, err := s.usage.SummarizeByKey(ctx, key.ID, periodStart)
+	summary, err := s.usage.SummarizeByKey(ctx, key.ID, time.Time{})
 	if err != nil {
 		s.log.Error("key usage: summarize failed", "err", err)
+	}
+
+	daily, _ := s.usage.DailyByKey(ctx, key.ID, now.AddDate(0, 0, -30))
+	var dailyOut []map[string]any
+	for _, d := range daily {
+		dailyOut = append(dailyOut, map[string]any{
+			"date": d.Date, "requests": d.Requests,
+			"prompt_tokens": d.PromptTokens, "completion_tokens": d.CompletionTokens,
+			"cost_usd": float64(d.CostMicros) / 1_000_000,
+		})
+	}
+
+	models, _ := s.usage.ByModelByKey(ctx, key.ID, now.AddDate(0, 0, -30))
+	var modelOut []map[string]any
+	for _, m := range models {
+		modelOut = append(modelOut, map[string]any{
+			"provider": m.Provider, "model": m.Model,
+			"total_requests": m.TotalRequests,
+			"prompt_tokens": m.PromptTokens, "completion_tokens": m.CompletionTokens,
+			"cost_usd": float64(m.CostMicros) / 1_000_000,
+		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -676,6 +696,8 @@ func (s *Server) handleKeyUsage(w http.ResponseWriter, r *http.Request) {
 			"total_requests":    summary.TotalRequests,
 			"cost_usd":          float64(summary.CostMicros) / 1_000_000,
 		},
+		"daily":  dailyOut,
+		"models": modelOut,
 	})
 }
 

@@ -7,7 +7,12 @@ import {
   Trash2,
   KeyRound,
   ShieldCheck,
+  ShieldAlert,
   DollarSign,
+  Gauge,
+  Bell,
+  Cpu,
+  type LucideIcon,
 } from "lucide-react";
 import { api, type Plan } from "../lib/api";
 import { FormattedTokenInput, ModelMultiSelect } from "../components/ModelSelect";
@@ -26,6 +31,13 @@ import {
   Toggle,
   Modal,
 } from "../components/ui";
+
+const periodLabels: Record<string, string> = {
+  daily: "day",
+  weekly: "week",
+  monthly: "month",
+  total: "all time",
+};
 
 const periods = [
   { value: "daily", label: "Daily" },
@@ -121,6 +133,9 @@ export function PlansPage() {
   const planList = plans.data?.plans ?? [];
   const editingPlan = planList.find((p) => p.id === editingId);
 
+  const totalKeys = planList.reduce((sum, p) => sum + p.key_count, 0);
+  const enforcedCount = planList.filter((p) => p.hard_cutoff).length;
+
   return (
     <>
       <PageHeader
@@ -161,11 +176,40 @@ export function PlansPage() {
         )}
       </Modal>
 
-      <div className="mb-6">
-        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-widest text-[var(--text-muted)]">
-          <ShieldCheck className="h-4 w-4" /> All Plans
+      {/* Overview summary — at-a-glance context before the plan list */}
+      {!plans.isLoading && planList.length > 0 && (
+        <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <OverviewStat
+            icon={Wallet}
+            tone="secondary"
+            label="Total plans"
+            value={planList.length.toString()}
+            hint={planList.length === 1 ? "template" : "templates"}
+          />
+          <OverviewStat
+            icon={KeyRound}
+            tone="accent"
+            label="Keys assigned"
+            value={totalKeys.toString()}
+            hint={`across ${planList.length} plan${planList.length === 1 ? "" : "s"}`}
+          />
+          <OverviewStat
+            icon={ShieldAlert}
+            tone="warning"
+            label="Hard cutoff"
+            value={enforcedCount.toString()}
+            hint={`${planList.length - enforcedCount} advisory`}
+          />
+        </div>
+      )}
+
+      <div className="mb-4 flex items-center gap-2.5">
+        <ShieldCheck className="h-4 w-4 text-[var(--text-muted)]" />
+        <h2 className="text-sm font-semibold uppercase tracking-widest text-[var(--text-muted)]">
+          All plans
         </h2>
-        <p className="mt-1 text-sm text-[var(--text-muted)]">API keys inherit rules from their assigned plan.</p>
+        <div className="flex-1 border-t border-[var(--border)]" />
+        <span className="text-xs text-[var(--text-muted)]">API keys inherit rules from their assigned plan</span>
       </div>
 
       {plans.isLoading ? (
@@ -210,6 +254,76 @@ export function PlansPage() {
   );
 }
 
+/* ── Overview stat ───────────────────────────────────────────────── */
+
+function OverviewStat({
+  icon: Icon,
+  tone,
+  label,
+  value,
+  hint,
+}: {
+  icon: LucideIcon;
+  tone: "secondary" | "accent" | "warning";
+  label: string;
+  value: string;
+  hint?: string;
+}) {
+  const toneClasses: Record<string, string> = {
+    secondary: "bg-secondary-100 text-secondary-700 dark:bg-secondary-800/40 dark:text-secondary-200",
+    accent: "bg-accent-100 text-accent-700 dark:bg-accent-800/40 dark:text-accent-200",
+    warning: "bg-[color:var(--color-warning)]/15 text-[color:var(--color-warning)]",
+  };
+  return (
+    <div className="flex items-center gap-3 rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-3.5 shadow-sm">
+      <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${toneClasses[tone]}`}>
+        <Icon className="h-5 w-5" strokeWidth={2} />
+      </div>
+      <div className="min-w-0">
+        <p className="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">{label}</p>
+        <p className="mt-0.5 flex items-baseline gap-1.5">
+          <span className="text-2xl font-semibold tabular-nums text-[var(--text)]">{value}</span>
+          {hint && <span className="truncate text-xs text-[var(--text-muted)]">{hint}</span>}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ── Limit stat (inside a plan card) ─────────────────────────────── */
+
+function LimitStat({
+  label,
+  value,
+  suffix,
+}: {
+  label: string;
+  value: string | null;
+  suffix?: string;
+}) {
+  const unlimited = value === null;
+  return (
+    <div className="min-w-0">
+      <dt className="truncate text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+        {label}
+      </dt>
+      <dd className={`mt-0.5 truncate font-mono text-sm ${unlimited ? "text-[var(--text-muted)]" : "font-medium text-[var(--text)]"}`}>
+        {unlimited ? "Unlimited" : value}
+        {!unlimited && suffix && <span className="ml-1 font-sans text-xs font-normal text-[var(--text-muted)]">{suffix}</span>}
+      </dd>
+    </div>
+  );
+}
+
+function SectionLabel({ icon: Icon, children }: { icon: LucideIcon; children: React.ReactNode }) {
+  return (
+    <div className="mb-2.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+      <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+      {children}
+    </div>
+  );
+}
+
 /* ── Plan row ────────────────────────────────────────────────────── */
 
 function PlanRow({
@@ -223,30 +337,34 @@ function PlanRow({
 }) {
   const hasUSD = p.limit_micros > 0;
   const hasTokens = p.limit_tokens > 0;
-  const hasRPM = p.rpm_limit > 0;
-  const hasTPM = p.tpm_limit > 0;
-  const hasConcurrency = p.concurrency_limit > 0;
   const models = p.allowed_models ?? [];
+  const period = periodLabels[p.period] ?? p.period;
 
   return (
     <Card className="flex flex-col">
-      <div className="flex items-start justify-between border-b border-[var(--border)] px-5 py-4">
-        <div className="min-w-0 pr-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-base font-semibold text-[var(--text)]">{p.name}</h3>
-            {p.hard_cutoff ? (
-              <Badge tone="danger">hard cutoff</Badge>
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3 px-5 pt-5 pb-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-secondary-100 text-secondary-700 dark:bg-secondary-800/40 dark:text-secondary-200">
+            <Wallet className="h-5 w-5" strokeWidth={2} />
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="truncate text-base font-semibold text-[var(--text)]">{p.name}</h3>
+              {p.hard_cutoff ? (
+                <Badge tone="danger" title="Requests are blocked once the budget is exhausted">hard cutoff</Badge>
+              ) : (
+                <Badge tone="neutral" title="Usage is tracked but requests are never blocked">advisory</Badge>
+              )}
+            </div>
+            {p.description ? (
+              <p className="mt-0.5 line-clamp-2 text-xs text-[var(--text-muted)]">{p.description}</p>
             ) : (
-              <Badge tone="neutral">advisory</Badge>
+              <p className="mt-0.5 text-xs italic text-[var(--text-muted)] opacity-70">No description</p>
             )}
           </div>
-          {p.description ? (
-            <p className="mt-1 line-clamp-1 text-xs text-[var(--text-muted)]">{p.description}</p>
-          ) : (
-            <p className="mt-1 text-xs italic text-[var(--text-muted)] opacity-70">No description</p>
-          )}
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1">
           <Button variant="ghost" onClick={onEdit} className="px-2.5 py-2" title="Edit plan">
             <Pencil className="h-4 w-4 text-[var(--text-muted)]" />
           </Button>
@@ -256,82 +374,71 @@ function PlanRow({
         </div>
       </div>
 
-      <div className="flex-1 p-5">
-        <div className="grid grid-cols-2 gap-x-4 gap-y-5">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">
-              Spend limit
-            </p>
-            <div className="mt-1 font-mono text-sm text-[var(--text)]">
-              {hasUSD ? microsToUSD(p.limit_micros) : "∞"}
-              {hasUSD && <span className="ml-1 text-xs text-[var(--text-muted)]">/{p.period}</span>}
-            </div>
-          </div>
-          
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">
-              Token limit
-            </p>
-            <div className="mt-1 font-mono text-sm text-[var(--text)]">
-              {hasTokens ? formatTokens(p.limit_tokens) : "∞"}
-              {hasTokens && <span className="ml-1 text-xs text-[var(--text-muted)]">/{p.period}</span>}
-            </div>
-          </div>
+      {/* Body: budget + rate limits, clearly separated */}
+      <div className="flex-1 divide-y divide-[var(--border)] border-t border-[var(--border)]">
+        <div className="px-5 py-4">
+          <SectionLabel icon={DollarSign}>Budget · per {period}</SectionLabel>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+            <LimitStat
+              label="Spend"
+              value={hasUSD ? microsToUSD(p.limit_micros) : null}
+            />
+            <LimitStat
+              label="Tokens"
+              value={hasTokens ? formatTokens(p.limit_tokens) : null}
+            />
+          </dl>
+        </div>
 
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">
-              RPM
-            </p>
-            <div className="mt-1 font-mono text-sm text-[var(--text)]">
-              {hasRPM ? p.rpm_limit.toLocaleString() : "∞"}
-            </div>
-          </div>
+        <div className="px-5 py-4">
+          <SectionLabel icon={Gauge}>Rate limits · per key</SectionLabel>
+          <dl className="grid grid-cols-3 gap-x-4 gap-y-3">
+            <LimitStat
+              label="RPM"
+              value={p.rpm_limit > 0 ? p.rpm_limit.toLocaleString() : null}
+            />
+            <LimitStat
+              label="TPM"
+              value={p.tpm_limit > 0 ? formatTokens(p.tpm_limit) : null}
+            />
+            <LimitStat
+              label="Concurrent"
+              value={p.concurrency_limit > 0 ? p.concurrency_limit.toLocaleString() : null}
+            />
+          </dl>
+        </div>
 
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">
-              TPM
-            </p>
-            <div className="mt-1 font-mono text-sm text-[var(--text)]">
-              {hasTPM ? formatTokens(p.tpm_limit) : "∞"}
-            </div>
-          </div>
-
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">
-              Concurrent
-            </p>
-            <div className="mt-1 font-mono text-sm text-[var(--text)]">
-              {hasConcurrency ? p.concurrency_limit.toLocaleString() : "∞"}
-            </div>
-          </div>
-          
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">
-              Active Keys
-            </p>
-            <div className="mt-1 flex items-center gap-1.5 font-mono text-sm text-[var(--text)]">
-              <KeyRound className="h-3.5 w-3.5 text-[var(--text-muted)]" />
-              {p.key_count}
-            </div>
+        <div className="px-5 py-4">
+          <SectionLabel icon={Cpu}>Allowed models</SectionLabel>
+          <div className="flex flex-wrap gap-1.5">
+            {models.length > 0 ? (
+              models.map((m) => (
+                <span
+                  key={m}
+                  className="rounded-md border border-[var(--border)] bg-[var(--bg-subtle)] px-2 py-0.5 font-mono text-[11px] text-[var(--text)]"
+                >
+                  {m}
+                </span>
+              ))
+            ) : (
+              <span className="text-xs text-[var(--text-muted)]">All models allowed</span>
+            )}
           </div>
         </div>
       </div>
 
-      <div className="border-t border-[var(--border)] bg-[var(--bg-subtle)] px-5 py-3">
-        <div className="flex items-center justify-between text-xs text-[var(--text-muted)]">
-          <div className="truncate pr-4">
-            <span className="font-medium text-[var(--text)]">Models:</span>{" "}
-            {models.length > 0 ? models.join(", ") : "All allowed"}
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            <span className="relative flex h-2 w-2">
-              {p.alert_pct < 100 && (
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75"></span>
-              )}
-              <span className={`relative inline-flex h-2 w-2 rounded-full ${p.alert_pct < 100 ? 'bg-amber-500' : 'bg-ink-400 dark:bg-ink-600'}`}></span>
-            </span>
-            Alert at {p.alert_pct}%
-          </div>
+      {/* Footer: keys + alert */}
+      <div className="mt-auto flex items-center justify-between border-t border-[var(--border)] bg-[var(--bg-subtle)] px-5 py-3 text-xs">
+        <div className="flex items-center gap-1.5 text-[var(--text-muted)]">
+          <KeyRound className="h-3.5 w-3.5" />
+          <span>
+            <span className="font-medium text-[var(--text)]">{p.key_count}</span>{" "}
+            {p.key_count === 1 ? "key" : "keys"} assigned
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 text-[var(--text-muted)]">
+          <Bell className="h-3.5 w-3.5" />
+          Alert at {p.alert_pct}%
         </div>
       </div>
     </Card>

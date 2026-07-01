@@ -1,13 +1,25 @@
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
+  AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  CartesianGrid, PieChart, Pie, Cell,
 } from "recharts";
-import { fetchKeyUsage, fetchKeyUsageById, APIError } from "../lib/api";
+import { fetchKeyUsage, fetchKeyUsageById, APIError, type KeyUsageData } from "../lib/api";
 import { useBranding } from "../contexts/BrandingContext";
-import { AlertTriangle, CheckCircle2, Activity, Hash, DollarSign, LogOut, Layers, Key } from "lucide-react";
-import { Card, Button, Input, Spinner, ErrorCard, Badge } from "../components/ui";
+import {
+  AlertTriangle, CheckCircle2, Activity, ArrowDownRight, ArrowUpRight, DollarSign,
+  LogOut, Layers, Key, Zap, Send, ChevronDown, Radio, TrendingUp, Coins, Calendar,
+  Trophy, Infinity as InfinityIcon,
+} from "lucide-react";
+import { Card, Button, Input, Spinner, ErrorCard, Badge, SegmentedControl } from "../components/ui";
+
+// Chart palette pulled from the design-system CSS variables so the portal
+// matches the admin dashboard in both light and dark themes.
+const C_INPUT = "var(--color-chart-1)";
+const C_OUTPUT = "var(--color-chart-2)";
+const C_COST = "var(--color-chart-3)";
+const C_REQ = "var(--color-chart-5)";
 
 export function KeyPortalPage() {
   const { branding, logoSrc } = useBranding();
@@ -15,6 +27,10 @@ export function KeyPortalPage() {
   const activeId = params.get("id") || "";
   const activeKey = params.get("key") || "";
   const [apiKeyInput, setApiKeyInput] = useState(activeKey || activeId);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [testPrompt, setTestPrompt] = useState("Say hello in one sentence");
+  const [testResponse, setTestResponse] = useState<any>(null);
+  const [isTesting, setIsTesting] = useState(false);
 
   const authValue = activeId || activeKey;
   const isIdMode = !!activeId;
@@ -23,11 +39,8 @@ export function KeyPortalPage() {
     e.preventDefault();
     const val = apiKeyInput.trim();
     if (val) {
-      if (val.startsWith("sk-")) {
-        setParams({ key: val });
-      } else {
-        setParams({ id: val });
-      }
+      if (val.startsWith("sk-")) setParams({ key: val });
+      else setParams({ id: val });
     }
   };
 
@@ -36,13 +49,19 @@ export function KeyPortalPage() {
     setApiKeyInput("");
   };
 
-  const { data, isLoading, isError, error } = useQuery({
+  const { data, isLoading, isError, error, dataUpdatedAt } = useQuery({
     queryKey: ["key-usage", authValue, isIdMode],
-    queryFn: () => isIdMode ? fetchKeyUsageById(authValue) : fetchKeyUsage(authValue),
+    queryFn: () => (isIdMode ? fetchKeyUsageById(authValue) : fetchKeyUsage(authValue)),
     enabled: !!authValue,
     retry: false,
     refetchInterval: 30000,
   });
+
+  useEffect(() => {
+    if (data?.allowed_models?.length && !selectedModel) {
+      setSelectedModel(data.allowed_models[0]);
+    }
+  }, [data]);
 
   if (!authValue) {
     return (
@@ -76,8 +95,8 @@ export function KeyPortalPage() {
                   />
                 </div>
               </div>
-              <Button 
-                type="submit" 
+              <Button
+                type="submit"
                 className="w-full h-11 text-base font-medium shadow-sm transition-all hover:-translate-y-px"
                 disabled={!apiKeyInput.trim()}
               >
@@ -100,9 +119,7 @@ export function KeyPortalPage() {
 
   if (isError) {
     let msg = "Authentication failed or server error.";
-    if (error instanceof APIError) {
-      msg = error.message;
-    }
+    if (error instanceof APIError) msg = error.message;
     return (
       <div className="flex min-h-screen items-center justify-center bg-[var(--bg)] p-4">
         <div className="w-full max-w-md space-y-4 text-center animate-[page-in_0.3s_ease-out]">
@@ -119,9 +136,9 @@ export function KeyPortalPage() {
 
   return (
     <div className="min-h-screen bg-[var(--bg)] p-4 md:p-10 animate-[page-in_0.4s_ease-out]">
-      <div className="mx-auto max-w-[1040px] space-y-10">
-        
-        {/* ── Header Section ────────────────────────────────────────── */}
+      <div className="mx-auto max-w-[1040px] space-y-8">
+
+        {/* ── Header ─────────────────────────────────────────────────── */}
         <header className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-5">
             <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-[var(--bg-elevated)] border border-[var(--border)] shadow-sm">
@@ -129,279 +146,651 @@ export function KeyPortalPage() {
             </div>
             <div>
               <h1 className="text-2xl md:text-3xl font-display font-semibold text-[var(--text)] tracking-tight">Usage Dashboard</h1>
-              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span className="text-sm text-[var(--text-muted)]">Monitoring for <strong className="font-medium text-[var(--text)]">{d.key_name}</strong></span>
-                <span className="hidden h-1 w-1 rounded-full bg-[var(--border-strong)] sm:inline-block"></span>
+                <span className="hidden h-1 w-1 rounded-full bg-[var(--border-strong)] sm:inline-block" />
                 <span className="font-mono text-[13px] text-[var(--text-muted)] tracking-tight">ID: {d.key_id}</span>
               </div>
             </div>
           </div>
-          <Button variant="ghost" onClick={handleLogout} className="shrink-0 self-start sm:self-auto hover:bg-[var(--bg-elevated)] rounded-xl px-4 py-2 border-[var(--border)] shadow-sm">
-            <LogOut size={16} /> <span className="ml-1 font-medium">Disconnect</span>
-          </Button>
+          <div className="flex items-center gap-3 self-start sm:self-auto">
+            <LiveIndicator updatedAt={dataUpdatedAt} />
+            <Button variant="ghost" onClick={handleLogout} className="shrink-0 hover:bg-[var(--bg-elevated)] rounded-xl px-4 py-2 border-[var(--border)] shadow-sm">
+              <LogOut size={16} /> <span className="ml-1 font-medium">Disconnect</span>
+            </Button>
+          </div>
         </header>
 
-        {/* ── Unified Overview Panel (Budget + Stats) ───────────────── */}
-        <section>
-          <div className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-sm ring-1 ring-inset ring-white/50 dark:ring-0">
-            <div className="grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-[var(--border)]">
-              
-              {/* Left Side: Allocations */}
-              <div className="lg:col-span-5 flex flex-col p-8 md:p-10 relative">
-                <div className="mb-10 flex items-center justify-between">
-                  <h2 className="text-xs font-semibold tracking-widest text-[var(--text-muted)] uppercase">Allocations</h2>
-                </div>
-                
-                <div className="flex-1 flex flex-col justify-center space-y-12">
-                  {d.budgets && d.budgets.length > 0 ? (
-                    d.budgets.map((b, i) => (
-                      <div key={i} className="relative">
-                        <div className="mb-8 flex items-center justify-between">
-                          <div className="flex items-center gap-3.5">
-                            <div className={`h-2.5 w-2.5 rounded-full ${b.alert ? 'bg-[color:var(--color-danger)] shadow-[0_0_12px_var(--color-danger)]' : 'bg-accent-500 shadow-[0_0_12px_var(--color-accent-500)]'}`} />
-                            <h3 className="text-2xl font-display font-semibold tracking-tight text-[var(--text)]">
-                              {b.period === 'total' ? 'All-Time' : b.period.charAt(0).toUpperCase() + b.period.slice(1)} Limit
-                            </h3>
-                          </div>
-                          {b.alert && (
-                            <Badge tone="danger">
-                              <span className="flex items-center gap-1.5 py-0.5 px-1 font-medium">
-                                <AlertTriangle size={14} /> Exceeded
-                              </span>
-                            </Badge>
-                          )}
-                        </div>
+        {/* ── Overview: Allocations + 30-day KPIs ────────────────────── */}
+        <OverviewSection d={d} />
 
-                        <div className="space-y-8">
-                          {b.limit_tokens > 0 && (
-                            <BudgetProgress 
-                              label="Tokens Usage" 
-                              used={b.tokens_used} limit={b.limit_tokens} pct={b.tokens_pct_used} alert={b.alert} 
-                              format={formatTokens}
-                            />
-                          )}
-                          {b.limit_usd > 0 && (
-                            <BudgetProgress 
-                              label="Spend (USD)" 
-                              used={b.spent_usd} limit={b.limit_usd} pct={b.usd_pct_used} alert={b.alert} 
-                              format={(v: number) => `$${v.toFixed(4)}`}
-                              limitFormat={(v: number) => `$${v.toFixed(2)}`}
-                            />
-                          )}
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="flex flex-col items-center justify-center text-center pb-8">
-                       <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-accent-50 text-accent-600 ring-4 ring-accent-50/50">
-                          <CheckCircle2 size={32} strokeWidth={1.5} />
-                       </div>
-                       <h3 className="text-2xl font-display font-semibold text-[var(--text)]">Unrestricted</h3>
-                       <p className="mt-2 text-[var(--text-muted)] max-w-xs mx-auto">This key has no configured budget limits and can be used indefinitely.</p>
-                    </div>
-                  )}
-                </div>
-              </div>
+        {/* ── Usage Trend (multi-metric) ─────────────────────────────── */}
+        {d.daily && d.daily.length > 0 && <TrendSection daily={d.daily} />}
 
-              {/* Right Side: Cycle Activity */}
-              <div className="lg:col-span-7 bg-[var(--bg-subtle)]/40 p-8 md:p-10 flex flex-col">
-                <h2 className="mb-10 text-xs font-semibold tracking-widest text-[var(--text-muted)] uppercase">Current Cycle Activity</h2>
-                <div className="flex-1 grid grid-cols-2 gap-x-8 gap-y-12 content-center">
-                   <UnifiedStat 
-                      icon={Activity} 
-                      label="Total Requests" 
-                      value={d.current_period.total_requests.toLocaleString()} 
-                      tone="neutral"
-                   />
-                   <UnifiedStat 
-                      icon={Hash} 
-                      label="Prompt Tokens" 
-                      value={formatTokens(d.current_period.prompt_tokens)} 
-                      tone="neutral"
-                   />
-                   <UnifiedStat 
-                      icon={Hash} 
-                      label="Completion Tokens" 
-                      value={formatTokens(d.current_period.completion_tokens)} 
-                      tone="neutral"
-                   />
-                   <UnifiedStat 
-                      icon={DollarSign} 
-                      label="Accrued Cost" 
-                      value={`$${d.current_period.cost_usd.toFixed(4)}`} 
-                      tone={d.current_period.cost_usd > 0 ? "accent" : "neutral"}
-                   />
-                </div>
-              </div>
+        {/* ── Composition + Highlights ───────────────────────────────── */}
+        {d.daily && d.daily.length > 0 && <InsightsSection d={d} />}
 
-            </div>
-          </div>
-        </section>
+        {/* ── Model breakdown ────────────────────────────────────────── */}
+        {d.models && d.models.length > 0 && <ModelSection models={d.models} />}
 
-        {/* ── Daily Usage Chart ─────────────────────────────────────── */}
-        {d.daily && d.daily.length > 0 && (
-          <section className="space-y-6 pt-4">
-            <SectionTitle title="30-Day Trajectory" />
-            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] p-8 shadow-sm transition-all">
-              <div className="h-[320px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={d.daily.map(dp => ({ ...dp, label: dp.date.slice(5) }))} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="promptTokensFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="var(--color-chart-1)" stopOpacity={0.25} />
-                        <stop offset="95%" stopColor="var(--color-chart-1)" stopOpacity={0} />
-                      </linearGradient>
-                      <linearGradient id="completionTokensFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="var(--color-chart-2)" stopOpacity={0.25} />
-                        <stop offset="95%" stopColor="var(--color-chart-2)" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="4 4" opacity={0.6} />
-                    <XAxis dataKey="label" tick={{ fontSize: 12, fill: "var(--text-muted)", fontFamily: "var(--font-sans)" }} tickLine={false} axisLine={false} dy={14} />
-                    <YAxis tick={{ fontSize: 12, fill: "var(--text-muted)", fontFamily: "var(--font-sans)" }} tickLine={false} axisLine={false} tickFormatter={formatTokens} width={60} />
-                    <Tooltip
-                      contentStyle={{ fontSize: 14, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 16, boxShadow: "var(--shadow-pop)", padding: "12px 16px" }}
-                      formatter={(value: number, name: string) => [
-                        <span className="font-semibold text-[var(--text)]">{formatTokens(value)}</span>, 
-                        name === "prompt_tokens" ? "Input Tokens" : name === "completion_tokens" ? "Output Tokens" : name
-                      ]}
-                      labelStyle={{ color: "var(--text-muted)", marginBottom: 8, fontWeight: 500 }}
-                    />
-                    <Area type="monotone" dataKey="prompt_tokens" stackId="1" stroke="var(--color-chart-1)" strokeWidth={3} fill="url(#promptTokensFill)" name="Input Tokens" />
-                    <Area type="monotone" dataKey="completion_tokens" stackId="1" stroke="var(--color-chart-2)" strokeWidth={3} fill="url(#completionTokensFill)" name="Output Tokens" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* ── Per-Model Breakdown ────────────────────────────────────── */}
-        {d.models && d.models.length > 0 && (
-          <section className="space-y-6 pt-4">
-            <SectionTitle title="Model Matrix" icon={<Layers size={18} />} />
-            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] overflow-hidden shadow-sm">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-[var(--bg-subtle)]/50 border-b border-[var(--border)]">
-                    <tr>
-                      <th className="px-8 py-5 text-left font-semibold tracking-wide text-xs text-[var(--text-muted)]">MODEL</th>
-                      <th className="px-8 py-5 text-right font-semibold tracking-wide text-xs text-[var(--text-muted)]">REQUESTS</th>
-                      <th className="px-8 py-5 text-right font-semibold tracking-wide text-xs text-[var(--text-muted)]">INPUT</th>
-                      <th className="px-8 py-5 text-right font-semibold tracking-wide text-xs text-[var(--text-muted)]">OUTPUT</th>
-                      <th className="px-8 py-5 text-right font-semibold tracking-wide text-xs text-[var(--text-muted)]">COST (USD)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[var(--border)]">
-                    {d.models.map((m, i) => (
-                      <tr key={i} className="transition-colors hover:bg-[var(--bg-subtle)]/30 group">
-                        <td className="px-8 py-5">
-                          <div className="flex items-center gap-4">
-                            <ProviderIcon provider={m.provider} />
-                            <div className="flex flex-col">
-                              <span className="font-semibold text-[var(--text)] text-[15px]">{m.model}</span>
-                              <span className="text-[13px] text-[var(--text-muted)] capitalize">{m.provider}</span>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-8 py-5 text-right tabular-nums text-[var(--text)] font-medium text-[15px]">{m.total_requests.toLocaleString()}</td>
-                        <td className="px-8 py-5 text-right tabular-nums font-mono text-[14px] text-[var(--text-muted)]">{formatTokens(m.prompt_tokens)}</td>
-                        <td className="px-8 py-5 text-right tabular-nums font-mono text-[14px] text-[var(--text-muted)]">{formatTokens(m.completion_tokens)}</td>
-                        <td className="px-8 py-5 text-right tabular-nums font-semibold text-[var(--text)] text-[15px] group-hover:text-accent-600 transition-colors">${m.cost_usd.toFixed(4)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* ── Allowed Models Panel ──────────────────────────────────── */}
+        {/* ── Authorized routes ──────────────────────────────────────── */}
         {d.allowed_models && d.allowed_models.length > 0 && (
-          <section className="space-y-6 pt-4 pb-12">
-            <SectionTitle title="Authorized Routes" />
-            <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] p-8 shadow-sm">
-              <div className="flex flex-wrap gap-3">
-                {d.allowed_models.map(m => (
-                  <div key={m} className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-subtle)]/50 px-4 py-2 text-sm font-medium text-[var(--text)] shadow-sm transition-colors hover:bg-[var(--bg-subtle)]">
-                    <CheckCircle2 size={16} className="text-accent-500" />
+          <section className="space-y-4">
+            <SectionTitle title="Authorized Routes" icon={<Key size={17} />} count={d.allowed_models.length} />
+            <Card className="p-6 md:p-7">
+              <div className="flex flex-wrap gap-2.5">
+                {d.allowed_models.map((m) => (
+                  <div key={m} className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-subtle)]/60 px-3.5 py-1.5 text-sm text-[var(--text)] transition-colors hover:bg-[var(--bg-subtle)]">
+                    <CheckCircle2 size={15} className="text-accent-500" />
                     <span className="font-mono text-[13px] tracking-tight">{m}</span>
                   </div>
                 ))}
               </div>
-            </div>
+            </Card>
           </section>
         )}
 
+        {/* ── Playground (only when authed with a live key) ──────────── */}
+        {!isIdMode && activeKey && d.allowed_models && d.allowed_models.length > 0 && (
+          <PlaygroundSection
+            allowedModels={d.allowed_models}
+            activeKey={activeKey}
+            selectedModel={selectedModel}
+            setSelectedModel={setSelectedModel}
+            testPrompt={testPrompt}
+            setTestPrompt={setTestPrompt}
+            testResponse={testResponse}
+            setTestResponse={setTestResponse}
+            isTesting={isTesting}
+            setIsTesting={setIsTesting}
+          />
+        )}
+
+        <footer className="pt-2 pb-8 text-center text-xs text-[var(--text-muted)]">
+          Metrics reflect the last 30 days · refreshed automatically every 30 seconds
+        </footer>
       </div>
     </div>
   );
 }
 
-function SectionTitle({ title, icon }: { title: string, icon?: React.ReactNode }) {
+// ─── Overview: budget allocations + 30-day KPI cards ──────────────────────
+function OverviewSection({ d }: { d: KeyUsageData }) {
+  const daily = d.daily ?? [];
+  const t = useMemo(() => aggregate(daily), [daily]);
+  const totalTokens = t.prompt + t.completion;
+  const inputPct = totalTokens ? Math.round((t.prompt / totalTokens) * 100) : 0;
+  const activeDays = daily.filter((x) => x.requests > 0).length;
+  const avgPerReq = t.requests ? Math.round(totalTokens / t.requests) : 0;
+
   return (
-    <div className="flex items-center gap-3 pl-2">
+    <section>
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+        {/* Allocations */}
+        <div className="lg:col-span-5">
+          <Card className="h-full p-7 md:p-8 flex flex-col">
+            <div className="mb-6 flex items-center justify-between">
+              <h2 className="text-xs font-semibold tracking-widest text-[var(--text-muted)] uppercase">Allocations</h2>
+              {d.budgets && d.budgets.length > 0 && (
+                <Badge tone={d.budgets.some((b) => b.alert) ? "danger" : "neutral"}>
+                  {d.budgets.length} limit{d.budgets.length === 1 ? "" : "s"}
+                </Badge>
+              )}
+            </div>
+
+            {d.budgets && d.budgets.length > 0 ? (
+              <div className="flex-1 flex flex-col justify-center space-y-9">
+                {d.budgets.map((b, i) => (
+                  <div key={i}>
+                    <div className="mb-5 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <span className={`h-2.5 w-2.5 rounded-full ${b.alert ? "bg-[color:var(--color-danger)] shadow-[0_0_10px_var(--color-danger)]" : "bg-accent-500 shadow-[0_0_10px_var(--color-accent-500)]"}`} />
+                        <h3 className="text-xl font-display font-semibold tracking-tight text-[var(--text)]">
+                          {b.period === "total" ? "All-Time" : b.period.charAt(0).toUpperCase() + b.period.slice(1)} Limit
+                        </h3>
+                      </div>
+                      {b.alert && (
+                        <Badge tone="danger">
+                          <span className="flex items-center gap-1.5"><AlertTriangle size={13} /> Exceeded</span>
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="space-y-6">
+                      {b.limit_tokens > 0 && (
+                        <BudgetProgress label="Tokens" used={b.tokens_used} limit={b.limit_tokens} pct={b.tokens_pct_used} alert={b.alert} remaining={b.tokens_remaining} format={formatTokens} />
+                      )}
+                      {b.limit_usd > 0 && (
+                        <BudgetProgress label="Spend" used={b.spent_usd} limit={b.limit_usd} pct={b.usd_pct_used} alert={b.alert} remaining={b.usd_remaining} format={(v: number) => `$${v.toFixed(2)}`} />
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center text-center py-6">
+                <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-accent-50 text-accent-600 ring-4 ring-accent-50/50 dark:bg-accent-900/20 dark:ring-accent-900/30">
+                  <InfinityIcon size={30} strokeWidth={1.75} />
+                </div>
+                <h3 className="text-xl font-display font-semibold text-[var(--text)]">Unrestricted</h3>
+                <p className="mt-2 text-sm text-[var(--text-muted)] max-w-xs">This key has no configured budget limits and can be used indefinitely.</p>
+              </div>
+            )}
+          </Card>
+        </div>
+
+        {/* 30-day KPI cards */}
+        <div className="lg:col-span-7">
+          <div className="mb-3 flex items-center justify-between px-1">
+            <h2 className="text-xs font-semibold tracking-widest text-[var(--text-muted)] uppercase">Last 30 Days</h2>
+            <span className="text-xs text-[var(--text-muted)]">{activeDays} active day{activeDays === 1 ? "" : "s"}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <KpiCard icon={Activity} label="Requests" value={formatNumber(t.requests)} sub={`${avgPerReq ? formatTokens(avgPerReq) : 0} tokens / req`} color={C_REQ} data={daily} dataKey="requests" sparkId="sp-req" />
+            <KpiCard icon={DollarSign} label="Total Cost" value={`$${t.cost.toFixed(4)}`} sub={activeDays ? `~$${(t.cost / activeDays).toFixed(2)} / day` : "no spend yet"} color={C_COST} accent data={daily} dataKey="cost_usd" sparkId="sp-cost" />
+            <KpiCard icon={ArrowDownRight} label="Input Tokens" value={formatTokens(t.prompt)} sub={`${inputPct}% of tokens`} color={C_INPUT} data={daily} dataKey="prompt_tokens" sparkId="sp-in" />
+            <KpiCard icon={ArrowUpRight} label="Output Tokens" value={formatTokens(t.completion)} sub={`${100 - inputPct}% of tokens`} color={C_OUTPUT} data={daily} dataKey="completion_tokens" sparkId="sp-out" />
+          </div>
+          <div className="mt-4 flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)]/40 px-4 py-2.5 text-xs text-[var(--text-muted)]">
+            <Calendar size={14} className="text-[var(--text-muted)]" />
+            This month so far:
+            <strong className="font-medium text-[var(--text)]">{formatNumber(d.current_period.total_requests)}</strong> requests ·
+            <strong className="font-medium text-[var(--text)]">${d.current_period.cost_usd.toFixed(4)}</strong> spent
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─── Usage trend chart with metric toggle ─────────────────────────────────
+type Metric = "tokens" | "requests" | "cost";
+
+function TrendSection({ daily }: { daily: NonNullable<KeyUsageData["daily"]> }) {
+  const [metric, setMetric] = useState<Metric>("tokens");
+  const chartData = useMemo(() => daily.map((dp) => ({ ...dp, label: dp.date.slice(5) })), [daily]);
+  const t = useMemo(() => aggregate(daily), [daily]);
+
+  const headline =
+    metric === "tokens" ? formatTokens(t.prompt + t.completion) + " tokens"
+      : metric === "requests" ? formatNumber(t.requests) + " requests"
+        : "$" + t.cost.toFixed(4);
+
+  return (
+    <section className="space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <SectionTitle title="Usage Trend" icon={<TrendingUp size={17} />} />
+        <SegmentedControl<Metric>
+          value={metric}
+          onChange={setMetric}
+          options={[
+            { value: "tokens", label: "Tokens" },
+            { value: "requests", label: "Requests" },
+            { value: "cost", label: "Cost" },
+          ]}
+        />
+      </div>
+
+      <Card className="p-6 md:p-7">
+        <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-widest text-[var(--text-muted)]">30-day total</p>
+            <p className="mt-1 text-2xl font-display font-semibold tabular-nums tracking-tight text-[var(--text)]">{headline}</p>
+          </div>
+          {metric === "tokens" && (
+            <div className="flex items-center gap-4 text-xs">
+              <LegendDot color={C_INPUT} label="Input" />
+              <LegendDot color={C_OUTPUT} label="Output" />
+            </div>
+          )}
+        </div>
+
+        <div className="h-[300px] w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            {metric === "requests" ? (
+              <BarChart data={chartData} margin={{ top: 10, right: 8, left: -18, bottom: 0 }}>
+                <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="4 4" opacity={0.6} />
+                <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} dy={12} minTickGap={24} />
+                <YAxis tick={axisTick} tickLine={false} axisLine={false} tickFormatter={formatNumber} width={56} />
+                <Tooltip cursor={{ fill: "var(--bg-subtle)", opacity: 0.5 }} content={<ChartTooltip metric={metric} />} />
+                <Bar dataKey="requests" fill={C_REQ} radius={[6, 6, 0, 0]} maxBarSize={38} name="Requests" />
+              </BarChart>
+            ) : metric === "cost" ? (
+              <AreaChart data={chartData} margin={{ top: 10, right: 8, left: -8, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="costFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C_COST} stopOpacity={0.3} />
+                    <stop offset="95%" stopColor={C_COST} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="4 4" opacity={0.6} />
+                <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} dy={12} minTickGap={24} />
+                <YAxis tick={axisTick} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} width={56} />
+                <Tooltip content={<ChartTooltip metric={metric} />} />
+                <Area type="monotone" dataKey="cost_usd" stroke={C_COST} strokeWidth={2.5} fill="url(#costFill)" name="Cost" />
+              </AreaChart>
+            ) : (
+              <AreaChart data={chartData} margin={{ top: 10, right: 8, left: -18, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="inFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C_INPUT} stopOpacity={0.28} />
+                    <stop offset="95%" stopColor={C_INPUT} stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="outFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={C_OUTPUT} stopOpacity={0.28} />
+                    <stop offset="95%" stopColor={C_OUTPUT} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="4 4" opacity={0.6} />
+                <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} dy={12} minTickGap={24} />
+                <YAxis tick={axisTick} tickLine={false} axisLine={false} tickFormatter={formatTokens} width={56} />
+                <Tooltip content={<ChartTooltip metric={metric} />} />
+                <Area type="monotone" dataKey="prompt_tokens" stackId="1" stroke={C_INPUT} strokeWidth={2.5} fill="url(#inFill)" name="Input" />
+                <Area type="monotone" dataKey="completion_tokens" stackId="1" stroke={C_OUTPUT} strokeWidth={2.5} fill="url(#outFill)" name="Output" />
+              </AreaChart>
+            )}
+          </ResponsiveContainer>
+        </div>
+      </Card>
+    </section>
+  );
+}
+
+// ─── Token composition donut + activity highlights ────────────────────────
+function InsightsSection({ d }: { d: KeyUsageData }) {
+  const daily = d.daily ?? [];
+  const t = aggregate(daily);
+  const totalTokens = t.prompt + t.completion;
+  const inputPct = totalTokens ? Math.round((t.prompt / totalTokens) * 100) : 0;
+  const busiest = daily.reduce<null | NonNullable<KeyUsageData["daily"]>[number]>(
+    (max, dp) => (dp.requests > (max?.requests ?? -1) ? dp : max), null,
+  );
+  const avgPerReq = t.requests ? Math.round(totalTokens / t.requests) : 0;
+  const pieData = [
+    { name: "Input", value: t.prompt, color: C_INPUT },
+    { name: "Output", value: t.completion, color: C_OUTPUT },
+  ];
+
+  return (
+    <section className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+      {/* Token composition */}
+      <div className="space-y-4">
+        <SectionTitle title="Token Composition" icon={<Coins size={17} />} />
+        <Card className="p-6 md:p-7">
+          {totalTokens > 0 ? (
+            <div className="flex items-center gap-6">
+              <div className="relative h-[150px] w-[150px] shrink-0">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={52} outerRadius={72} paddingAngle={2} stroke="none">
+                      {pieData.map((entry) => <Cell key={entry.name} fill={entry.color} />)}
+                    </Pie>
+                    <Tooltip content={<ChartTooltip metric="tokens" simple />} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="text-lg font-display font-semibold tabular-nums text-[var(--text)]">{formatTokens(totalTokens)}</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">Tokens</span>
+                </div>
+              </div>
+              <div className="flex-1 space-y-4">
+                <CompositionRow color={C_INPUT} label="Input" value={formatTokens(t.prompt)} pct={inputPct} />
+                <CompositionRow color={C_OUTPUT} label="Output" value={formatTokens(t.completion)} pct={100 - inputPct} />
+                <div className="border-t border-[var(--border)] pt-3 text-xs text-[var(--text-muted)]">
+                  Avg <strong className="font-medium text-[var(--text)]">{formatTokens(avgPerReq)}</strong> tokens per request
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="py-8 text-center text-sm text-[var(--text-muted)]">No token usage recorded yet.</p>
+          )}
+        </Card>
+      </div>
+
+      {/* Highlights */}
+      <div className="space-y-4">
+        <SectionTitle title="Highlights" icon={<Trophy size={17} />} />
+        <Card className="p-6 md:p-7">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-6">
+            <Highlight label="Busiest Day" value={busiest && busiest.requests > 0 ? busiest.date.slice(5) : "—"} sub={busiest && busiest.requests > 0 ? `${formatNumber(busiest.requests)} requests` : "no activity"} />
+            <Highlight label="Models Used" value={String(d.models?.length ?? 0)} sub="in last 30 days" />
+            <Highlight label="Avg / Request" value={formatTokens(avgPerReq)} sub="tokens" />
+            <Highlight label="This Month" value={`$${d.current_period.cost_usd.toFixed(2)}`} sub={`${formatNumber(d.current_period.total_requests)} requests`} />
+          </div>
+        </Card>
+      </div>
+    </section>
+  );
+}
+
+// ─── Per-model breakdown ──────────────────────────────────────────────────
+function ModelSection({ models }: { models: NonNullable<KeyUsageData["models"]> }) {
+  const sorted = useMemo(() => [...models].sort((a, b) => b.total_requests - a.total_requests), [models]);
+  const totals = useMemo(() => sorted.reduce(
+    (acc, m) => ({
+      requests: acc.requests + m.total_requests,
+      prompt: acc.prompt + m.prompt_tokens,
+      completion: acc.completion + m.completion_tokens,
+      cost: acc.cost + m.cost_usd,
+    }),
+    { requests: 0, prompt: 0, completion: 0, cost: 0 },
+  ), [sorted]);
+
+  return (
+    <section className="space-y-4">
+      <SectionTitle title="Model Breakdown" icon={<Layers size={17} />} count={sorted.length} />
+      <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-[var(--bg-subtle)]/50 border-b border-[var(--border)]">
+              <tr className="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+                <th className="px-6 py-4 text-left font-semibold">Model</th>
+                <th className="px-6 py-4 text-left font-semibold w-[26%]">Requests</th>
+                <th className="px-6 py-4 text-right font-semibold">Input</th>
+                <th className="px-6 py-4 text-right font-semibold">Output</th>
+                <th className="px-6 py-4 text-right font-semibold">Avg / Req</th>
+                <th className="px-6 py-4 text-right font-semibold">Cost</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--border)]">
+              {sorted.map((m, i) => {
+                const share = totals.requests ? (m.total_requests / totals.requests) * 100 : 0;
+                const avg = m.total_requests ? Math.round((m.prompt_tokens + m.completion_tokens) / m.total_requests) : 0;
+                return (
+                  <tr key={i} className="group transition-colors hover:bg-[var(--bg-subtle)]/30">
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-3.5">
+                        <ProviderIcon provider={m.provider} />
+                        <div className="flex min-w-0 flex-col">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-[var(--text)] text-[15px] truncate">{m.model}</span>
+                            {i === 0 && totals.requests > 0 && <Badge tone="accent" title="Most used model">Top</Badge>}
+                          </div>
+                          <span className="text-[13px] text-[var(--text-muted)] capitalize truncate">{m.provider}</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-3">
+                        <span className="tabular-nums text-[var(--text)] font-medium w-12">{formatNumber(m.total_requests)}</span>
+                        <div className="h-1.5 flex-1 min-w-[48px] overflow-hidden rounded-full bg-[var(--bg-subtle)]">
+                          <div className="h-full rounded-full bg-accent-500 transition-all" style={{ width: `${Math.max(share, 2)}%` }} />
+                        </div>
+                        <span className="tabular-nums text-xs text-[var(--text-muted)] w-9 text-right">{share.toFixed(0)}%</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-right tabular-nums font-mono text-[13px] text-[var(--text-muted)]">{formatTokens(m.prompt_tokens)}</td>
+                    <td className="px-6 py-4 text-right tabular-nums font-mono text-[13px] text-[var(--text-muted)]">{formatTokens(m.completion_tokens)}</td>
+                    <td className="px-6 py-4 text-right tabular-nums font-mono text-[13px] text-[var(--text-muted)]">{formatTokens(avg)}</td>
+                    <td className={`px-6 py-4 text-right tabular-nums font-semibold text-[15px] ${m.cost_usd > 0 ? "text-[var(--text)]" : "text-[var(--text-muted)]"}`}>${m.cost_usd.toFixed(4)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            {sorted.length > 1 && (
+              <tfoot className="border-t-2 border-[var(--border)] bg-[var(--bg-subtle)]/30">
+                <tr className="text-[13px]">
+                  <td className="px-6 py-4 font-semibold text-[var(--text)]">Total · {sorted.length} models</td>
+                  <td className="px-6 py-4 tabular-nums font-semibold text-[var(--text)]">{formatNumber(totals.requests)}</td>
+                  <td className="px-6 py-4 text-right tabular-nums font-mono text-[var(--text-muted)]">{formatTokens(totals.prompt)}</td>
+                  <td className="px-6 py-4 text-right tabular-nums font-mono text-[var(--text-muted)]">{formatTokens(totals.completion)}</td>
+                  <td className="px-6 py-4" />
+                  <td className="px-6 py-4 text-right tabular-nums font-semibold text-[var(--text)]">${totals.cost.toFixed(4)}</td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </Card>
+    </section>
+  );
+}
+
+// ─── Playground ───────────────────────────────────────────────────────────
+function PlaygroundSection({
+  allowedModels, activeKey, selectedModel, setSelectedModel, testPrompt, setTestPrompt,
+  testResponse, setTestResponse, isTesting, setIsTesting,
+}: {
+  allowedModels: string[]; activeKey: string; selectedModel: string; setSelectedModel: (v: string) => void;
+  testPrompt: string; setTestPrompt: (v: string) => void; testResponse: any; setTestResponse: (v: any) => void;
+  isTesting: boolean; setIsTesting: (v: boolean) => void;
+}) {
+  return (
+    <section className="space-y-4">
+      <SectionTitle title="Playground" icon={<Zap size={17} />} />
+      <Card className="p-6 md:p-8">
+        <div className="space-y-6">
+          <div>
+            <label className="mb-2 block text-xs font-semibold uppercase tracking-widest text-[var(--text-muted)]">Model</label>
+            <div className="relative">
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="w-full appearance-none rounded-xl border border-[var(--border)] bg-[var(--bg)] px-4 py-3 pr-10 text-sm font-medium text-[var(--text)] shadow-sm transition-colors hover:border-[var(--border-strong)] focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-500/20"
+              >
+                {allowedModels.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <ChevronDown size={18} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-2 block text-xs font-semibold uppercase tracking-widest text-[var(--text-muted)]">Prompt</label>
+            <textarea
+              value={testPrompt}
+              onChange={(e) => setTestPrompt(e.target.value)}
+              rows={3}
+              className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg)] px-4 py-3 text-sm text-[var(--text)] shadow-sm transition-colors placeholder:text-[var(--text-muted)] hover:border-[var(--border-strong)] focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-500/20"
+              placeholder="Enter your message..."
+            />
+          </div>
+
+          <Button
+            onClick={() => {
+              setIsTesting(true);
+              setTestResponse(null);
+              fetch("/v1/chat/completions", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${activeKey}` },
+                body: JSON.stringify({ model: selectedModel, messages: [{ role: "user", content: testPrompt }], stream: false }),
+              })
+                .then((r) => r.json())
+                .then((json) => {
+                  if (json.error) setTestResponse({ error: json.error.message || "Request failed" });
+                  else setTestResponse(json);
+                })
+                .catch((err) => setTestResponse({ error: err.message }))
+                .finally(() => setIsTesting(false));
+            }}
+            disabled={!selectedModel || !testPrompt.trim() || isTesting}
+            className="w-full h-12 text-base font-medium shadow-sm transition-all hover:-translate-y-px"
+          >
+            {isTesting ? <><Spinner /> Testing...</> : <><Send size={16} /> Send Message</>}
+          </Button>
+
+          {testResponse && (
+            <div className="mt-2 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-semibold uppercase tracking-widest text-[var(--text-muted)]">Response</h4>
+                {testResponse.error && <Badge tone="danger">Error</Badge>}
+              </div>
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)] p-4 text-sm">
+                {testResponse.error ? (
+                  <p className="font-medium text-[color:var(--color-danger)]">{testResponse.error}</p>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="whitespace-pre-wrap text-[var(--text)]">{testResponse.choices?.[0]?.message?.content || "No response content"}</p>
+                    {testResponse.usage && (
+                      <div className="mt-4 flex flex-wrap gap-4 border-t border-[var(--border)] pt-4 text-xs text-[var(--text-muted)]">
+                        <span>Prompt: {testResponse.usage.prompt_tokens?.toLocaleString()}</span>
+                        <span>Completion: {testResponse.usage.completion_tokens?.toLocaleString()}</span>
+                        <span>Total: {testResponse.usage.total_tokens?.toLocaleString()}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </Card>
+    </section>
+  );
+}
+
+// ─── Small presentational helpers ─────────────────────────────────────────
+
+function SectionTitle({ title, icon, count }: { title: string; icon?: React.ReactNode; count?: number }) {
+  return (
+    <div className="flex items-center gap-2.5 pl-1">
       {icon && <div className="text-[var(--text-muted)]">{icon}</div>}
       <h2 className="text-sm font-semibold tracking-widest text-[var(--text-muted)] uppercase">{title}</h2>
+      {count != null && (
+        <span className="rounded-full bg-[var(--bg-subtle)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-muted)] tabular-nums">{count}</span>
+      )}
     </div>
   );
 }
 
-function BudgetProgress({ label, used, limit, pct, alert, format, limitFormat }: any) {
+function LiveIndicator({ updatedAt }: { updatedAt?: number }) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => force((n) => n + 1), 15000);
+    return () => clearInterval(t);
+  }, []);
+  const label = updatedAt ? relativeTime(updatedAt) : "live";
+  return (
+    <div className="hidden items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 shadow-sm sm:flex" title="Auto-refreshes every 30s">
+      <span className="relative flex h-2 w-2">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent-500 opacity-60" />
+        <span className="relative inline-flex h-2 w-2 rounded-full bg-accent-500" />
+      </span>
+      <Radio size={13} className="text-[var(--text-muted)]" />
+      <span className="text-xs font-medium text-[var(--text-muted)]">{label}</span>
+    </div>
+  );
+}
+
+function KpiCard({
+  icon: Icon, label, value, sub, color, accent, data, dataKey, sparkId,
+}: {
+  icon: any; label: string; value: string; sub: string; color: string; accent?: boolean;
+  data: any[]; dataKey: string; sparkId: string;
+}) {
+  return (
+    <div className="flex flex-col justify-between rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] p-5 shadow-sm ring-1 ring-inset ring-white/50 dark:ring-0">
+      <div className="flex items-center gap-2.5">
+        <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)]/60 text-[var(--text-muted)]" style={accent ? { color, borderColor: color + "40" } : undefined}>
+          <Icon size={16} strokeWidth={2} />
+        </span>
+        <p className="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">{label}</p>
+      </div>
+      <div className="mt-3">
+        <p className={`text-3xl font-display font-semibold tracking-tight tabular-nums ${accent ? "text-accent-600 dark:text-accent-400" : "text-[var(--text)]"}`}>{value}</p>
+        <p className="mt-1 text-xs text-[var(--text-muted)]">{sub}</p>
+      </div>
+      <div className="-mx-1 mt-3 h-9">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
+            <defs>
+              <linearGradient id={sparkId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={color} stopOpacity={0.35} />
+                <stop offset="100%" stopColor={color} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <Area type="monotone" dataKey={dataKey} stroke={color} strokeWidth={1.75} fill={`url(#${sparkId})`} isAnimationActive={false} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function BudgetProgress({ label, used, limit, pct, alert, remaining, format }: {
+  label: string; used: number; limit: number; pct: number; alert: boolean; remaining: number; format: (v: number) => string;
+}) {
   if (limit <= 0) return null;
   const safePct = Math.min(Math.max(pct, 0), 100);
   const isWarning = safePct > 80 && !alert;
-  const barColor = alert 
-    ? "bg-[color:var(--color-danger)] shadow-[0_0_10px_var(--color-danger)]" 
+  const barColor = alert
+    ? "bg-[color:var(--color-danger)] shadow-[0_0_10px_var(--color-danger)]"
     : isWarning ? "bg-[color:var(--color-warning)] shadow-[0_0_10px_var(--color-warning)]" : "bg-accent-500 shadow-[0_0_10px_var(--color-accent-500)]";
-    
   return (
-    <div className="group">
-      <div className="mb-3 flex items-end justify-between">
+    <div>
+      <div className="mb-2.5 flex items-end justify-between">
         <span className="text-sm font-medium text-[var(--text)]">{label}</span>
         <div className="text-right">
-          <span className="text-[19px] font-display font-semibold text-[var(--text)] tabular-nums tracking-tight">{format(used)}</span>
-          <span className="ml-1.5 text-sm font-medium text-[var(--text-muted)]">/ {limitFormat ? limitFormat(limit) : format(limit)}</span>
+          <span className="text-[17px] font-display font-semibold text-[var(--text)] tabular-nums tracking-tight">{format(used)}</span>
+          <span className="ml-1.5 text-sm font-medium text-[var(--text-muted)]">/ {format(limit)}</span>
         </div>
       </div>
-      <div className="h-3 w-full overflow-hidden rounded-full bg-[var(--bg-subtle)] ring-1 ring-inset ring-[var(--border)] shadow-inner">
-        <div 
-          className={`h-full rounded-full ${barColor} transition-all duration-1000 ease-out`}
-          style={{ width: `${safePct}%` }}
-        />
+      <div className="h-2.5 w-full overflow-hidden rounded-full bg-[var(--bg-subtle)] ring-1 ring-inset ring-[var(--border)]">
+        <div className={`h-full rounded-full ${barColor} transition-all duration-1000 ease-out`} style={{ width: `${safePct}%` }} />
+      </div>
+      <div className="mt-2 flex items-center justify-between text-xs text-[var(--text-muted)]">
+        <span className="tabular-nums">{safePct.toFixed(1)}% used</span>
+        <span className="tabular-nums">{format(remaining)} left</span>
       </div>
     </div>
   );
 }
 
-function UnifiedStat({ icon: Icon, label, value, tone = "neutral" }: { icon: any, label: string, value: string, tone?: string }) {
-  const isAccent = tone === 'accent';
+function CompositionRow({ color, label, value, pct }: { color: string; label: string; value: string; pct: number }) {
   return (
-    <div className="flex flex-col gap-4">
-      <div className={`flex h-12 w-12 items-center justify-center rounded-xl border shadow-sm ${
-        isAccent 
-          ? 'bg-accent-50/50 text-accent-600 border-accent-100 dark:bg-accent-900/20 dark:border-accent-900/50' 
-          : 'bg-[var(--bg-elevated)] text-[var(--text-muted)] border-[var(--border)]'
-      }`}>
-        <Icon size={20} strokeWidth={2} />
+    <div>
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="flex items-center gap-2 text-sm font-medium text-[var(--text)]">
+          <span className="h-2.5 w-2.5 rounded-sm" style={{ background: color }} />
+          {label}
+        </span>
+        <span className="text-sm tabular-nums text-[var(--text-muted)]"><strong className="font-medium text-[var(--text)]">{value}</strong> · {pct}%</span>
       </div>
-      <div>
-        <h3 className={`text-4xl font-display font-semibold tracking-tight tabular-nums ${isAccent ? 'text-accent-600 dark:text-accent-400' : 'text-[var(--text)]'}`}>{value}</h3>
-        <p className="mt-2 text-xs font-semibold uppercase tracking-widest text-[var(--text-muted)]">{label}</p>
+      <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--bg-subtle)]">
+        <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: color }} />
       </div>
     </div>
   );
 }
 
-function formatTokens(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return n.toLocaleString();
+function Highlight({ label, value, sub }: { label: string; value: string; sub: string }) {
+  return (
+    <div>
+      <p className="text-[11px] font-semibold uppercase tracking-widest text-[var(--text-muted)]">{label}</p>
+      <p className="mt-1.5 text-2xl font-display font-semibold tabular-nums tracking-tight text-[var(--text)]">{value}</p>
+      <p className="mt-0.5 text-xs text-[var(--text-muted)]">{sub}</p>
+    </div>
+  );
 }
 
-function ProviderIcon({ provider, className }: { provider: string, className?: string }) {
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="flex items-center gap-1.5 text-[var(--text-muted)]">
+      <span className="h-2 w-2 rounded-full" style={{ background: color }} />
+      {label}
+    </span>
+  );
+}
+
+function ChartTooltip({ active, payload, label, metric, simple }: any) {
+  if (!active || !payload?.length) return null;
+  const fmt = (v: number) => (metric === "cost" ? `$${v.toFixed(4)}` : metric === "requests" ? formatNumber(v) : formatTokens(v));
+  const nameOf = (key: string) => (key === "prompt_tokens" || key === "Input" ? "Input" : key === "completion_tokens" || key === "Output" ? "Output" : key === "requests" ? "Requests" : key === "cost_usd" ? "Cost" : key);
+  return (
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3.5 py-2.5 shadow-[var(--shadow-pop)]">
+      {!simple && label && <p className="mb-1.5 text-xs font-medium text-[var(--text-muted)]">{label}</p>}
+      <div className="space-y-1">
+        {payload.map((p: any, i: number) => (
+          <div key={i} className="flex items-center gap-2 text-sm">
+            <span className="h-2 w-2 rounded-full" style={{ background: p.color || p.payload?.color }} />
+            <span className="text-[var(--text-muted)]">{nameOf(p.name ?? p.dataKey)}</span>
+            <span className="ml-auto font-semibold tabular-nums text-[var(--text)]">{fmt(p.value)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProviderIcon({ provider, className }: { provider: string; className?: string }) {
   const [errored, setErrored] = useState(false);
   const sizeClass = className || "h-10 w-10";
   if (errored) {
@@ -413,8 +802,43 @@ function ProviderIcon({ provider, className }: { provider: string, className?: s
   }
   return (
     <div className={`flex shrink-0 items-center justify-center rounded-xl bg-[var(--bg-elevated)] border border-[var(--border)] shadow-sm ${sizeClass} p-1.5`}>
-      <img src={`/providers/${provider}.png`} alt={provider} onError={() => setErrored(true)}
-        className="h-full w-full object-contain" />
+      <img src={`/providers/${provider}.png`} alt={provider} onError={() => setErrored(true)} className="h-full w-full object-contain" />
     </div>
   );
+}
+
+// ─── Utilities ────────────────────────────────────────────────────────────
+
+const axisTick = { fontSize: 12, fill: "var(--text-muted)", fontFamily: "var(--font-sans)" } as const;
+
+function aggregate(daily: NonNullable<KeyUsageData["daily"]>) {
+  return daily.reduce(
+    (acc, dp) => ({
+      requests: acc.requests + dp.requests,
+      prompt: acc.prompt + dp.prompt_tokens,
+      completion: acc.completion + dp.completion_tokens,
+      cost: acc.cost + dp.cost_usd,
+    }),
+    { requests: 0, prompt: 0, completion: 0, cost: 0 },
+  );
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toLocaleString();
+}
+
+function formatNumber(n: number): string {
+  return Math.round(n).toLocaleString();
+}
+
+function relativeTime(ts: number): string {
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 10) return "just now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  return `${Math.floor(m / 60)}h ago`;
 }

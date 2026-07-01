@@ -256,6 +256,8 @@ export function ProviderDetailPage() {
 
   // Multi-select for connected accounts: enables bulk enable / disable / delete.
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(new Set());
+  // Controls the bulk-delete confirmation dialog (replaces the native confirm()).
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
   const toggleAccountSelection = (accId: string) =>
     setSelectedAccountIds((prev) => {
       const next = new Set(prev);
@@ -287,6 +289,7 @@ export function ProviderDetailPage() {
     onSuccess: (_, ids) => {
       qc.invalidateQueries({ queryKey: ["accounts"] });
       clearAccountSelection();
+      setBulkDeleteConfirmOpen(false);
       toast.success(`${ids.length} account${ids.length > 1 ? "s" : ""} removed`, "Encrypted secrets have been purged.");
     },
     onError: (e: Error) => toast.error("Bulk removal failed", e.message),
@@ -315,9 +318,12 @@ export function ProviderDetailPage() {
     if (ids.length) bulkUpdateAccounts.mutate({ ids, disabled: false });
   };
   const handleBulkDeleteAccounts = () => {
+    if (!selectedList.length) return;
+    setBulkDeleteConfirmOpen(true);
+  };
+  const confirmBulkDeleteAccounts = () => {
     const ids = selectedList.map((a) => a.id);
     if (!ids.length) return;
-    if (!confirm(`Delete ${ids.length} account${ids.length > 1 ? "s" : ""}? Encrypted secrets will be purged. This cannot be undone.`)) return;
     bulkDeleteAccounts.mutate(ids);
   };
 
@@ -780,6 +786,54 @@ export function ProviderDetailPage() {
       {bulkOpen && (
         <BulkAddKeysModal provider={provider} onClose={() => setBulkOpen(false)} />
       )}
+      <Modal
+        open={bulkDeleteConfirmOpen}
+        onClose={() => { if (!bulkDeleteAccounts.isPending) setBulkDeleteConfirmOpen(false); }}
+        title="Delete selected accounts?"
+        subtitle={`${selectedList.length} account${selectedList.length > 1 ? "s" : ""} on ${label} will be removed.`}
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4 px-6 py-5">
+          <div className="flex items-start gap-3 rounded-xl border border-[color:var(--color-danger)]/30 bg-[color:var(--color-danger)]/10 px-3.5 py-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[color:var(--color-danger)]" strokeWidth={2} />
+            <div className="text-sm leading-snug text-[color:var(--color-danger)]">
+              This permanently purges each account's encrypted secrets and removes them from routing.
+              <span className="font-semibold"> This action cannot be undone.</span>
+            </div>
+          </div>
+          {selectedList.length > 0 && (
+            <ul className="max-h-40 space-y-1 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)] px-3.5 py-2.5">
+              {selectedList.map((a) => (
+                <li key={a.id} className="flex items-center gap-2 text-sm text-[var(--text)]">
+                  <Trash2 className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
+                  <span className="truncate">{a.label || a.id}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              onClick={() => setBulkDeleteConfirmOpen(false)}
+              disabled={bulkDeleteAccounts.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={confirmBulkDeleteAccounts}
+              disabled={bulkDeleteAccounts.isPending}
+            >
+              {bulkDeleteAccounts.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5" />
+              )}
+              Delete {selectedList.length} account{selectedList.length > 1 ? "s" : ""}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </>
   );
 }

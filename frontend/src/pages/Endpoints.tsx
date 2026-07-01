@@ -74,12 +74,72 @@ export function EndpointsPage() {
 // Primary endpoint — hero card
 // ---------------------------------------------------------------------------
 
+// Append the /v1 API path to a tunnel base URL so it mirrors the primary
+// endpoint and can be used as a drop-in replacement.
+function withApiPath(base: string): string {
+  const trimmed = base.replace(/\/+$/, "");
+  if (!trimmed) return "";
+  return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
+}
+
 function PrimaryEndpoint() {
   const access = useQuery({ queryKey: ["access-settings"], queryFn: () => api.accessSettings() });
+  const status = useQuery({
+    queryKey: ["tunnel-status"],
+    queryFn: () => api.tunnelStatus(),
+    refetchInterval: STATUS_POLL_SLOW,
+  });
+
+  const localUrl = access.data?.endpoint_url ?? "";
+
+  const tunnel = status.data?.tunnel;
+  const tunnelRunning = tunnel?.running ?? false;
+  const tunnelBase = tunnel?.publicUrl || tunnel?.tunnelUrl || "";
+  const tunnelUrl = tunnelRunning ? withApiPath(tunnelBase) : "";
+
+  return (
+    <Card>
+      <div className="divide-y divide-[var(--border)]">
+        <EndpointRow
+          label="Primary endpoint"
+          url={localUrl}
+          loadingText="Loading…"
+          hint="Point your applications at this URL. All providers are accessible through this single endpoint."
+        />
+        {tunnelUrl && (
+          <EndpointRow
+            label="Public endpoint · Cloudflare Tunnel"
+            url={tunnelUrl}
+            icon={<CloudflareLogo className="h-3.5 w-3.5 text-[#F6821F]" />}
+            hint="Publicly reachable URL from your Cloudflare tunnel. Use it to reach KeiRouter from anywhere."
+          />
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Copyable endpoint row — shared by the primary + tunnel endpoints
+// ---------------------------------------------------------------------------
+
+function EndpointRow({
+  label,
+  url,
+  hint,
+  icon,
+  loadingText,
+}: {
+  label: string;
+  url: string;
+  hint: string;
+  icon?: React.ReactNode;
+  loadingText?: string;
+}) {
   const [copied, setCopied] = useState(false);
-  const url = access.data?.endpoint_url ?? "";
 
   const copy = async () => {
+    if (!url) return;
     try {
       await navigator.clipboard.writeText(url);
       setCopied(true);
@@ -90,46 +150,47 @@ function PrimaryEndpoint() {
   };
 
   return (
-    <Card>
-      <div className="px-4 py-4 sm:px-6 sm:py-5">
-        <div className="flex items-center gap-2">
+    <div className="px-4 py-4 sm:px-6 sm:py-5">
+      <div className="flex items-center gap-2">
+        {icon ?? (
           <span className="relative flex h-2 w-2">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" style={{ animationDuration: "2s" }} />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
           </span>
-          <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
-            Primary endpoint
-          </p>
-        </div>
-        {/* Mobile: stack vertically. Desktop: side-by-side. */}
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-stretch">
-          <div className="flex min-w-0 flex-1 items-center rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 sm:px-4 sm:py-3">
-            <span className="truncate font-mono text-[13px] text-[var(--text)]">
-              {url || "Loading…"}
-            </span>
-          </div>
-          <button
-            onClick={copy}
-            className="flex shrink-0 items-center justify-center gap-2 rounded-xl bg-secondary-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-secondary-700 dark:bg-secondary-500 dark:hover:bg-secondary-400 sm:py-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary-400/60"
-          >
-            {copied ? (
-              <>
-                <Check className="h-4 w-4" />
-                <span>Copied</span>
-              </>
-            ) : (
-              <>
-                <Copy className="h-4 w-4" />
-                <span>Copy</span>
-              </>
-            )}
-          </button>
-        </div>
-        <p className="mt-2.5 text-xs text-[var(--text-muted)] sm:mt-3">
-          Point your applications at this URL. All providers are accessible through this single endpoint.
+        )}
+        <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--text-muted)]">
+          {label}
         </p>
       </div>
-    </Card>
+      {/* Mobile: stack vertically. Desktop: side-by-side. */}
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-stretch">
+        <div className="flex min-w-0 flex-1 items-center rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 sm:px-4 sm:py-3">
+          <span className="truncate font-mono text-[13px] text-[var(--text)]">
+            {url || loadingText || ""}
+          </span>
+        </div>
+        <button
+          onClick={copy}
+          disabled={!url}
+          className="flex shrink-0 items-center justify-center gap-2 rounded-xl bg-secondary-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-secondary-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-secondary-500 dark:hover:bg-secondary-400 sm:py-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-secondary-400/60"
+        >
+          {copied ? (
+            <>
+              <Check className="h-4 w-4" />
+              <span>Copied</span>
+            </>
+          ) : (
+            <>
+              <Copy className="h-4 w-4" />
+              <span>Copy</span>
+            </>
+          )}
+        </button>
+      </div>
+      <p className="mt-2.5 text-xs text-[var(--text-muted)] sm:mt-3">
+        {hint}
+      </p>
+    </div>
   );
 }
 

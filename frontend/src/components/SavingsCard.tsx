@@ -20,17 +20,23 @@ const periodLabels: Record<string, string> = {
 
 // Earth Tone Palette (App matched)
 const C = {
-  bg: "#faf9f7",
+  bg: "#f7f6f3",
+  bgGradientTo: "#ece9e2",
   surface: "#ffffff",
-  border: "rgba(0,0,0,0.08)",
-  borderLight: "rgba(0,0,0,0.04)",
-  text: "#1c1b18",
-  textSecondary: "#43413a",
-  textMuted: "#a8a59a",
+  border: "rgba(17,24,39,0.08)",
+  borderLight: "rgba(17,24,39,0.05)",
+  text: "#14130f",
+  textSecondary: "#4b4840",
+  textMuted: "#9a978c",
   accent: "#C45F3A", // Terracotta / Orange
   accentLight: "#d98a6a",
   positive: "#059669", // Emerald for good metrics
+  positiveDark: "#047857",
+  positiveDeep: "#065f46",
 };
+
+// Per-card accent colors for the bento grid.
+const cardAccents = ["#059669", "#C45F3A", "#2563eb", "#9a978c"];
 
 // ─── Hidden Card (rendered off-screen for capture) ───────────────────────────
 
@@ -77,24 +83,52 @@ function SavingsCardContent({ data }: { data: SavingsCardData }) {
         width: 1200,
         height: 630,
         position: "relative",
+        overflow: "hidden",
         boxSizing: "border-box",
         fontFamily:
           "'-apple-system', 'BlinkMacSystemFont', 'SF Pro Display', 'Inter', sans-serif",
-        background: C.bg,
+        background: `linear-gradient(150deg, ${C.bg} 0%, ${C.bgGradientTo} 100%)`,
         color: C.text,
-        padding: "48px 56px",
+        padding: "44px 52px",
         display: "flex",
         flexDirection: "column",
       }}
     >
-      {/* Subtle Texture */}
+      {/* Decorative glow blobs */}
+      <div
+        style={{
+          position: "absolute",
+          top: -160,
+          right: -120,
+          width: 460,
+          height: 460,
+          borderRadius: "50%",
+          background:
+            "radial-gradient(circle, rgba(5,150,105,0.16) 0%, rgba(5,150,105,0) 70%)",
+          zIndex: 0,
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          bottom: -180,
+          left: -100,
+          width: 420,
+          height: 420,
+          borderRadius: "50%",
+          background:
+            "radial-gradient(circle, rgba(196,95,58,0.12) 0%, rgba(196,95,58,0) 70%)",
+          zIndex: 0,
+        }}
+      />
+      {/* Subtle grid texture */}
       <div
         style={{
           position: "absolute",
           inset: 0,
           backgroundImage:
-            "linear-gradient(rgba(0,0,0,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.02) 1px, transparent 1px)",
-          backgroundSize: "40px 40px",
+            "linear-gradient(rgba(0,0,0,0.015) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.015) 1px, transparent 1px)",
+          backgroundSize: "44px 44px",
           zIndex: 0,
         }}
       />
@@ -107,15 +141,15 @@ function SavingsCardContent({ data }: { data: SavingsCardData }) {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            paddingBottom: "32px",
+            paddingBottom: "28px",
             borderBottom: `1px solid ${C.border}`,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <img
               src="/keirouter-logo.png"
               alt="KeiRouter"
-              style={{ width: 32, height: 32, objectFit: "contain" }}
+              style={{ width: 34, height: 34, objectFit: "contain" }}
               crossOrigin="anonymous"
             />
             <span
@@ -146,7 +180,7 @@ function SavingsCardContent({ data }: { data: SavingsCardData }) {
             padding: "8px 16px",
             borderRadius: 20,
             border: `1px solid ${C.borderLight}`,
-            boxShadow: "0 2px 8px rgba(0,0,0,0.02)"
+            boxShadow: "0 2px 8px rgba(0,0,0,0.03)"
           }}>
             <span
               style={{
@@ -161,45 +195,76 @@ function SavingsCardContent({ data }: { data: SavingsCardData }) {
         </div>
 
         {/* Main Content Layout */}
-        <div style={{ flex: 1, display: "flex", alignItems: "center", gap: "64px", paddingTop: "40px" }}>
+        <div style={{ flex: 1, display: "flex", alignItems: "stretch", gap: "36px", paddingTop: "32px" }}>
           
-          {/* Left: Big Hero Metric */}
-          <div style={{ flex: "0 0 50%", display: "flex", flexDirection: "column", gap: "24px" }}>
+          {/* Left: Big Hero Metric — gradient panel */}
+          <div
+            style={{
+              flex: "0 0 46%",
+              position: "relative",
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+              gap: "20px",
+              padding: "40px",
+              borderRadius: 28,
+              background: `linear-gradient(140deg, ${C.positive} 0%, ${C.positiveDark} 55%, ${C.positiveDeep} 100%)`,
+              boxShadow: "0 24px 60px rgba(5,150,105,0.28)",
+            }}
+          >
+            {/* Sheen */}
+            <div
+              style={{
+                position: "absolute",
+                top: -120,
+                right: -80,
+                width: 320,
+                height: 320,
+                borderRadius: "50%",
+                background:
+                  "radial-gradient(circle, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0) 70%)",
+              }}
+            />
             <span
               style={{
+                position: "relative",
                 fontSize: 16,
                 fontWeight: 600,
-                color: C.textMuted,
+                color: "rgba(255,255,255,0.82)",
                 textTransform: "uppercase",
-                letterSpacing: "0.05em",
+                letterSpacing: "0.08em",
               }}
             >
               Total Cost Saved
             </span>
             <span
               style={{
-                fontSize: 140,
+                position: "relative",
+                fontSize: 132,
                 fontWeight: 800,
-                color: C.positive,
+                color: "#ffffff",
                 lineHeight: 1,
                 letterSpacing: "-0.04em",
+                textShadow: "0 4px 24px rgba(0,0,0,0.15)",
               }}
             >
               ${formatCost(costSaved)}
             </span>
             
             {costSaved > 0 && (
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 12 }}>
                 <div style={{
-                  background: "rgba(5, 150, 105, 0.1)",
-                  color: C.positive,
-                  padding: "8px 16px",
-                  borderRadius: 20,
+                  background: "rgba(255,255,255,0.18)",
+                  color: "#ffffff",
+                  padding: "10px 18px",
+                  borderRadius: 22,
                   fontSize: 18,
-                  fontWeight: 600,
+                  fontWeight: 700,
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
+                  border: "1px solid rgba(255,255,255,0.25)",
                 }}>
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -212,28 +277,27 @@ function SavingsCardContent({ data }: { data: SavingsCardData }) {
           </div>
 
           {/* Right: Data Cards */}
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "24px" }}>
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "20px" }}>
             
             {/* Bento Grid */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px" }}>
-              <DataCard label="Tokens Saved" value={fmtNum(tokensSaved)} />
-              <DataCard label="Total Requests" value={fmtNum(totalRequests)} />
-              <DataCard label="KeiRouter Cost" value={`$${formatCost(actualCost)}`} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
+              <DataCard label="Tokens Saved" value={fmtNum(tokensSaved)} accent={cardAccents[0]} />
+              <DataCard label="Total Requests" value={fmtNum(totalRequests)} accent={cardAccents[2]} />
+              <DataCard label="KeiRouter Cost" value={`$${formatCost(actualCost)}`} accent={cardAccents[1]} />
               {costSaved > 0 ? (
-                <DataCard label="Original Cost (Est)" value={`$${formatCost(actualCost + costSaved)}`} muted />
+                <DataCard label="Original Cost (Est)" value={`$${formatCost(actualCost + costSaved)}`} accent={cardAccents[3]} muted />
               ) : (
-                <DataCard label="Original Cost (Est)" value={`$${formatCost(actualCost)}`} muted />
+                <DataCard label="Original Cost (Est)" value={`$${formatCost(actualCost)}`} accent={cardAccents[3]} muted />
               )}
             </div>
 
             {/* Optimizers Strip */}
             <div style={{
-              marginTop: "16px",
               background: C.surface,
               border: `1px solid ${C.borderLight}`,
-              borderRadius: 16,
-              padding: "24px",
-              boxShadow: "0 4px 20px rgba(0,0,0,0.02)"
+              borderRadius: 18,
+              padding: "22px 24px",
+              boxShadow: "0 8px 28px rgba(0,0,0,0.04)"
             }}>
               <span
                 style={{
@@ -243,7 +307,7 @@ function SavingsCardContent({ data }: { data: SavingsCardData }) {
                   color: C.textMuted,
                   textTransform: "uppercase",
                   letterSpacing: "0.1em",
-                  marginBottom: 16,
+                  marginBottom: 14,
                 }}
               >
                 Active Optimizers
@@ -253,16 +317,16 @@ function SavingsCardContent({ data }: { data: SavingsCardData }) {
                   <div
                     key={opt.name}
                     style={{
-                      padding: "8px 16px",
-                      border: `1px solid ${C.borderLight}`,
-                      borderRadius: 8,
-                      background: C.bg,
+                      padding: "9px 16px",
+                      border: `1px solid rgba(5,150,105,0.2)`,
+                      borderRadius: 10,
+                      background: "rgba(5,150,105,0.06)",
                       display: "flex",
                       alignItems: "center",
                       gap: 8,
                     }}
                   >
-                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.accent }} />
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.positive }} />
                     <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{opt.name}</span>
                   </div>
                 )) : (
@@ -280,12 +344,12 @@ function SavingsCardContent({ data }: { data: SavingsCardData }) {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            paddingTop: "32px",
+            paddingTop: "26px",
             marginTop: "auto",
             borderTop: `1px solid ${C.border}`,
           }}
         >
-          <span style={{ fontSize: 14, fontWeight: 500, color: C.textSecondary }}>
+          <span style={{ fontSize: 14, fontWeight: 600, color: C.textSecondary }}>
             keirouter.dev
           </span>
           <span style={{ fontSize: 14, fontWeight: 500, color: C.textMuted }}>
@@ -298,18 +362,30 @@ function SavingsCardContent({ data }: { data: SavingsCardData }) {
   );
 }
 
-function DataCard({ label, value, muted }: { label: string; value: string, muted?: boolean }) {
+function DataCard({ label, value, muted, accent }: { label: string; value: string; muted?: boolean; accent?: string }) {
   return (
     <div style={{ 
+      position: "relative",
+      overflow: "hidden",
       background: C.surface,
       border: `1px solid ${C.borderLight}`,
-      borderRadius: 16,
-      padding: "24px",
+      borderRadius: 18,
+      padding: "22px 24px",
       display: "flex", 
       flexDirection: "column", 
-      gap: "12px",
-      boxShadow: "0 4px 20px rgba(0,0,0,0.02)"
+      gap: "10px",
+      boxShadow: "0 8px 28px rgba(0,0,0,0.04)"
     }}>
+      {/* Accent bar */}
+      <div style={{
+        position: "absolute",
+        top: 0,
+        left: 0,
+        width: 4,
+        height: "100%",
+        background: accent ?? C.positive,
+        opacity: muted ? 0.35 : 1,
+      }} />
       <span
         style={{
           fontSize: 13,
@@ -321,7 +397,7 @@ function DataCard({ label, value, muted }: { label: string; value: string, muted
       </span>
       <span
         style={{
-          fontSize: 28,
+          fontSize: 30,
           fontWeight: 700,
           color: muted ? C.textSecondary : C.text,
           letterSpacing: "-0.02em",

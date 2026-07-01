@@ -1,12 +1,13 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useLayoutEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Activity, DollarSign, Zap, RefreshCw, TrendingUp, Clock, Box, TerminalSquare, ArrowUpDown, ArrowUp, ArrowDown, Search
+  Activity, DollarSign, Zap, RefreshCw, TrendingUp, Clock, Box, TerminalSquare, ArrowUpDown, ArrowUp, ArrowDown, Search,
+  Layers, ChevronRight, Shield, ArrowRight
 } from "lucide-react";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
 } from "recharts";
-import { api, connectUsageStream, type ProviderUsage, type RecentActivity, type ModelUsage, type SeriesPoint } from "../lib/api";
+import { api, connectUsageStream, type ProviderUsage, type RecentActivity, type ModelUsage, type SeriesPoint, type Chain, type Provider } from "../lib/api";
 import { PageHeader } from "../components/Layout";
 import { Spinner, ErrorCard, StatCard } from "../components/ui";
 import { useToast } from "../components/Toast";
@@ -41,6 +42,18 @@ export function UsagePage() {
     staleTime: 12_000,
     refetchInterval: 60_000,
     placeholderData: (previous) => previous,
+  });
+
+  const chains = useQuery({
+    queryKey: ["chains"],
+    queryFn: () => api.listChains(),
+    staleTime: 30_000,
+  });
+
+  const providerCatalog = useQuery({
+    queryKey: ["providers"],
+    queryFn: () => api.providers(),
+    staleTime: 60_000,
   });
 
   useEffect(() => {
@@ -97,12 +110,12 @@ export function UsagePage() {
 
       {insights.isLoading ? <Spinner />
         : insights.isError ? <ErrorCard message="Failed to load usage. Is the backend running?" />
-        : insights.data ? <UsageContent data={insights.data} models={modelUsage.data?.models ?? []} period={period} /> : null}
+        : insights.data ? <UsageContent data={insights.data} models={modelUsage.data?.models ?? []} chains={chains.data?.chains ?? []} providerCatalog={providerCatalog.data?.providers ?? []} period={period} /> : null}
     </>
   );
 }
 
-function UsageContent({ data, models, period }: { data: any; models: ModelUsage[]; period: string }) {
+function UsageContent({ data, models, chains, providerCatalog, period }: { data: any; models: ModelUsage[]; chains: Chain[]; providerCatalog: Provider[]; period: string }) {
   const { summary, savings, providers, recent, series } = data;
 
   return (
@@ -148,9 +161,12 @@ function UsageContent({ data, models, period }: { data: any; models: ModelUsage[
               <Box className="h-4 w-4 text-[var(--text-muted)]" />
               <h3 className="text-sm font-semibold tracking-tight">Routing Topology</h3>
             </div>
+            <span className="text-[11px] font-medium text-[var(--text-muted)] uppercase tracking-wider">
+              {providers.filter((p: ProviderUsage) => p.share_pct > 0).length} providers · {chains.length} chains
+            </span>
           </div>
-          <div className="p-4 flex-1 flex flex-col justify-center relative bg-gradient-to-br from-blue-50/30 via-transparent to-accent-50/30 dark:from-transparent dark:to-transparent">
-            <ProviderTopology providers={providers} />
+          <div className="flex-1 flex flex-col justify-center relative">
+            <RoutingTopology providers={providers} chains={chains} providerCatalog={providerCatalog} />
           </div>
         </div>
 
@@ -158,18 +174,18 @@ function UsageContent({ data, models, period }: { data: any; models: ModelUsage[
         <UsageInsightsCard data={data} />
         
         {/* Activity chart */}
-        <div className="flex flex-col rounded-xl border border-[var(--border)] bg-[var(--bg)] shadow-sm overflow-hidden h-full">
+        <div className="flex flex-col rounded-xl border border-[var(--border)] bg-[var(--bg)] shadow-sm overflow-hidden h-[380px]">
           <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3">
             <h3 className="text-sm font-semibold tracking-tight">Usage Trends</h3>
-            <span className="text-[11px] font-medium text-[var(--text-muted)] uppercase tracking-wider">Tokens over time</span>
+            <span className="text-[11px] font-medium text-[var(--text-muted)] uppercase tracking-wider">Requests over time</span>
           </div>
-          <div className="flex-1 px-2 pb-4 pt-4 min-h-[260px]">
+          <div className="flex-1 px-2 pb-3 pt-4 min-h-0">
             <ActivityChart series={series} />
           </div>
         </div>
 
         {/* Recent Requests */}
-        <div className="flex flex-col rounded-xl border border-[var(--border)] bg-[var(--bg)] shadow-sm overflow-hidden h-full min-h-[300px]">
+        <div className="flex flex-col rounded-xl border border-[var(--border)] bg-[var(--bg)] shadow-sm overflow-hidden h-[380px]">
           <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3 bg-[var(--bg-subtle)] shrink-0">
             <div className="flex items-center gap-2">
               <TerminalSquare className="h-4 w-4 text-[var(--text-muted)]" />
@@ -215,102 +231,286 @@ function UsageContent({ data, models, period }: { data: any; models: ModelUsage[
   );
 }
 
-// ─── Custom SVG Topology ─────────────────────────────────────────────────────
+// ─── Routing Topology ────────────────────────────────────────────────────────
+// Radial hub-and-spoke topology: the Router sits at the center with live
+// providers and configured chains orbiting around it. Active sources (real
+// provider+model traffic) get animated flow links; dormant chains get a faint
+// static hint. Chains expand to reveal their steps in a detail strip below.
 
-function ProviderTopology({ providers }: { providers: ProviderUsage[] }) {
-  const activeProviders = providers.filter((p) => p.share_pct > 0).sort((a,b) => b.share_pct - a.share_pct);
-  
-  if (activeProviders.length === 0) {
+interface TopoSource {
+  key: string;
+  kind: "provider" | "chain";
+  label: string;
+  sublabel: string;
+  color: string;
+  icon?: string;
+  share: number;
+  active: boolean;
+  chain?: Chain;
+}
+
+function RoutingTopology({ providers, chains, providerCatalog }: { providers: ProviderUsage[]; chains: Chain[]; providerCatalog: Provider[] }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const providerColors = useMemo(() => {
+    const m = new Map<string, string>();
+    providerCatalog.forEach((p) => m.set(p.id, p.color));
+    return m;
+  }, [providerCatalog]);
+
+  // Set of provider ids that carried real traffic this period — used to mark a
+  // chain as "active" when one of its steps routed live requests.
+  const activeProviderIds = useMemo(() => {
+    const s = new Set<string>();
+    providers.forEach((p) => { if (p.share_pct > 0) s.add(p.provider); });
+    return s;
+  }, [providers]);
+
+  const sources = useMemo<TopoSource[]>(() => {
+    const provs = providers
+      .filter((p) => p.share_pct > 0)
+      .sort((a, b) => b.share_pct - a.share_pct)
+      .map<TopoSource>((p) => ({
+        key: `provider:${p.provider}`,
+        kind: "provider",
+        label: p.display_name || p.provider,
+        sublabel: `${p.share_pct.toFixed(1)}% traffic`,
+        color: p.color || "var(--color-ink-400)",
+        icon: `/providers/${p.provider}.png`,
+        share: p.share_pct,
+        active: true,
+      }));
+    const chs = chains.map<TopoSource>((c) => ({
+      key: `chain:${c.id}`,
+      kind: "chain",
+      label: c.name,
+      sublabel: `${c.steps.length} step${c.steps.length !== 1 ? "s" : ""} · ${displayStrategy(c.strategy)}`,
+      color: "var(--color-accent-500)",
+      share: 0,
+      // A chain only "connects" when one of its steps used a provider with live
+      // traffic, matching the rule that links appear for real provider+model use.
+      active: c.steps.some((s) => activeProviderIds.has(s.provider)),
+      chain: c,
+    }));
+    return [...provs, ...chs];
+  }, [providers, chains, activeProviderIds]);
+
+  useLayoutEffect(() => {
+    const c = containerRef.current;
+    if (c) setWidth(c.clientWidth);
+  }, []);
+
+  useEffect(() => {
+    const c = containerRef.current;
+    if (!c) return;
+    const ro = new ResizeObserver(() => setWidth(c.clientWidth));
+    ro.observe(c);
+    return () => ro.disconnect();
+  }, []);
+
+  const toggle = (key: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
+  const n = sources.length;
+  // Height scales gently with node count so orbiting nodes have room to breathe.
+  const height = Math.max(280, Math.min(480, 200 + Math.max(0, n - 2) * 46));
+
+  // Radial hub-and-spoke placement: the Router sits dead center and sources
+  // orbit it on an ellipse. Starting the sweep at 180° puts the first node on
+  // the left, so 1–2 nodes read as a clean left/right split while larger counts
+  // wrap fully around the hub.
+  const placed = useMemo(() => {
+    const w = width || 600;
+    const cx = w / 2;
+    const cy = height / 2;
+    const rx = Math.max(130, Math.min(w * 0.34, cx - 108));
+    const ry = Math.max(84, cy - 62);
+    return sources.map((s, i) => {
+      const theta = Math.PI + (i * 2 * Math.PI) / Math.max(1, n);
+      return { ...s, x: cx + rx * Math.cos(theta), y: cy + ry * Math.sin(theta) };
+    });
+  }, [sources, width, height, n]);
+
+  const cx = (width || 600) / 2;
+  const cy = height / 2;
+
+  if (sources.length === 0) {
     return (
-      <div className="flex h-[240px] flex-col items-center justify-center gap-3 bg-[var(--bg)] rounded-lg border border-dashed border-[var(--border)]">
+      <div className="m-4 flex h-[200px] flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-[var(--border)] bg-[var(--bg-subtle)]">
         <TrendingUp className="h-6 w-6 text-[var(--text-muted)] opacity-30" />
-        <p className="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wider">No routing activity</p>
+        <p className="text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]">No routing activity</p>
       </div>
     );
   }
 
-  // Dynamic SVG sizing
-  const width = 600;
-  const rowHeight = 60;
-  const height = Math.max(260, activeProviders.length * rowHeight + 80);
-  const routerX = width - 140;
-  const routerY = height / 2;
+  const expandedChains = placed.filter((s) => s.kind === "chain" && expanded.has(s.key) && s.chain);
 
   return (
-    <div className="relative w-full overflow-hidden flex justify-center items-center py-4 bg-[var(--bg-subtle)]">
+    <div className="relative p-4">
       <style>{`
-        @keyframes flowDash {
-          from { stroke-dashoffset: 24; }
-          to { stroke-dashoffset: 0; }
-        }
-        .animate-flow {
-          animation: flowDash 1s linear infinite;
-        }
+        @keyframes topoFlow { to { stroke-dashoffset: -24; } }
+        .topo-flow { animation: topoFlow 1s linear infinite; }
       `}</style>
-      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" className="w-full h-auto max-w-full drop-shadow-sm">
-        
-        {/* Connection Paths */}
-        {activeProviders.map((p, i) => {
-          const providerX = 160;
-          const providerY = (height / (activeProviders.length + 1)) * (i + 1);
-          const color = p.color || "var(--color-ink-400)";
-          const isHigh = p.share_pct > 20;
-          
-          return (
-            <g key={`path-${p.provider}`}>
-              {/* Background faint path */}
-              <path
-                d={`M ${providerX} ${providerY} C ${(providerX + routerX) / 2} ${providerY}, ${(providerX + routerX) / 2} ${routerY}, ${routerX - 60} ${routerY}`}
-                fill="none"
-                stroke={color}
-                strokeWidth={isHigh ? 3 : 1.5}
-                strokeOpacity={isHigh ? 0.3 : 0.15}
-                strokeLinecap="round"
-              />
-              {/* Animated dashed path overlay */}
-              <path
-                d={`M ${providerX} ${providerY} C ${(providerX + routerX) / 2} ${providerY}, ${(providerX + routerX) / 2} ${routerY}, ${routerX - 60} ${routerY}`}
-                fill="none"
-                stroke={color}
-                strokeWidth={isHigh ? 3 : 1.5}
-                className="animate-flow"
-                strokeDasharray="4 8"
-                strokeLinecap="round"
-                strokeOpacity={isHigh ? 0.9 : 0.6}
-              />
-            </g>
-          );
-        })}
 
-        {/* Provider Nodes */}
-        {activeProviders.map((p, i) => {
-          const providerX = 20;
-          const providerY = (height / (activeProviders.length + 1)) * (i + 1);
-          const color = p.color || "var(--color-ink-400)";
-          
-          return (
-            <g key={`node-${p.provider}`} transform={`translate(${providerX}, ${providerY - 20})`}>
-              <rect width="140" height="40" rx="6" fill="var(--bg-elevated)" stroke="var(--border)" strokeWidth="1" className="drop-shadow-sm" />
-              {/* Color indicator bar */}
-              <rect x="0" y="0" width="4" height="40" rx="2" fill={color} />
-              
-              <text x="14" y="18" className="text-xs font-semibold fill-[var(--text)]">{p.display_name.slice(0,16)}</text>
-              <text x="14" y="32" className="text-[9px] font-medium uppercase tracking-wider fill-[var(--text-muted)]">{p.share_pct.toFixed(1)}% traffic</text>
-            </g>
-          );
-        })}
+      <div ref={containerRef} className="relative w-full" style={{ height }}>
+        {/* Connector layer */}
+        {width > 0 && (
+          <svg className="pointer-events-none absolute inset-0" width={width} height={height} viewBox={`0 0 ${width} ${height}`} fill="none">
+            {/* Hub rings for a subtle radial anchor */}
+            <circle cx={cx} cy={cy} r={44} stroke="var(--border)" strokeWidth={1} strokeOpacity={0.5} />
+            <circle cx={cx} cy={cy} r={70} stroke="var(--border)" strokeWidth={1} strokeDasharray="2 6" strokeOpacity={0.35} />
+            {placed.map((s) => {
+              const d = `M ${s.x} ${s.y} L ${cx} ${cy}`;
+              const high = s.active && (s.kind === "chain" || s.share > 20);
+              return s.active ? (
+                <g key={s.key}>
+                  <path d={d} stroke={s.color} strokeWidth={high ? 2.5 : 1.5} strokeOpacity={high ? 0.25 : 0.15} strokeLinecap="round" />
+                  <path d={d} stroke={s.color} strokeWidth={high ? 2.5 : 1.5} strokeDasharray="4 8" strokeLinecap="round" strokeOpacity={high ? 0.9 : 0.55} className="topo-flow" />
+                </g>
+              ) : (
+                // Dormant chain / no live traffic — subtle static hint, no flow.
+                <path key={s.key} d={d} stroke="var(--text-muted)" strokeWidth={1} strokeDasharray="1 6" strokeLinecap="round" strokeOpacity={0.25} />
+              );
+            })}
+          </svg>
+        )}
 
-        {/* Router Node (Destination) */}
-        <g transform={`translate(${routerX - 60}, ${routerY - 24})`}>
-          <rect width="120" height="48" rx="24" fill="var(--bg-elevated)" stroke="var(--border)" strokeWidth="1.5" className="drop-shadow-md" />
-          <circle cx="24" cy="24" r="14" fill="var(--bg-subtle)" stroke="var(--border)" strokeWidth="1" />
-          <image href="/keirouter-favicon.png" x="16" y="16" width="16" height="16" />
-          <text x="46" y="28" className="text-sm font-bold fill-[var(--text)] tracking-tight">Router</text>
-        </g>
-      </svg>
+        {/* Router hub (center) */}
+        <div
+          className="absolute z-20 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-1 rounded-2xl border border-[var(--border)] bg-[var(--bg-elevated)] px-4 py-3 shadow-lg"
+          style={{ left: cx, top: cy }}
+        >
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--bg-subtle)] ring-1 ring-[var(--border)]">
+            <img src="/keirouter-favicon.png" alt="Router" className="h-5 w-5" />
+          </div>
+          <div className="text-center">
+            <div className="text-[13px] font-bold leading-tight tracking-tight text-[var(--text)]">Router</div>
+            <div className="text-[9px] font-medium uppercase tracking-wider text-[var(--text-muted)]">{n} route{n !== 1 ? "s" : ""}</div>
+          </div>
+        </div>
+
+        {/* Source nodes (orbit) */}
+        {width > 0 && placed.map((s) => (
+          <div key={s.key} className="absolute z-10 -translate-x-1/2 -translate-y-1/2" style={{ left: s.x, top: s.y }}>
+            <RadialNode source={s} expanded={expanded.has(s.key)} onToggle={() => toggle(s.key)} />
+          </div>
+        ))}
+      </div>
+
+      {/* Expanded chain details (below the orbit so the layout stays stable) */}
+      {expandedChains.length > 0 && (
+        <div className="mt-3 space-y-2 border-t border-[var(--border)] pt-3">
+          {expandedChains.map((s) => (
+            <ChainDetail key={s.key} chain={s.chain!} providerColors={providerColors} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
+
+function RadialNode({ source, expanded, onToggle }: { source: TopoSource; expanded: boolean; onToggle: () => void }) {
+  const isChain = source.kind === "chain";
+  const hasFallback = !!(source.chain?.fallback_provider && source.chain?.fallback_model);
+  return (
+    <div
+      role={isChain ? "button" : undefined}
+      onClick={isChain ? onToggle : undefined}
+      className={`flex w-[190px] items-center gap-2 rounded-xl border bg-[var(--bg-elevated)] px-2.5 py-2 shadow-sm transition-all hover:border-[var(--text-muted)] hover:shadow-md ${
+        source.active ? "border-[var(--border)]" : "border-dashed border-[var(--border)] opacity-80"
+      } ${isChain ? "cursor-pointer select-none" : ""} ${expanded ? "ring-2 ring-accent-500/40" : ""}`}
+    >
+      {isChain ? (
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-500/15 text-accent-600 dark:text-accent-400">
+          <Layers className="h-3 w-3" />
+        </span>
+      ) : (
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-[var(--bg-subtle)] ring-1 ring-[var(--border)]" style={{ boxShadow: `inset 3px 0 0 ${source.color}` }}>
+          {source.icon && <img src={source.icon} alt="" className="h-3.5 w-3.5 object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />}
+        </span>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1">
+          {isChain && <span className="font-mono text-[9px] text-[var(--text-muted)]">chain:</span>}
+          <span className="truncate text-xs font-semibold text-[var(--text)]">{source.label}</span>
+        </div>
+        <span className="block truncate text-[9px] font-medium uppercase tracking-wider text-[var(--text-muted)]">{source.sublabel}</span>
+      </div>
+      {isChain ? (
+        <>
+          {hasFallback && (
+            <span className="flex h-4 items-center rounded bg-amber-500/10 px-1 text-amber-600 dark:text-amber-400">
+              <Shield className="h-2.5 w-2.5" />
+            </span>
+          )}
+          <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-[var(--text-muted)] transition-transform ${expanded ? "rotate-90" : ""}`} />
+        </>
+      ) : (
+        <div className="h-1.5 w-10 shrink-0 overflow-hidden rounded-full bg-[var(--bg-subtle)]">
+          <div className="h-full rounded-full" style={{ width: `${Math.max(4, source.share)}%`, backgroundColor: source.color }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChainDetail({ chain, providerColors }: { chain: Chain; providerColors: Map<string, string> }) {
+  const hasFallback = !!(chain.fallback_provider && chain.fallback_model);
+  return (
+    <div className="rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)]/50 px-3 py-2.5">
+      <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+        <Layers className="h-3 w-3 text-accent-500" />
+        <span className="font-mono normal-case text-[var(--text)]">chain:{chain.name}</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-2">
+        {chain.steps.map((step, i) => {
+          const color = providerColors.get(step.provider) || "var(--border)";
+          return (
+            <div key={i} className="flex items-center gap-1.5">
+              {i > 0 && <ArrowRight className="h-3 w-3 text-[var(--text-muted)] opacity-50" strokeWidth={2} />}
+              <div className="flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--bg)] py-1 pl-1 pr-2 shadow-sm">
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded" style={{ backgroundColor: `${color}22` }}>
+                  <img src={`/providers/${step.provider}.png`} alt="" className="h-3 w-3 object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                </span>
+                <div className="flex min-w-0 flex-col">
+                  <span className="truncate font-mono text-[10px] font-medium leading-tight text-[var(--text)]">{step.model}</span>
+                  <span className="truncate text-[8px] uppercase tracking-wider text-[var(--text-muted)]">{step.provider}</span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {hasFallback && (
+          <div className="flex items-center gap-1.5">
+            <ArrowRight className="h-3 w-3 text-amber-500/60" strokeWidth={2} />
+            <div className="flex items-center gap-1.5 rounded-md border border-amber-300/40 bg-amber-500/5 py-1 pl-1 pr-2 shadow-sm dark:border-amber-500/20 dark:bg-amber-500/10">
+              <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded bg-amber-500/10 text-amber-500">
+                <Shield className="h-2.5 w-2.5" />
+              </span>
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate font-mono text-[10px] font-medium leading-tight text-amber-700 dark:text-amber-400">{chain.fallback_model}</span>
+                <span className="truncate text-[8px] uppercase tracking-wider text-amber-600/70 dark:text-amber-400/70">fallback</span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const isRoundRobinStrategy = (strategy: string) =>
+  strategy === "round_robin" || strategy === "round-robin";
+
+const displayStrategy = (strategy: string) =>
+  isRoundRobinStrategy(strategy) ? "round-robin" : strategy;
 
 // ─── Insights Component ───────────────────────────────────────────────────────
 

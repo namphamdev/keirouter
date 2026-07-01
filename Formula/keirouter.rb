@@ -1,27 +1,27 @@
-# Auto-updated by release.yml on tag v0.1.21. Do not edit manually.
+# Auto-updated by release.yml on tag v0.1.22. Do not edit manually.
 class Keirouter < Formula
   desc "AI API router — unified gateway for 20+ LLM providers with fallback, caching, and dashboard"
   homepage "https://github.com/mydisha/keirouter"
-  version "0.1.21"
+  version "0.1.22"
   license "MIT"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/mydisha/keirouter/releases/download/v0.1.21/keirouter_v0.1.21_darwin_arm64.tar.gz"
-      sha256 "34411e980cdbac92536c5e26d6ec63a1469980996909bd7f6fbb92f76919d6b1"
+      url "https://github.com/mydisha/keirouter/releases/download/v0.1.22/keirouter_v0.1.22_darwin_arm64.tar.gz"
+      sha256 "a6efb21b8af086d91118cd37ea9661730c12410c519399bf0f63e485c05d76a8"
     else
-      url "https://github.com/mydisha/keirouter/releases/download/v0.1.21/keirouter_v0.1.21_darwin_amd64.tar.gz"
-      sha256 "20d75339fd4eee77f71cd0acb66f0f44a5f9d48ac36287d601aa9a2dad6cd9e8"
+      url "https://github.com/mydisha/keirouter/releases/download/v0.1.22/keirouter_v0.1.22_darwin_amd64.tar.gz"
+      sha256 "a7e6a8a1ca9c6efeaf6f77153184b6ea716d093eb86d5479aa77b498c52b40ce"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/mydisha/keirouter/releases/download/v0.1.21/keirouter_v0.1.21_linux_arm64.tar.gz"
-      sha256 "456fafb08519f7796feed3c38057fd95dc9edb985103d93fb475eec952953ecf"
+      url "https://github.com/mydisha/keirouter/releases/download/v0.1.22/keirouter_v0.1.22_linux_arm64.tar.gz"
+      sha256 "9d62547770166cb02a289d059b90510f3f3a44915a4f8d2c55e2dc58a9be9837"
     else
-      url "https://github.com/mydisha/keirouter/releases/download/v0.1.21/keirouter_v0.1.21_linux_amd64.tar.gz"
-      sha256 "8a97d9f423edc4c9b802946fa538a039356e59e137b0e14f21c0eb8e9a8c0571"
+      url "https://github.com/mydisha/keirouter/releases/download/v0.1.22/keirouter_v0.1.22_linux_amd64.tar.gz"
+      sha256 "0ad864cc0830345e6a9d68a4b1e48b9a844114b4ce59cd44019060a18ace8a4d"
     end
   end
 
