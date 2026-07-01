@@ -49,7 +49,12 @@ func (c *Anthropic) headers(creds core.Credentials) map[string]string {
 			h = mergeHeaders(h, claudeCLISpoofHeaders())
 		}
 	case creds.APIKey != "":
-		h["x-api-key"] = creds.APIKey
+		// Custom base URLs (proxies, NP gateways) often expect Bearer like OpenAI-compatible stacks.
+		if strings.TrimSpace(creds.BaseURL) != "" {
+			h["Authorization"] = bearer(creds.APIKey)
+		} else {
+			h["x-api-key"] = creds.APIKey
+		}
 	}
 	return mergeHeaders(h, creds.Headers)
 }

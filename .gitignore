@@ -50,3 +50,4 @@ data/
 !.vscode/extensions.json
 *.swp
 node_modules/
+codedb.snapshot
