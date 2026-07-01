@@ -32,6 +32,10 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Post("/providers/{id}/routing", s.adminUpdateProviderRouting)
 	r.Patch("/providers/{id}/routing", s.adminUpdateProviderRouting)
 
+	// Per-provider custom quota check script (JavaScript, executed server-side).
+	r.Get("/providers/{id}/quota-script", s.adminGetQuotaScript)
+	r.Post("/providers/{id}/quota-script", s.adminUpdateQuotaScript)
+
 	r.Get("/keys", s.adminListKeys)
 	r.Post("/keys", s.adminCreateKey)
 	r.Patch("/keys/{id}", s.adminUpdateKey)
@@ -44,6 +48,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Delete("/accounts/{id}", s.adminDeleteAccount)
 	r.Post("/accounts/{id}/test", s.adminTestAccount)
 	r.Get("/accounts/{id}/quota", s.adminAccountQuota)
+	r.Post("/accounts/{id}/check-quota", s.adminCheckQuotaScript)
 
 	r.Get("/chains", s.adminListChains)
 	r.Post("/chains", s.adminCreateChain)

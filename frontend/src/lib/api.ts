@@ -1041,6 +1041,14 @@ export const api = {
   testProxyPool: (id: string) =>
     request<{ status: string; last_tested?: string }>("POST", `/proxy-pools/${id}/test`),
 
+  // Per-provider quota check script (JavaScript executed server-side).
+  getQuotaScript: (providerId: string) =>
+    request<{ provider: string; script: string }>("GET", `/providers/${encodeURIComponent(providerId)}/quota-script`),
+  updateQuotaScript: (providerId: string, script: string) =>
+    request<{ provider: string; script: string }>("POST", `/providers/${encodeURIComponent(providerId)}/quota-script`, { script }),
+  checkQuotaScript: (accountId: string) =>
+    request<{ ok: boolean; output?: unknown; error?: string; elapsed_ms: number }>("POST", `/accounts/${encodeURIComponent(accountId)}/check-quota`),
+
   // OAuth provider connections.
   oauthProviders: () => request<{ providers: OAuthProvider[] }>("GET", "/oauth/providers"),
   oauthAuthorize: (provider: string, redirectUri: string) =>

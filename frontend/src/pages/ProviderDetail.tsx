@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Trash2, Plug, X, Zap, ArrowUp, ArrowDown, CheckCircle, ToggleLeft, ToggleRight, Search, Route, AlertCircle, AlertTriangle, RefreshCw } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Plug, X, Zap, ArrowUp, ArrowDown, CheckCircle, ToggleLeft, ToggleRight, Search, Route, AlertCircle, AlertTriangle, RefreshCw, Terminal, Play } from "lucide-react";
 import { api, type DeviceCode, type OAuthProvider, type Provider, type Account, type ProxyPool, type UpstreamQuota, type ProviderRoutingSettings } from "../lib/api";
 import { KiroConnectModal } from "../components/KiroConnectModal";
 import { QoderConnectModal } from "../components/QoderConnectModal";
@@ -515,6 +515,9 @@ export function ProviderDetailPage() {
           )}
         </Card>
 
+        {/* Quota Check Script */}
+        <QuotaScriptCard providerId={id!} />
+
         {/* Available Models */}
         <Card>
           <CardHeader
@@ -892,6 +895,23 @@ function AccountRow({
     enabled: !a.disabled,
   });
 
+  // Custom quota script check state.
+  const [quotaScriptChecking, setQuotaScriptChecking] = useState(false);
+  const [quotaScriptOutput, setQuotaScriptOutput] = useState<{ ok: boolean; output?: unknown; error?: string; elapsed_ms: number } | null>(null);
+
+  const runQuotaScript = async () => {
+    setQuotaScriptChecking(true);
+    setQuotaScriptOutput(null);
+    try {
+      const res = await api.checkQuotaScript(a.id);
+      setQuotaScriptOutput(res);
+    } catch (e) {
+      setQuotaScriptOutput({ ok: false, error: (e as Error).message, elapsed_ms: 0 });
+    } finally {
+      setQuotaScriptChecking(false);
+    }
+  };
+
   const hasQuota = quota.data?.supported && quota.data?.quotas && quota.data.quotas.length > 0;
   const boundPool = pools.find((p) => p.id === a.proxy_pool_id);
 
@@ -1019,9 +1039,52 @@ function AccountRow({
             </span>
           )}
         </div>
+
+        {/* Check Quota button (executes provider's custom script) */}
+        <Button
+          variant="ghost"
+          className="h-6 px-2 text-[11px]"
+          onClick={runQuotaScript}
+          disabled={quotaScriptChecking}
+        >
+          <Play className={`h-3 w-3 ${quotaScriptChecking ? "animate-pulse" : ""}`} />
+          {quotaScriptChecking ? "Checking..." : "Check Quota"}
+        </Button>
       </div>
 
-      {/* Quota / credit info */}
+      {/* Quota script output */}
+      {quotaScriptOutput && (
+        <div className={`mt-2.5 rounded-lg border px-3 py-2.5 ${quotaScriptOutput.ok ? "border-[var(--border)] bg-[var(--bg-subtle)]" : "border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-900/15"}`}>
+          <div className="mb-1.5 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              {quotaScriptOutput.ok ? (
+                <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />
+              ) : (
+                <AlertCircle className="h-3.5 w-3.5 text-red-500" />
+              )}
+              <span className="text-xs font-medium">
+                Quota Check {quotaScriptOutput.ok ? "Result" : "Failed"}
+              </span>
+              <span className="text-[10px] text-[var(--text-muted)]">{quotaScriptOutput.elapsed_ms}ms</span>
+            </div>
+            <button
+              onClick={() => setQuotaScriptOutput(null)}
+              className="text-[var(--text-muted)] hover:text-[var(--text)]"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          {quotaScriptOutput.error ? (
+            <p className="break-words text-[11px] leading-relaxed text-red-600/90 dark:text-red-400/90">
+              {quotaScriptOutput.error}
+            </p>
+          ) : (
+            <pre className="overflow-x-auto rounded bg-[var(--bg)] p-2 font-mono text-[11px] leading-relaxed text-[var(--text)]">
+              {JSON.stringify(quotaScriptOutput.output, null, 2)}
+            </pre>
+          )}
+        </div>
+      )}
       {hasQuota && quota.data && (
         <div className="mt-2.5 rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] px-3 py-2.5">
           <div className="mb-2 flex items-center gap-2">
@@ -1080,6 +1143,71 @@ function QuotaBarInline({ quota: q }: { quota: UpstreamQuota }) {
         <div className={`h-full rounded-full ${tone}`} style={{ width: `${Math.max(2, pct)}%` }} />
       </div>
     </div>
+  );
+}
+
+function QuotaScriptCard({ providerId }: { providerId: string }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [script, setScript] = useState("");
+  const [loaded, setLoaded] = useState(false);
+
+  const scriptQuery = useQuery({
+    queryKey: ["quota-script", providerId],
+    queryFn: () => api.getQuotaScript(providerId),
+    staleTime: 0,
+  });
+
+  useEffect(() => {
+    if (scriptQuery.data && !loaded) {
+      setScript(scriptQuery.data.script || "");
+      setLoaded(true);
+    }
+  }, [scriptQuery.data, loaded]);
+
+  const save = useMutation({
+    mutationFn: () => api.updateQuotaScript(providerId, script),
+    onSuccess: () => {
+      qc.setQueryData(["quota-script", providerId], { provider: providerId, script });
+      toast.success("Quota script saved", "JavaScript will run when checking quota for accounts.");
+    },
+    onError: (e: Error) => toast.error("Save failed", e.message),
+  });
+
+  return (
+    <Card>
+      <CardHeader
+        title="Quota Check Script"
+        description="JavaScript executed server-side to check each account's quota. Use fetch() and the API_KEY placeholder."
+        action={
+          <Button
+            variant="ghost"
+            className="h-8 px-3 text-xs"
+            onClick={() => save.mutate()}
+            disabled={save.isPending || !loaded}
+          >
+            <CheckCircle className={`h-3.5 w-3.5 ${save.isPending ? "animate-pulse" : ""}`} />
+            {save.isPending ? "Saving..." : "Save script"}
+          </Button>
+        }
+      />
+      <div className="border-t border-[var(--border)] px-6 py-4 space-y-3">
+        <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+          <Terminal className="h-3.5 w-3.5" />
+          <span>
+            The placeholder <code className="rounded bg-[var(--bg-subtle)] px-1 py-0.5 font-mono text-accent-600">API_KEY</code> is replaced with each account's decrypted key at runtime.
+            Use <code className="rounded bg-[var(--bg-subtle)] px-1 py-0.5 font-mono">await fetch(url, options)</code> for HTTP requests, then <code className="rounded bg-[var(--bg-subtle)] px-1 py-0.5 font-mono">return</code> the result.
+          </span>
+        </div>
+        <textarea
+          value={script}
+          onChange={(e) => setScript(e.target.value)}
+          placeholder={`// Example: check quota for an account\nconst res = await fetch("https://api.provider.com/v1/quota", {\n  headers: { "Authorization": "Bearer " + API_KEY }\n});\nconst data = await res.json();\nreturn data;`}
+          className="w-full h-64 rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3 font-mono text-xs text-[var(--text)] outline-none focus:border-[var(--color-accent-500)] focus:ring-1 focus:ring-[var(--color-accent-500)]/30 resize-y"
+          spellCheck={false}
+        />
+      </div>
+    </Card>
   );
 }
 
