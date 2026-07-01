@@ -1062,7 +1062,7 @@ function AccountRow({
         </div>
       </div>
 
-      {/* Settings row: Priority + Proxy Pool */}
+      {/* Settings row: Priority + Proxy Pool + Check Quota */}
       <div className="mt-2 flex flex-wrap items-center gap-3">
         {/* Priority */}
         <div className="flex items-center gap-1.5">
@@ -1120,10 +1120,8 @@ function AccountRow({
             </span>
           )}
         </div>
-      </div>
 
-      {/* Check Quota button (executes provider's custom script) */}
-      <div className="flex items-center gap-2">
+        {/* Check Quota button (executes provider's custom script) */}
         <Button
           variant="ghost"
           className="h-6 px-2 text-[11px]"
