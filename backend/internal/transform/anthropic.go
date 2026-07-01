@@ -17,15 +17,16 @@ func (AnthropicCodec) Dialect() core.Dialect { return core.DialectAnthropic }
 // ---- wire types -------------------------------------------------------------
 
 type antRequest struct {
-	Model     string          `json:"model"`
-	System    json.RawMessage `json:"system,omitempty"`
-	Messages  []antMessage    `json:"messages"`
-	Tools     []antTool       `json:"tools,omitempty"`
-	MaxTokens int             `json:"max_tokens"`
-	Stream    bool            `json:"stream,omitempty"`
-	Temp      *float64        `json:"temperature,omitempty"`
-	TopP      *float64        `json:"top_p,omitempty"`
-	Stop      []string        `json:"stop_sequences,omitempty"`
+	Model      string          `json:"model"`
+	System     json.RawMessage `json:"system,omitempty"`
+	Messages   []antMessage    `json:"messages"`
+	Tools      []antTool       `json:"tools,omitempty"`
+	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
+	MaxTokens  int             `json:"max_tokens"`
+	Stream     bool            `json:"stream,omitempty"`
+	Temp       *float64        `json:"temperature,omitempty"`
+	TopP       *float64        `json:"top_p,omitempty"`
+	Stop       []string        `json:"stop_sequences,omitempty"`
 }
 
 type antMessage struct {
@@ -86,6 +87,7 @@ func (AnthropicCodec) ParseRequest(body []byte) (*core.ChatRequest, error) {
 			Parameters:  t.InputSchema,
 		})
 	}
+	req.ToolChoice = claudeToolChoiceToOpenAI(raw.ToolChoice)
 
 	for _, m := range raw.Messages {
 		req.Messages = append(req.Messages, parseAntMessage(m))
@@ -212,6 +214,10 @@ func (AnthropicCodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
 		TopP:      req.TopP,
 		Stop:      req.Stop,
 	}
+	// claude-opus-4 deprecated temperature and returns a 400 when it is present.
+	if modelRejectsTemperature(req.Model) {
+		out.Temp = nil
+	}
 	if req.System != "" {
 		sys, _ := json.Marshal(req.System)
 		out.System = sys
@@ -223,6 +229,16 @@ func (AnthropicCodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
 			Description: t.Description,
 			InputSchema: t.Parameters,
 		})
+	}
+
+	// Render tool_choice only when tools are declared; Anthropic rejects a
+	// tool_choice with an empty tools array.
+	if len(out.Tools) > 0 {
+		if tc := openAIToolChoiceToClaude(req.ToolChoice); tc != nil {
+			if raw, err := json.Marshal(tc); err == nil {
+				out.ToolChoice = raw
+			}
+		}
 	}
 
 	// Anthropic requires alternating user/assistant roles and groups tool
@@ -332,9 +348,9 @@ type antResponse struct {
 	Content    []antBlock `json:"content"`
 	StopReason string     `json:"stop_reason"`
 	Usage      struct {
-		InputTokens        int `json:"input_tokens"`
-		OutputTokens       int `json:"output_tokens"`
-		CacheReadInputTokens  int `json:"cache_read_input_tokens"`
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	} `json:"usage"`
 }
@@ -366,11 +382,11 @@ func (AnthropicCodec) ParseResponse(body []byte, model string) (*core.ChatRespon
 		Message:      msg,
 		FinishReason: mapAntStop(raw.StopReason),
 		Usage: core.Usage{
-			PromptTokens:      raw.Usage.InputTokens,
-			CompletionTokens:  raw.Usage.OutputTokens,
-			TotalTokens:       raw.Usage.InputTokens + raw.Usage.OutputTokens,
-			CachedTokens:      raw.Usage.CacheReadInputTokens,
-			CacheWriteTokens:  raw.Usage.CacheCreationInputTokens,
+			PromptTokens:     raw.Usage.InputTokens,
+			CompletionTokens: raw.Usage.OutputTokens,
+			TotalTokens:      raw.Usage.InputTokens + raw.Usage.OutputTokens,
+			CachedTokens:     raw.Usage.CacheReadInputTokens,
+			CacheWriteTokens: raw.Usage.CacheCreationInputTokens,
 		},
 	}, nil
 }

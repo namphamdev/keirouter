@@ -46,7 +46,7 @@ func (c *WebConnector) baseURL(creds core.Credentials) string {
 	return c.defaultBase
 }
 
-// Validate probes a lightweight web-search/fetch endpoint. As in 9router, any
+// Validate probes a lightweight web-search/fetch endpoint. Any
 // reached non-auth response means the credential and provider configuration are
 // accepted; 401/403 still fail.
 func (c *WebConnector) Validate(ctx context.Context, creds core.Credentials) error {

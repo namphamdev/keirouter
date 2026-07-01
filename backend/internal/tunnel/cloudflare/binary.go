@@ -1,5 +1,4 @@
-// Package cloudflare manages the cloudflared binary and quick tunnel lifecycle,
-// ported from 9router's src/lib/tunnel/cloudflare/.
+// Package cloudflare manages the cloudflared binary and quick tunnel lifecycle.
 package cloudflare
 
 import (

@@ -1,5 +1,5 @@
-// Package tunnel implements secure tunnel management for KeiRouter, porting
-// the Cloudflare quick tunnel and Tailscale funnel features from 9router.
+// Package tunnel implements secure tunnel management for KeiRouter, providing
+// the Cloudflare quick tunnel and Tailscale funnel features.
 package tunnel
 
 import (

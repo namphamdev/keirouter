@@ -45,13 +45,13 @@ type TailscaleStatus struct {
 
 // EnableResult holds the result of enabling Tailscale funnel.
 type EnableResult struct {
-	Success         bool   `json:"success"`
-	TunnelURL       string `json:"tunnelUrl,omitempty"`
-	NeedsLogin      bool   `json:"needsLogin,omitempty"`
-	AuthURL         string `json:"authUrl,omitempty"`
-	FunnelNotEnabled bool  `json:"funnelNotEnabled,omitempty"`
-	EnableURL       string `json:"enableUrl,omitempty"`
-	Error           string `json:"error,omitempty"`
+	Success          bool   `json:"success"`
+	TunnelURL        string `json:"tunnelUrl,omitempty"`
+	NeedsLogin       bool   `json:"needsLogin,omitempty"`
+	AuthURL          string `json:"authUrl,omitempty"`
+	FunnelNotEnabled bool   `json:"funnelNotEnabled,omitempty"`
+	EnableURL        string `json:"enableUrl,omitempty"`
+	Error            string `json:"error,omitempty"`
 }
 
 // CheckResult holds the result of checking Tailscale installation.
@@ -76,7 +76,7 @@ func (m *Manager) NeedSudoPassword() bool {
 	return true
 }
 
-// Enable starts the Tailscale funnel. The flow mirrors 9router:
+// Enable starts the Tailscale funnel. The flow:
 // 1. Validate sudo password (if TUN mode needed)
 // 2. Install tailscale if not installed (brew/pkg/none)
 // 3. Start daemon with sudo password

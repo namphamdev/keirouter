@@ -29,7 +29,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/vault"
 )
 
-// Exponential backoff constants (mirrors 9router's accountFallback logic).
+// Exponential backoff constants.
 const (
 	// BackoffBase is the base cooldown duration at backoff level 1.
 	BackoffBase = 2 * time.Second
@@ -220,7 +220,7 @@ func (d *Dispatcher) PlanWith(ctx context.Context, tenantID string, targets []Ta
 	for _, target := range ordered {
 		// Capability guard: never fall back to a model that cannot honor the
 		// request. This prevents silent quality downgrades.
-		if !capability.Supports(target.Model, required) {
+		if !capability.SupportsProvider(target.Provider, target.Model, required) {
 			lastReason = fmt.Sprintf("model %q lacks required capabilities", target.Model)
 			continue
 		}

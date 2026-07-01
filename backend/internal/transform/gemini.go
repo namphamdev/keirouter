@@ -1,8 +1,10 @@
 package transform
 
 import (
-	json "github.com/mydisha/keirouter/backend/internal/fastjson"
+	"bytes"
 	"fmt"
+
+	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 )
@@ -21,6 +23,7 @@ type gemRequest struct {
 	Contents          []gemContent    `json:"contents"`
 	SystemInstruction *gemContent     `json:"systemInstruction,omitempty"`
 	Tools             []gemTool       `json:"tools,omitempty"`
+	ToolConfig        json.RawMessage `json:"toolConfig,omitempty"`
 	GenerationConfig  *gemGenConfig   `json:"generationConfig,omitempty"`
 }
 
@@ -104,15 +107,19 @@ func parseGemContent(c gemContent) core.Message {
 	for _, p := range c.Parts {
 		switch {
 		case p.FunctionCall != nil:
+			// Gemini has no native call id; derive a deterministic one from the
+			// function name so the matching functionResponse maps to the same
+			// tool-call id (downstream dialects require the pairing).
 			msg.Content = append(msg.Content, core.ContentPart{
 				Type:     core.PartToolCall,
-				ToolCall: &core.ToolCall{Name: p.FunctionCall.Name, Arguments: p.FunctionCall.Args},
+				ToolCall: &core.ToolCall{ID: geminiCallID(p.FunctionCall.Name), Name: p.FunctionCall.Name, Arguments: p.FunctionCall.Args},
 			})
 		case p.FunctionResponse != nil:
+			// Pair the result back to the derived call id by name.
 			msg.Content = append(msg.Content, core.ContentPart{
 				Type: core.PartToolResult,
 				ToolResult: &core.ToolResult{
-					CallID:  p.FunctionResponse.Name,
+					CallID:  geminiCallID(p.FunctionResponse.Name),
 					Content: string(p.FunctionResponse.Response),
 				},
 			})
@@ -150,20 +157,62 @@ func (GeminiCodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
 			StopSequences:   req.Stop,
 		}
 	}
+	// Resolve a sanitized, collision-free name per declared tool. The same
+	// mapping is reused when rendering functionCall parts so an assistant tool
+	// call always references the exact name its declaration was sent under, and
+	// when rendering functionResponse parts so the result name matches the call
+	// (Gemini rejects a functionResponse whose name has no matching call).
+	callIDToName := buildGeminiCallNameMap(req.Messages)
 	if len(req.Tools) > 0 {
 		var decls []gemFuncDecl
 		for _, t := range req.Tools {
-			decls = append(decls, gemFuncDecl{Name: t.Name, Description: t.Description, Parameters: t.Parameters})
+			decls = append(decls, gemFuncDecl{
+				Name:        sanitizeGeminiName(t.Name),
+				Description: t.Description,
+				Parameters:  cleanGeminiToolSchema(t.Parameters),
+			})
 		}
 		out.Tools = []gemTool{{FunctionDeclarations: decls}}
+
+		// Render tool_choice as a functionCallingConfig only when tools are
+		// declared; an allowed-name mode with no tools is rejected.
+		if tc := openAIToolChoiceToGemini(req.ToolChoice, sanitizeGeminiName); tc != nil {
+			if raw, err := json.Marshal(tc); err == nil {
+				out.ToolConfig = raw
+			}
+		}
 	}
 	for _, m := range req.Messages {
-		out.Contents = append(out.Contents, renderGemContent(m))
+		out.Contents = append(out.Contents, renderGemContent(m, callIDToName))
 	}
 	return json.Marshal(out)
 }
 
-func renderGemContent(m core.Message) gemContent {
+// buildGeminiCallNameMap maps each tool-call id to its sanitized function name,
+// gathered from every assistant tool call in the conversation. functionResponse
+// parts use it to recover the name Gemini requires from the tool result's id.
+func buildGeminiCallNameMap(messages []core.Message) map[string]string {
+	m := map[string]string{}
+	for _, msg := range messages {
+		for _, p := range msg.Content {
+			if p.Type == core.PartToolCall && p.ToolCall != nil && p.ToolCall.ID != "" {
+				m[p.ToolCall.ID] = sanitizeGeminiName(p.ToolCall.Name)
+			}
+		}
+	}
+	return m
+}
+
+// geminiCallID derives a deterministic tool-call id from a function name, used
+// when parsing Gemini functionCall/functionResponse parts that carry no id.
+func geminiCallID(name string) string {
+	if name == "" {
+		return "call_unknown"
+	}
+	return "call_" + name
+}
+
+func renderGemContent(m core.Message, callIDToName map[string]string) gemContent {
 	role := "user"
 	if m.Role == core.RoleAssistant {
 		role = "model"
@@ -174,10 +223,19 @@ func renderGemContent(m core.Message) gemContent {
 		case core.PartText:
 			c.Parts = append(c.Parts, gemPart{Text: p.Text})
 		case core.PartToolCall:
-			c.Parts = append(c.Parts, gemPart{FunctionCall: &gemFunctionCall{Name: p.ToolCall.Name, Args: p.ToolCall.Arguments}})
+			c.Parts = append(c.Parts, gemPart{FunctionCall: &gemFunctionCall{
+				Name: sanitizeGeminiName(p.ToolCall.Name),
+				Args: normalizeGeminiArgs(p.ToolCall.Arguments),
+			}})
 		case core.PartToolResult:
+			// Recover the function name from the call id; Gemini requires the
+			// response name to match the originating functionCall name.
+			name := callIDToName[p.ToolResult.CallID]
+			if name == "" {
+				name = "tool"
+			}
 			c.Parts = append(c.Parts, gemPart{FunctionResponse: &gemFunctionResult{
-				Name:     p.ToolResult.CallID,
+				Name:     name,
 				Response: json.RawMessage(quoteIfNotJSON(p.ToolResult.Content)),
 			}})
 		case core.PartImage:
@@ -190,6 +248,16 @@ func renderGemContent(m core.Message) gemContent {
 		c.Parts = append(c.Parts, gemPart{Text: ""})
 	}
 	return c
+}
+
+// normalizeGeminiArgs guarantees functionCall.args is a JSON object; Gemini
+// rejects a null or non-object args value.
+func normalizeGeminiArgs(raw json.RawMessage) json.RawMessage {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || !json.Valid(trimmed) || trimmed[0] != '{' {
+		return json.RawMessage("{}")
+	}
+	return trimmed
 }
 
 // quoteIfNotJSON wraps a tool-result string as a JSON value if it isn't already
@@ -244,7 +312,7 @@ func (GeminiCodec) ParseResponse(body []byte, model string) (*core.ChatResponse,
 }
 
 func (GeminiCodec) RenderResponse(resp *core.ChatResponse) ([]byte, error) {
-	content := renderGemContent(resp.Message)
+	content := renderGemContent(resp.Message, nil)
 	content.Role = "model"
 	out := map[string]any{
 		"candidates": []map[string]any{{

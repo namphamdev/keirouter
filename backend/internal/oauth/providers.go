@@ -1,7 +1,7 @@
 package oauth
 
 // ProviderConfig holds the OAuth endpoints and client identity for one
-// provider. It is a curated subset of 9router's OAuth constants, covering the
+// provider. It covers the
 // providers KeiRouter can drive with the standard authorization-code and
 // device-code grants.
 type ProviderConfig struct {
@@ -76,7 +76,7 @@ func (c ProviderConfig) refreshURL() string {
 }
 
 // configs maps provider id -> OAuth config. Client ids/secrets are the public
-// values published by the upstream CLIs (same as 9router); they are not
+// values published by the upstream CLIs; they are not
 // secrets in the confidential sense.
 var configs = map[string]ProviderConfig{
 	"claude": {

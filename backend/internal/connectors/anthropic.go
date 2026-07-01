@@ -97,6 +97,16 @@ func (c *Anthropic) Validate(ctx context.Context, creds core.Credentials) error 
 	modelsURL := base + "/models"
 	_, err := doJSONMethod(ctx, http.MethodGet, c.id, "validate", modelsURL, nil, c.headers(creds))
 	if err == nil {
+		// The official Anthropic API auth-protects GET /models, so a 200 proves
+		// the key. Anthropic-compatible third-party gateways may list models
+		// without auth, so confirm those with a minimal messages probe.
+		hasKey := strings.TrimSpace(creds.APIKey) != "" || strings.TrimSpace(creds.AccessToken) != ""
+		if c.id == "anthropic" || !hasKey {
+			return nil
+		}
+		if perr := c.messagesAuthProbe(ctx, creds); perr != nil {
+			return fmt.Errorf("validation failed for %s: %w", c.id, perr)
+		}
 		return nil
 	}
 	// If it's an auth error, the key is bad.
@@ -105,11 +115,26 @@ func (c *Anthropic) Validate(ctx context.Context, creds core.Credentials) error 
 		return fmt.Errorf("validation failed for %s: %w", c.id, err)
 	}
 	// Otherwise /models may not exist (404 etc); fall back to a minimal chat probe.
+	if perr := c.messagesAuthProbe(ctx, creds); perr != nil {
+		return fmt.Errorf("validation failed for %s: %w", c.id, perr)
+	}
+	return nil
+}
+
+// messagesAuthProbe issues a minimal POST /messages request (max_tokens=1) to
+// confirm the credential is accepted. Only an auth failure (401/403) or a
+// transport error that never reached the provider counts as a failure; a
+// non-auth HTTP response (e.g. an unknown probe model) still proves the key was
+// accepted.
+func (c *Anthropic) messagesAuthProbe(ctx context.Context, creds core.Credentials) error {
 	chatURL := joinURL(c.baseURL(creds), "messages")
 	probeBody := []byte(`{"model":"claude-sonnet-4-20250514","max_tokens":1,"messages":[{"role":"user","content":"ping"}]}`)
-	_, err = doJSON(ctx, c.id, "validate", chatURL, probeBody, c.headers(creds))
-	if err != nil {
-		return fmt.Errorf("validation failed for %s: %w", c.id, err)
+	_, err := doJSON(ctx, c.id, "validate", chatURL, probeBody, c.headers(creds))
+	if err == nil {
+		return nil
+	}
+	if validationAuthError(err) || !validationReachedUpstream(err) {
+		return err
 	}
 	return nil
 }

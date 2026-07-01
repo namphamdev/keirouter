@@ -10,7 +10,7 @@ import (
 
 // Cursor uses a Connect-RPC protobuf transport authenticated by a set of
 // derived headers, the most important being x-cursor-checksum (the "Jyh
-// cipher"). This is a faithful port of 9router's cursorChecksum.js.
+// cipher"). This is a faithful port of the Cursor client's checksum scheme.
 
 // urlSafeAlphabet is the URL-safe base64 alphabet (no padding) used by the
 // checksum encoder.
@@ -84,8 +84,8 @@ func cleanCursorToken(token string) string {
 }
 
 // buildCursorHeaders assembles the full Cursor API header set, including the
-// checksum, derived client key, and UUID-v5 session id. Mirrors 9router's
-// buildCursorHeaders. osName/arch describe the spoofed client platform.
+// checksum, derived client key, and UUID-v5 session id.
+// osName/arch describe the spoofed client platform.
 func buildCursorHeaders(accessToken, machineID, osName, arch string, ghostMode bool) map[string]string {
 	clean := cleanCursorToken(accessToken)
 	if machineID == "" {
@@ -108,23 +108,23 @@ func buildCursorHeaders(accessToken, machineID, osName, arch string, ghostMode b
 	}
 
 	return map[string]string{
-		"authorization":                bearer(clean),
-		"connect-accept-encoding":      "gzip",
-		"connect-protocol-version":     "1",
-		"content-type":                 "application/connect+proto",
-		"user-agent":                   "connect-es/1.6.1",
-		"x-amzn-trace-id":              "Root=" + uuid.NewString(),
-		"x-client-key":                 clientKey,
-		"x-cursor-checksum":            checksum,
-		"x-cursor-client-version":      "3.1.0",
-		"x-cursor-client-type":         "ide",
-		"x-cursor-client-os":           osName,
-		"x-cursor-client-arch":         arch,
-		"x-cursor-client-device-type":  "desktop",
-		"x-cursor-config-version":      uuid.NewString(),
-		"x-cursor-timezone":            "UTC",
-		"x-ghost-mode":                 ghost,
-		"x-request-id":                 uuid.NewString(),
-		"x-session-id":                 sessionID,
+		"authorization":               bearer(clean),
+		"connect-accept-encoding":     "gzip",
+		"connect-protocol-version":    "1",
+		"content-type":                "application/connect+proto",
+		"user-agent":                  "connect-es/1.6.1",
+		"x-amzn-trace-id":             "Root=" + uuid.NewString(),
+		"x-client-key":                clientKey,
+		"x-cursor-checksum":           checksum,
+		"x-cursor-client-version":     "3.1.0",
+		"x-cursor-client-type":        "ide",
+		"x-cursor-client-os":          osName,
+		"x-cursor-client-arch":        arch,
+		"x-cursor-client-device-type": "desktop",
+		"x-cursor-config-version":     uuid.NewString(),
+		"x-cursor-timezone":           "UTC",
+		"x-ghost-mode":                ghost,
+		"x-request-id":                uuid.NewString(),
+		"x-session-id":                sessionID,
 	}
 }

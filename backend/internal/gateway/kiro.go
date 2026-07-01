@@ -15,7 +15,7 @@ import (
 
 // mountKiro registers the Kiro-specific connect endpoints. Kiro authenticates
 // through AWS SSO OIDC (Builder ID / IAM Identity Center device flows) or by
-// importing a refresh token from the Kiro IDE, mirroring 9router's flow.
+// importing a refresh token from the Kiro IDE.
 func (s *Server) mountKiro(r chi.Router) {
 	// Mounted under a dedicated /kiro prefix (not /oauth/kiro) so the static
 	// segment never collides with the /oauth/{provider} param routes in the

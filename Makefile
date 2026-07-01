@@ -28,7 +28,7 @@ C_CYAN   := \033[36m
 ##      so the Vite proxy never hits ECONNREFUSED on cold start.
 dev:
 	@printf "$(C_BOLD)$(C_CYAN)Starting KeiRouter$(C_RESET) backend (:20180) + dashboard (:5180)…\n"
-	@trap 'kill 0' INT TERM EXIT; \
+	@trap 'trap - INT TERM EXIT; kill 0' INT TERM EXIT; \
 	( cd $(BACKEND_DIR) && go run ./cmd/keirouter ) & \
 	( \
 		printf "$(C_DIM)⏳ Waiting for backend…$(C_RESET)\n"; \

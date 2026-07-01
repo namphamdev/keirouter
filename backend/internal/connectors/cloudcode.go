@@ -18,7 +18,7 @@ import (
 // wrap it: the request body is {project, model, request: <gemini>} and each
 // streamed response chunk is {response: <gemini-chunk>}. This connector reuses
 // the Gemini codec for the inner format and adds the CloudCode wrap/unwrap, plus
-// the per-provider quirks (gemini-cli vs antigravity) of 9router's executors.
+// the per-provider quirks (gemini-cli vs antigravity).
 type CloudCode struct {
 	id          string
 	defaultBase string
@@ -33,7 +33,7 @@ const (
 	variantAntigravity
 )
 
-// Gemini CLI client fingerprint, mirroring 9router's appConstants.js.
+// Gemini CLI client fingerprint.
 const (
 	geminiCLIVersion   = "0.34.0"
 	geminiCLIAPIClient = "google-genai-sdk/1.41.0 gl-node/v22.19.0"
@@ -256,7 +256,7 @@ func (c *CloudCode) Stream(ctx context.Context, req *core.ChatRequest, creds cor
 	return out, nil
 }
 
-// generateCloudCodeProjectID mirrors 9router's generateProjectId:
+// generateCloudCodeProjectID builds a project id of the form
 // "<adj>-<noun>-<5 hex>".
 func generateCloudCodeProjectID() string {
 	adjs := []string{"useful", "bright", "swift", "calm", "bold"}
@@ -265,7 +265,7 @@ func generateCloudCodeProjectID() string {
 }
 
 // deriveCloudCodeSession derives a stable session id from the account identity
-// (email/connection), mirroring 9router's deriveSessionId intent.
+// (email/connection).
 func deriveCloudCodeSession(creds core.Credentials) string {
 	seed := creds.Extra["email"]
 	if seed == "" {

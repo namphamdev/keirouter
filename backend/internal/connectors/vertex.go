@@ -15,8 +15,7 @@ import (
 // wire codec (Vertex speaks the same generateContent body) but differs in
 // transport: authentication is either a Service-Account JSON (minted into a
 // short-lived Bearer token via the JWT-bearer flow, using a project-scoped URL)
-// or a raw API key (passed as ?key= on the global publishers endpoint). This
-// mirrors 9router's VertexExecutor.buildUrl / buildHeaders / execute.
+// or a raw API key (passed as ?key= on the global publishers endpoint).
 type Vertex struct {
 	id          string
 	defaultBase string

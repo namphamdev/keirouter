@@ -162,6 +162,19 @@ func (c *OpenAICompatible) Validate(ctx context.Context, creds core.Credentials)
 	url := joinURL(c.baseURL(creds), "models")
 	_, err := doJSONMethod(ctx, http.MethodGet, c.id, "validate", url, nil, c.headers(creds))
 	if err == nil {
+		// GET /models reached the upstream. For no-auth accounts (e.g. a local
+		// gateway) reachability is all we can verify. For strict providers the
+		// /models endpoint itself requires the key, so a 200 proves it is valid.
+		// For any other keyed account a 200 is NOT proof — many OpenAI-compatible
+		// providers list models without checking auth — so confirm the key with
+		// an authenticated chat probe before reporting success.
+		hasKey := strings.TrimSpace(creds.APIKey) != "" || strings.TrimSpace(creds.AccessToken) != ""
+		if !hasKey || strictModelsValidation(c.id) {
+			return nil
+		}
+		if perr := c.chatAuthProbe(ctx, creds); perr != nil {
+			return fmt.Errorf("validation failed for %s: %w", c.id, perr)
+		}
 		return nil
 	}
 	if c.id == "xai" {
@@ -178,10 +191,22 @@ func (c *OpenAICompatible) Validate(ctx context.Context, creds core.Credentials)
 		return fmt.Errorf("validation failed for %s: %w", c.id, err)
 	}
 
-	// Many 9router-compatible providers either omit /models or reject unknown
+	// Many OpenAI-compatible providers either omit /models or reject unknown
 	// probe models with 400/404 while still accepting the credential. Fall back
 	// to a minimal chat request and treat any non-auth HTTP response as proof
 	// that the connection reached the provider.
+	if err := c.chatAuthProbe(ctx, creds); err != nil {
+		return fmt.Errorf("validation failed for %s: %w", c.id, err)
+	}
+	return nil
+}
+
+// chatAuthProbe issues a minimal, near-zero-cost chat request (max_tokens=1) to
+// confirm the credential is actually accepted by the upstream. It relies on
+// validateProbe semantics: only an auth failure (401/403) or a transport error
+// that never reached the provider counts as a failure. A non-auth HTTP response
+// (e.g. a 400/404 for an unknown probe model) still proves the key was accepted.
+func (c *OpenAICompatible) chatAuthProbe(ctx context.Context, creds core.Credentials) error {
 	probeModel := firstCatalogModel(c.id)
 	body, _ := json.Marshal(map[string]any{
 		"model": probeModel,
@@ -191,10 +216,7 @@ func (c *OpenAICompatible) Validate(ctx context.Context, creds core.Credentials)
 		"max_tokens": 1,
 		"stream":     false,
 	})
-	if err := validateProbe(ctx, c.id, c.chatCompletionsURL(creds, probeModel), body, c.headers(creds)); err != nil {
-		return fmt.Errorf("validation failed for %s: %w", c.id, err)
-	}
-	return nil
+	return validateProbe(ctx, c.id, c.chatCompletionsURL(creds, probeModel), body, c.headers(creds))
 }
 
 func validateProbe(ctx context.Context, provider, endpoint string, body []byte, headers map[string]string) error {

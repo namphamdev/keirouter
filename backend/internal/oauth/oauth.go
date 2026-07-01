@@ -2,7 +2,7 @@
 // subscription/OAuth providers (Claude, Codex, Gemini CLI, GitHub Copilot,
 // Qwen, xAI, ...) without an API key.
 //
-// Two canonical flows are supported, mirroring 9router:
+// Two canonical flows are supported:
 //   - Authorization Code + PKCE: the dashboard opens a provider authorize URL,
 //     the user signs in and is redirected back with a code, which is exchanged
 //     for tokens (claude, codex, xai, gemini-cli, antigravity).

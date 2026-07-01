@@ -2,9 +2,10 @@ package transform
 
 import (
 	"bytes"
-	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 	"fmt"
 	"strings"
+
+	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 )
@@ -13,8 +14,7 @@ import (
 // turns under "messages" with string content (plus an optional images[] of raw
 // base64), carries generation knobs under "options" (temperature, num_predict,
 // top_p), accepts OpenAI-style tool definitions, and streams newline-delimited
-// JSON (NDJSON) rather than SSE. This mirrors 9router's openai-to-ollama and
-// ollama-to-openai translators.
+// JSON (NDJSON) rather than SSE.
 type OllamaCodec struct{}
 
 func (OllamaCodec) Dialect() core.Dialect { return core.DialectOllama }
@@ -38,12 +38,12 @@ type ollamaOptions struct {
 }
 
 type ollamaMessage struct {
-	Role      string            `json:"role"`
-	Content   string            `json:"content"`
-	Thinking  string            `json:"thinking,omitempty"`
-	Images    []string          `json:"images,omitempty"`
-	ToolName  string            `json:"tool_name,omitempty"`
-	ToolCalls []ollamaToolCall  `json:"tool_calls,omitempty"`
+	Role      string           `json:"role"`
+	Content   string           `json:"content"`
+	Thinking  string           `json:"thinking,omitempty"`
+	Images    []string         `json:"images,omitempty"`
+	ToolName  string           `json:"tool_name,omitempty"`
+	ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
 }
 
 type ollamaToolCall struct {
@@ -163,7 +163,7 @@ func (OllamaCodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
 	}
 
 	// Map tool-call ids to their tool names so tool results can carry the
-	// human-readable tool_name Ollama expects (mirrors 9router's toolCallMap).
+	// human-readable tool_name Ollama expects.
 	idToName := map[string]string{}
 	for _, m := range req.Messages {
 		for _, p := range m.Content {
@@ -229,7 +229,7 @@ func renderOllamaMessage(m core.Message, idToName map[string]string) []ollamaMes
 	}
 	out.Content = text.String()
 
-	// Skip wholly-empty non-assistant messages, matching 9router.
+	// Skip wholly-empty non-assistant messages.
 	if out.Content == "" && len(out.Images) == 0 && len(out.ToolCalls) == 0 && m.Role != core.RoleAssistant {
 		return nil
 	}

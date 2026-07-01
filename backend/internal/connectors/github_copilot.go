@@ -15,7 +15,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/transform"
 )
 
-// GitHub Copilot client fingerprint, mirroring 9router's GITHUB_COPILOT consts.
+// GitHub Copilot client fingerprint.
 const (
 	copilotVSCodeVersion = "1.110.0"
 	copilotChatVersion   = "0.38.0"
@@ -27,7 +27,7 @@ const (
 // endpoint. It speaks the OpenAI dialect but requires the full Copilot editor
 // fingerprint headers, and applies model-specific request transforms (gpt-5/o-
 // series need max_completion_tokens; some models reject temperature/thinking).
-// This mirrors 9router's GithubExecutor. The copilot bearer token is supplied
+// The copilot bearer token is supplied
 // as the credential AccessToken (minted by the token refresher upstream).
 type GitHubCopilot struct {
 	id          string

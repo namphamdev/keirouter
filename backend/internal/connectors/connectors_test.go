@@ -242,3 +242,67 @@ func TestRegistry_DefaultProviders(t *testing.T) {
 	_, err = reg.Get("nonexistent")
 	require.Error(t, err)
 }
+
+// publicModelsServer simulates a non-strict OpenAI-compatible gateway whose
+// GET /models endpoint lists models WITHOUT checking auth, while the chat
+// endpoint properly rejects a bad key with 401. This is the case that made
+// invalid keys pass validation before the authenticated chat probe was added.
+func publicModelsServer(t *testing.T, goodKey string) (*httptest.Server, *bool) {
+	t.Helper()
+	chatProbed := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			// No auth check — returns 200 for anyone.
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"m1"}]}`))
+		case "/chat/completions":
+			chatProbed = true
+			if r.Header.Get("Authorization") != "Bearer "+goodKey {
+				w.WriteHeader(http.StatusUnauthorized)
+				fmt.Fprint(w, `{"error":"invalid api key"}`)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &chatProbed
+}
+
+func TestOpenAICompatible_ValidateConfirmsKeyWhenModelsIsPublic(t *testing.T) {
+	t.Run("bad key is rejected via chat probe", func(t *testing.T) {
+		srv, chatProbed := publicModelsServer(t, "good-key")
+		c := NewOpenAICompatible("sumopod", srv.URL)
+		err := c.Validate(context.Background(), core.Credentials{APIKey: "bad-key"})
+		require.Error(t, err, "a bad key must fail even when /models returns 200 without auth")
+		require.True(t, *chatProbed, "validation should confirm the key with a chat probe")
+	})
+
+	t.Run("good key passes", func(t *testing.T) {
+		srv, chatProbed := publicModelsServer(t, "good-key")
+		c := NewOpenAICompatible("sumopod", srv.URL)
+		require.NoError(t, c.Validate(context.Background(), core.Credentials{APIKey: "good-key"}))
+		require.True(t, *chatProbed)
+	})
+}
+
+func TestOpenAICompatible_ValidateStrictTrustsModels200(t *testing.T) {
+	// Strict providers (e.g. openai) auth-protect /models, so a 200 is conclusive
+	// and the chat probe must NOT be issued (avoids consuming quota).
+	srv, chatProbed := publicModelsServer(t, "good-key")
+	c := NewOpenAICompatible("openai", srv.URL)
+	require.NoError(t, c.Validate(context.Background(), core.Credentials{APIKey: "any-key"}))
+	require.False(t, *chatProbed, "strict providers should trust a /models 200 without a chat probe")
+}
+
+func TestOpenAICompatible_ValidateNoAuthTrustsModels200(t *testing.T) {
+	// No-auth accounts (no key/token) only get a reachability check.
+	srv, chatProbed := publicModelsServer(t, "good-key")
+	c := NewOpenAICompatible("local-gw", srv.URL)
+	require.NoError(t, c.Validate(context.Background(), core.Credentials{}))
+	require.False(t, *chatProbed, "no-auth accounts should not issue a chat probe")
+}

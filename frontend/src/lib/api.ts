@@ -28,7 +28,58 @@ export interface Provider {
   output_per_m: number;
   regions?: RegionOption[];
   default_region?: string;
+  // base_url is populated for user-defined custom provider instances.
+  base_url?: string;
+  // custom marks user-defined dynamic provider instances (editable/deletable).
+  custom?: boolean;
 }
+
+// ProviderModel is a single model entry returned by providerModels(). Custom
+// models carry a db_id so they can be edited/removed; discovered marks models
+// that came from the upstream /models endpoint rather than the static catalog.
+export interface ProviderModel {
+  id: string;
+  name: string;
+  kind: string;
+  custom?: boolean;
+  db_id?: string;
+  discovered?: boolean;
+}
+
+// CustomProvider is a user-defined provider instance (OpenAI- or Anthropic-
+// compatible) with its own unique id, base URL, accounts, and models.
+export interface CustomProvider {
+  id: string;
+  display_name: string;
+  alias: string;
+  dialect: string; // "openai" | "anthropic"
+  base_url: string;
+  custom: true;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// CustomModel is a user-registered model on a provider (custom or built-in).
+export interface CustomModel {
+  db_id: string;
+  provider_id: string;
+  id: string;
+  name: string;
+  kind: string;
+  context_window: number;
+  input_per_m: number;
+  output_per_m: number;
+}
+
+export interface CustomModelInput {
+  id: string;
+  name?: string;
+  kind?: string;
+  context_window?: number;
+  input_per_m?: number;
+  output_per_m?: number;
+}
+
 
 export interface BrandingSettings {
   name: string;
@@ -45,6 +96,12 @@ export interface EndpointSettings {
   caveman_level: string;
   terse_enabled: boolean;
   terse_level: string;
+  headroom_enabled: boolean;
+  headroom_url: string;
+  headroom_compress_user_messages: boolean;
+  headroom_timeout_ms: number;
+  ponytail_enabled: boolean;
+  ponytail_level: "lite" | "full" | "ultra";
   routing_strategy: string;
   sticky_limit: number;
   combo_strategy: string;
@@ -63,6 +120,18 @@ export interface ProviderRoutingSettings {
   routing_strategy: "inherit" | "fill-first" | "round-robin" | "smart-round-robin" | string;
   sticky_limit: number;
   affinity_ttl_minutes: number;
+}
+
+// HeadroomTestResult is returned by POST /settings/headroom-test and reports
+// whether the configured Headroom proxy is reachable and behaving correctly.
+// endpoint is always masked (no credentials/query string).
+export interface HeadroomTestResult {
+  ok: boolean;
+  reachable: boolean;
+  status: number;
+  latency_ms: number;
+  endpoint: string;
+  message: string;
 }
 
 export interface OAuthProvider {
@@ -178,6 +247,46 @@ export interface AccountInput {
   priority?: number;
 }
 
+// BulkAccountItem is one credential in a bulk import. Only api_key (and an
+// optional per-item base_url / label) varies per row; shared provider config
+// lives on BulkAccountInput.
+export interface BulkAccountItem {
+  label?: string;
+  api_key?: string;
+  base_url?: string;
+}
+
+export interface BulkAccountInput {
+  provider: string;
+  base_url?: string;
+  region?: string;
+  account_id?: string;
+  azure_endpoint?: string;
+  azure_deployment?: string;
+  azure_api_version?: string;
+  azure_organization?: string;
+  priority?: number;
+  proxy_pool_id?: string;
+  validate?: boolean;
+  items: BulkAccountItem[];
+}
+
+export interface BulkAccountResult {
+  index: number;
+  label: string;
+  status: "created" | "error" | "skipped";
+  id?: string;
+  error?: string;
+}
+
+export interface BulkAccountResponse {
+  total: number;
+  created: number;
+  failed: number;
+  skipped: number;
+  results: BulkAccountResult[];
+}
+
 export interface ChainStep {
   provider: string;
   model: string;
@@ -275,6 +384,10 @@ export interface ClientSaving {
   usd_saved: number;
   caveman_requests: number;
   terse_requests: number;
+  // Headroom/Ponytail per-client savings. Optional for backward-compat with
+  // payloads recorded before these savers existed; treat missing as 0.
+  headroom_tokens_saved?: number;
+  ponytail_requests?: number;
 }
 
 export interface TokenSavings {
@@ -284,6 +397,11 @@ export interface TokenSavings {
   terse_requests: number;
   usd_saved?: number;
   usd_saved_estimate?: boolean;
+  // Headroom/Ponytail summary savings. Optional for backward-compat with
+  // payloads recorded before these savers existed; treat missing as 0.
+  headroom_tokens_saved?: number;
+  ponytail_requests?: number;
+  headroom_requests?: number;
   rules: RuleSaving[];
   by_client?: ClientSaving[];
 }
@@ -357,8 +475,15 @@ export interface QuotaAccount {
   updated_at: string;
 }
 
-// Console log now uses raw text lines (like 9router).
-// The /api/console endpoint returns { logs: string[] }.
+// Console log uses structured entries streamed via SSE (/api/console/stream)
+// and fetched as history from /api/console, which returns { logs: ConsoleLogEntry[] }.
+export interface ConsoleLogEntry {
+  seq: number;
+  time: string; // HH:MM:SS.mmm
+  level: string; // DEBUG | INFO | WARN | ERROR | LOG
+  msg: string; // human-readable summary
+  detail?: string; // optional technical detail, revealed on expand
+}
 
 export interface ProxyPool {
   id: string;
@@ -852,7 +977,7 @@ export const api = {
 
   providers: () => request<{ providers: Provider[] }>("GET", "/providers"),
   providerModels: (id: string, kind?: string) =>
-    request<{ models: { id: string; name: string; kind: string; custom?: boolean }[] }>(
+    request<{ models: ProviderModel[] }>(
       "GET",
       `/providers/${id}/models${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`,
     ),
@@ -860,6 +985,27 @@ export const api = {
     request<ProviderRoutingSettings>("GET", `/providers/${id}/routing`),
   updateProviderRouting: (id: string, patch: Partial<ProviderRoutingSettings>) =>
     request<ProviderRoutingSettings>("POST", `/providers/${id}/routing`, patch),
+
+  // Custom provider instances (dynamic OpenAI-/Anthropic-compatible providers).
+  listCustomProviders: () =>
+    request<{ providers: CustomProvider[] }>("GET", "/custom-providers"),
+  createCustomProvider: (input: { display_name: string; dialect: string; base_url: string }) =>
+    request<CustomProvider>("POST", "/custom-providers", input),
+  updateCustomProvider: (id: string, patch: { display_name?: string; alias?: string; base_url?: string }) =>
+    request<CustomProvider>("PATCH", `/custom-providers/${id}`, patch),
+  deleteCustomProvider: (id: string) =>
+    request<{ id: string; deleted: boolean }>("DELETE", `/custom-providers/${id}`),
+
+  // Custom models, attachable to any provider id (custom or built-in).
+  listCustomModels: (providerId: string) =>
+    request<{ models: CustomModel[] }>("GET", `/providers/${providerId}/custom-models`),
+  createCustomModel: (providerId: string, input: CustomModelInput) =>
+    request<CustomModel>("POST", `/providers/${providerId}/custom-models`, input),
+  updateCustomModel: (providerId: string, dbId: string, patch: Partial<CustomModelInput>) =>
+    request<CustomModel>("PATCH", `/providers/${providerId}/custom-models/${dbId}`, patch),
+  deleteCustomModel: (providerId: string, dbId: string) =>
+    request<{ db_id: string; deleted: boolean }>("DELETE", `/providers/${providerId}/custom-models/${dbId}`),
+
 
   listPlans: () => request<{ plans: Plan[] }>("GET", "/plans"),
   createPlan: (input: {
@@ -910,6 +1056,8 @@ export const api = {
   listAccounts: () => request<{ accounts: Account[] }>("GET", "/accounts"),
   createAccount: (input: AccountInput) =>
     request<{ id: string }>("POST", "/accounts", input),
+  bulkCreateAccounts: (input: BulkAccountInput) =>
+    request<BulkAccountResponse>("POST", "/accounts/bulk", input),
   updateAccount: (id: string, patch: { label?: string; priority?: number; disabled?: boolean; proxy_pool_id?: string }) =>
     request<{ id: string }>("PATCH", `/accounts/${id}`, patch),
   deleteAccount: (id: string) => request<void>("DELETE", `/accounts/${id}`),
@@ -946,7 +1094,7 @@ export const api = {
   quota: (period: string) =>
     request<{ accounts: QuotaAccount[]; since: string }>("GET", `/quota?period=${period}&tz=${browserTZ()}`),
 
-  consoleLog: () => request<{ logs: string[] }>("GET", "/console"),
+  consoleLog: () => request<{ logs: ConsoleLogEntry[] }>("GET", "/console"),
 
   cliTools: (model?: string) =>
     request<CLIToolsResponse>("GET", model ? `/cli-tools?model=${encodeURIComponent(model)}` : "/cli-tools"),
@@ -972,6 +1120,8 @@ export const api = {
   endpointSettings: () => request<EndpointSettings>("GET", "/settings/endpoint"),
   updateEndpointSettings: (patch: Partial<EndpointSettings>) =>
     request<EndpointSettings>("POST", "/settings/endpoint", patch),
+  testHeadroom: (body?: { url?: string; timeout_ms?: number }) =>
+    request<HeadroomTestResult>("POST", "/settings/headroom-test", body ?? {}),
 
   accessSettings: () => request<AccessSettings>("GET", "/settings/access"),
   updateAccessSettings: (patch: Partial<Omit<AccessSettings, "endpoint_url">>) =>
@@ -999,20 +1149,10 @@ export const api = {
   enableModels: (providerAlias: string, ids: string[]) =>
     request<{ ids: string[] }>("DELETE", "/models/disabled", { providerAlias, ids }),
 
-  listCustomModels: (provider: string) =>
-    request<{ models: { id: string; name?: string; kind?: string }[] }>(
-      "GET",
-      `/models/custom?provider=${encodeURIComponent(provider)}`,
-    ),
-  addCustomModels: (
-    providerAlias: string,
-    models: { id: string; name?: string; kind?: string }[],
-  ) => request<{ models: { id: string; name?: string; kind?: string }[] }>("POST", "/models/custom", { providerAlias, models }),
-  removeCustomModels: (providerAlias: string, ids: string[]) =>
-    request<{ models: { id: string; name?: string; kind?: string }[] }>("DELETE", "/models/custom", { providerAlias, ids }),
-
   // Update check (queries GitHub for the latest release + changelog).
-  updateCheck: () => request<UpdateInfo>("GET", "/update/check"),
+  // Pass force=true to bypass the backend's 6-hour cache (the "Check now" button).
+  updateCheck: (force?: boolean) =>
+    request<UpdateInfo>("GET", `/update/check${force ? "?refresh=1" : ""}`),
 
   // Database export/import. An optional passphrase produces a portable backup
   // whose credentials are re-keyed to the passphrase (movable across machines
@@ -1041,7 +1181,7 @@ export const api = {
   testProxyPool: (id: string) =>
     request<{ status: string; last_tested?: string }>("POST", `/proxy-pools/${id}/test`),
 
-  // Per-provider quota check script (JavaScript executed server-side).
+  // Per-provider custom quota check script.
   getQuotaScript: (providerId: string) =>
     request<{ provider: string; script: string }>("GET", `/providers/${encodeURIComponent(providerId)}/quota-script`),
   updateQuotaScript: (providerId: string, script: string) =>

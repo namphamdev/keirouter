@@ -13,7 +13,7 @@ import (
 
 // Kiro AI authenticates through AWS SSO OIDC (Builder ID / IAM Identity Center
 // device flows) or by importing a refresh token exported from the Kiro IDE.
-// This mirrors 9router's KiroService. The dashboard "Connect Kiro" modal offers:
+// The dashboard "Connect Kiro" modal offers:
 //
 //   - Builder ID:          device-authorization against the public Builder ID
 //                          portal (free AWS account).

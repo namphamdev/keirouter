@@ -20,8 +20,7 @@ import (
 // vertexSAJSON is a Google Cloud service-account key file. The Vertex connector
 // accepts the entire JSON blob as the account's "API key"; when it parses as a
 // service account, the connector mints a short-lived OAuth2 Bearer token from
-// it (RS256 JWT assertion → token exchange), mirroring 9router's
-// refreshVertexToken.
+// it (RS256 JWT assertion → token exchange).
 type vertexSAJSON struct {
 	Type        string `json:"type"`
 	ProjectID   string `json:"project_id"`
@@ -31,8 +30,8 @@ type vertexSAJSON struct {
 }
 
 // parseVertexSAJSON returns the parsed service account when apiKey is a valid SA
-// JSON blob, or (nil, false) when it is a plain API key. Mirrors 9router's
-// parseVertexSaJson: requires type=service_account plus client_email,
+// JSON blob, or (nil, false) when it is a plain API key. Requires
+// type=service_account plus client_email,
 // private_key, and project_id.
 func parseVertexSAJSON(apiKey string) (*vertexSAJSON, bool) {
 	s := strings.TrimSpace(apiKey)
@@ -56,7 +55,7 @@ type vertexToken struct {
 }
 
 // vertexTokenCache caches minted Bearer tokens keyed by service-account email,
-// refreshing 5 minutes before expiry (matching 9router's vertexTokenCache).
+// refreshing 5 minutes before expiry.
 var (
 	vertexTokenMu    sync.Mutex
 	vertexTokenStore = map[string]vertexToken{}

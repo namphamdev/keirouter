@@ -1,20 +1,43 @@
 // Package consolelog provides a thread-safe log buffer that captures request
-// pipeline output and streams it to dashboard clients via SSE. It mirrors
-// 9router's consoleLogBuffer.js behavior for the Go backend.
+// pipeline output and streams it to dashboard clients via SSE.
+//
+// Each record is a structured Entry carrying a short, human-readable message
+// plus an optional Detail block. The dashboard renders the message inline and
+// reveals the detail on demand (click to expand), keeping the live feed easy to
+// scan while still exposing the underlying technical context (raw errors, IDs,
+// timings) when a developer needs it.
 package consolelog
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 )
 
 const maxLines = 500
 
-// Event represents a log update. If Clear is true, the client should clear its buffer.
+// Entry is a single structured console log record.
+type Entry struct {
+	// Seq is a monotonic sequence number, unique per buffer. The dashboard uses
+	// it as a stable React key and to track per-row expansion state across
+	// re-renders and ring-buffer trimming.
+	Seq uint64 `json:"seq"`
+	// Time is the formatted wall-clock time (HH:MM:SS.mmm).
+	Time string `json:"time"`
+	// Level is one of DEBUG, INFO, WARN, ERROR, LOG.
+	Level string `json:"level"`
+	// Message is the short, human-readable summary shown inline.
+	Message string `json:"msg"`
+	// Detail is optional technical context revealed when the row is expanded
+	// (raw error text, identifiers, byte counts, etc.). Empty when there is
+	// nothing extra to show.
+	Detail string `json:"detail,omitempty"`
+}
+
+// Event represents a log update. If Clear is true, the client should clear its
+// buffer; otherwise Entry holds the appended record.
 type Event struct {
-	Line  string
+	Entry Entry
 	Clear bool
 }
 
@@ -32,49 +55,57 @@ func NewListener(bufSize int) *Listener {
 	return &Listener{C: make(chan Event, bufSize)}
 }
 
-// Buffer is a ring buffer of log lines with pub/sub for SSE streaming.
+// Buffer is a ring buffer of log entries with pub/sub for SSE streaming.
 type Buffer struct {
 	mu        sync.RWMutex
-	lines     []string
+	entries   []Entry
 	listeners map[*Listener]struct{}
+	seq       uint64 // guarded by mu; monotonic entry counter
 }
 
 // New creates an empty log buffer.
 func New() *Buffer {
 	return &Buffer{
-		lines:     make([]string, 0, 128),
+		entries:   make([]Entry, 0, 128),
 		listeners: make(map[*Listener]struct{}),
 	}
 }
 
-// Lines returns a snapshot of all buffered log lines.
-func (b *Buffer) Lines() []string {
+// Entries returns a snapshot of all buffered log entries.
+func (b *Buffer) Entries() []Entry {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	out := make([]string, len(b.lines))
-	copy(out, b.lines)
+	out := make([]Entry, len(b.entries))
+	copy(out, b.entries)
 	return out
 }
 
-// Append adds a log line and notifies all listeners.
-func (b *Buffer) Append(line string) {
+// add appends an entry and notifies all listeners.
+func (b *Buffer) add(level, message, detail string) {
 	b.mu.Lock()
-	b.lines = append(b.lines, line)
-	if len(b.lines) > maxLines {
+	b.seq++
+	e := Entry{
+		Seq:     b.seq,
+		Time:    time.Now().Format("15:04:05.000"),
+		Level:   level,
+		Message: message,
+		Detail:  detail,
+	}
+	b.entries = append(b.entries, e)
+	if len(b.entries) > maxLines {
 		// Use copy instead of sub-slicing to release the old backing array for GC.
-		n := copy(b.lines, b.lines[len(b.lines)-maxLines:])
-		b.lines = b.lines[:n]
+		n := copy(b.entries, b.entries[len(b.entries)-maxLines:])
+		b.entries = b.entries[:n]
 	}
 	b.mu.Unlock()
 
-	ev := Event{Line: line}
-	b.publish(ev)
+	b.publish(Event{Entry: e})
 }
 
 // Clear resets the buffer and notifies all listeners.
 func (b *Buffer) Clear() {
 	b.mu.Lock()
-	b.lines = b.lines[:0]
+	b.entries = b.entries[:0]
 	b.mu.Unlock()
 
 	b.publish(Event{Clear: true})
@@ -107,16 +138,15 @@ func (b *Buffer) Unsubscribe(l *Listener) {
 	b.mu.Unlock()
 }
 
-// Logf appends a formatted log line with timestamp and level tag.
+// Log appends a human-readable message at the given level with an optional
+// detail block. Pass an empty detail when there is nothing extra to surface.
 // Levels: LOG, INFO, WARN, ERROR, DEBUG.
+func (b *Buffer) Log(level, message, detail string) {
+	b.add(level, message, detail)
+}
+
+// Logf appends a formatted, message-only log line (no detail block). Retained
+// for call sites that only need a one-liner.
 func (b *Buffer) Logf(level, format string, args ...any) {
-	var sb strings.Builder
-	sb.Grow(128)
-	sb.WriteByte('[')
-	sb.WriteString(time.Now().Format("15:04:05.000"))
-	sb.WriteString("] [")
-	sb.WriteString(level)
-	sb.WriteString("] ")
-	fmt.Fprintf(&sb, format, args...)
-	b.Append(sb.String())
+	b.add(level, fmt.Sprintf(format, args...), "")
 }

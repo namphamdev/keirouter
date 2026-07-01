@@ -9,9 +9,10 @@ import (
 )
 
 // ToolArgSanitizer buffers streaming tool call arguments and emits sanitized
-// JSON when the tool call completes. This mirrors 9router's behavior of
-// buffering tool args and cleaning them at finish time (e.g., fixing Read.limit
-// from string to int, clamping values).
+// JSON when the tool call completes. Tool-call arguments from fragmenting
+// upstreams arrive split across frames and must be reassembled into one
+// complete JSON object before rendering (e.g. fixing Read.limit from string to
+// int, clamping values).
 //
 // Usage: call Process() for each chunk. Call Flush() when the stream ends.
 type ToolArgSanitizer struct {
@@ -78,6 +79,7 @@ func (s *ToolArgSanitizer) Process(chunk core.StreamChunk, emit func(core.Stream
 	if args != "" && args != "{}" {
 		buf.args.WriteString(args)
 	}
+
 }
 
 // Flush emits all remaining buffered tool calls. Call this when the stream ends
@@ -115,8 +117,8 @@ func (s *ToolArgSanitizer) flushIndex(idx int, emit func(core.StreamChunk)) {
 	})
 }
 
-// sanitizeToolArgs applies argument cleanup rules matching 9router's
-// sanitizeToolArgs logic. It fixes common issues from non-Anthropic models.
+// sanitizeToolArgs applies argument cleanup rules. It fixes common issues from
+// non-Anthropic models.
 func sanitizeToolArgs(toolName, argsJSON string) string {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {

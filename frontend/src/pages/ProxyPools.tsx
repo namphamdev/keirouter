@@ -1,13 +1,14 @@
-import { useState } from "react";
+import { useState, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Network, Plus, Trash2, Play, Upload, Pencil, X, Check,
   ToggleLeft, ToggleRight, Loader2, CheckCircle2, XCircle, CircleDot,
-  RefreshCw,
+  RefreshCw, AlertCircle, FileText,
 } from "lucide-react";
 import { api, type ProxyPool } from "../lib/api";
 import { PageHeader } from "../components/Layout";
 import { useToast } from "../components/Toast";
+import { parseProxies, runPool } from "../lib/bulk";
 import {
   Card, Button, Input, Field, Badge, Spinner, EmptyState, Modal,
 } from "../components/ui";
@@ -330,40 +331,77 @@ function PoolForm({ pool, onClose }: { pool?: ProxyPool; onClose: () => void }) 
 
 // ─── Batch Import ────────────────────────────────────────────────────────────
 
+interface ProxyImportResult {
+  index: number;
+  label: string;
+  status: "created" | "error";
+  error?: string;
+}
+
+// proxyLabel derives a readable pool name from a proxy URL (host:port),
+// falling back to the raw value when the URL can't be parsed.
+function proxyLabel(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.port ? `${u.hostname}:${u.port}` : u.hostname;
+  } catch {
+    return url;
+  }
+}
+
+const PROXY_IMPORT_CONCURRENCY = 6;
+
 function BatchImport({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [name, setName] = useState("");
   const [text, setText] = useState("");
   const [importing, setImporting] = useState(false);
+  const [results, setResults] = useState<ProxyImportResult[] | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const parsed = useMemo(() => parseProxies(text), [text]);
+  const validCount = parsed.entries.length;
+
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const content = await file.text();
+    setText((prev) => (prev.trim() ? `${prev.replace(/\s+$/, "")}\n${content}` : content));
+    e.target.value = "";
+  };
 
   const handleImport = async () => {
-    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-    if (lines.length === 0) return;
-
+    if (validCount === 0) return;
     setImporting(true);
-    let created = 0, failed = 0;
 
-    for (const line of lines) {
-      let url = line;
-      if (!line.includes("://")) {
-        const parts = line.split(":");
-        if (parts.length === 4) url = `http://${parts[2]}:${parts[3]}@${parts[0]}:${parts[1]}`;
-        else url = `http://${line}`;
-      }
-      try {
-        await api.createProxyPool({ name: name || `pool-${Date.now()}`, proxy_url: url });
-        created++;
-      } catch { failed++; }
-    }
+    const entries = parsed.entries;
+    const res = await runPool<typeof entries[number], ProxyImportResult>(
+      entries,
+      PROXY_IMPORT_CONCURRENCY,
+      async (entry, i) => {
+        const poolName =
+          entry.name?.trim() ||
+          (name.trim() ? `${name.trim()}-${i + 1}` : proxyLabel(entry.url));
+        try {
+          await api.createProxyPool({ name: poolName, proxy_url: entry.url });
+          return { index: i, label: poolName, status: "created" as const };
+        } catch (err) {
+          return { index: i, label: poolName, status: "error" as const, error: (err as Error).message };
+        }
+      },
+    );
 
     setImporting(false);
+    setResults(res);
     qc.invalidateQueries({ queryKey: ["proxy-pools"] });
-    toast.success(
-      "Batch import complete",
-      `${created} proxy pool${created !== 1 ? "s" : ""} created.${failed > 0 ? ` ${failed} failed to import.` : ""}`,
-    );
-    onClose();
+    const created = res.filter((r) => r.status === "created").length;
+    const failed = res.length - created;
+    if (failed === 0) {
+      toast.success("Batch import complete", `${created} proxy pool${created !== 1 ? "s" : ""} created.`);
+    } else {
+      toast.error("Batch import finished with errors", `${created} created, ${failed} failed.`);
+    }
   };
 
   return (
@@ -374,24 +412,85 @@ function BatchImport({ onClose }: { onClose: () => void }) {
           <X className="h-4 w-4" />
         </button>
       </div>
-      <div className="space-y-3 px-4 py-4">
-        <p className="text-xs text-[var(--text-muted)]">
-          Paste proxy URLs, one per line. Supports <code className="font-mono">protocol://user:pass@host:port</code> and <code className="font-mono">host:port:user:pass</code> formats.
-        </p>
-        <Field label="Pool name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="imported-pool" className="max-w-sm" />
-        </Field>
-        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={8}
-          placeholder={"http://user:pass@host:port\nsocks5://host:port\nhost:port:user:pass"}
-          className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 font-mono text-xs placeholder:text-[var(--text-muted)] focus:border-accent-400 focus:outline-none" />
-        <div className="flex items-center gap-2">
-          <Button onClick={handleImport} disabled={!text.trim() || importing}>
-            {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-            {importing ? "Importing…" : "Import"}
-          </Button>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+
+      {results ? (
+        <div className="space-y-3 px-4 py-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone="success">{results.filter((r) => r.status === "created").length} created</Badge>
+            {results.some((r) => r.status === "error") && (
+              <Badge tone="danger">{results.filter((r) => r.status === "error").length} failed</Badge>
+            )}
+          </div>
+          <div className="max-h-60 divide-y divide-[var(--border)] overflow-y-auto rounded-lg border border-[var(--border)]">
+            {results.map((r) => (
+              <div key={r.index} className="flex items-center gap-3 px-3 py-2 text-xs">
+                {r.status === "created" ? (
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                ) : (
+                  <XCircle className="h-4 w-4 shrink-0 text-red-500" />
+                )}
+                <span className="flex-1 truncate font-medium">{r.label}</span>
+                {r.error && <span className="truncate text-[var(--text-muted)]" title={r.error}>{r.error}</span>}
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" onClick={() => { setResults(null); setText(""); }}>
+              <Upload className="h-4 w-4" /> Import more
+            </Button>
+            <Button onClick={onClose}>
+              <Check className="h-4 w-4" /> Done
+            </Button>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="space-y-3 px-4 py-4">
+          <p className="text-xs text-[var(--text-muted)]">
+            Paste proxy URLs, one per line. Supports <code className="font-mono">protocol://user:pass@host:port</code> and{" "}
+            <code className="font-mono">host:port:user:pass</code>. Add an optional name with{" "}
+            <code className="font-mono">name,url</code>. Blank lines and <code className="font-mono">#</code> comments are ignored.
+          </p>
+          <Field label="Pool name prefix (optional)">
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="imported-pool" className="max-w-sm" />
+          </Field>
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium">Proxies</span>
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2 py-1 text-xs text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-subtle)] hover:text-[var(--text)]"
+            >
+              <FileText className="h-3.5 w-3.5" /> Load file
+            </button>
+            <input ref={fileRef} type="file" accept=".txt,.csv,text/plain,text/csv" className="hidden" onChange={onFile} />
+          </div>
+          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={8}
+            spellCheck={false}
+            placeholder={"http://user:pass@host:port\nsocks5://host:port\nhost:port:user:pass\n# comment line"}
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 font-mono text-xs placeholder:text-[var(--text-muted)] focus:border-accent-400 focus:outline-none" />
+
+          {text.trim() && (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <Badge tone={validCount > 0 ? "success" : "neutral"}>{validCount} ready</Badge>
+              {parsed.duplicates > 0 && <Badge tone="warning">{parsed.duplicates} duplicate</Badge>}
+              {parsed.errors.length > 0 && <Badge tone="danger">{parsed.errors.length} invalid</Badge>}
+              {parsed.errors.slice(0, 3).map((err) => (
+                <span key={err.line} className="inline-flex items-center gap-1 text-[var(--text-muted)]">
+                  <AlertCircle className="h-3 w-3" /> line {err.line}: {err.message}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            <Button onClick={handleImport} disabled={validCount === 0 || importing}>
+              {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              {importing ? "Importing…" : `Import ${validCount || ""}`.trim()}
+            </Button>
+            <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          </div>
+        </div>
+      )}
     </Card>
   );
 }

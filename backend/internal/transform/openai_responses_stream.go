@@ -2,8 +2,9 @@ package transform
 
 import (
 	"bytes"
-	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 	"fmt"
+
+	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 )
@@ -20,7 +21,7 @@ import (
 // ParseStreamLine maps each event payload to canonical chunks (for routing a
 // Responses provider like Codex back to a client). RenderStreamChunk produces
 // the corresponding event sequence for a client that speaks the Responses
-// dialect. This mirrors 9router's openai-responses streaming translators.
+// dialect.
 
 // respStreamEvent is one Responses SSE data payload.
 type respStreamEvent struct {

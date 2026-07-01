@@ -24,6 +24,14 @@ func (s *Server) adminUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, &update.Info{Current: s.versionString(), Checked: false})
 		return
 	}
-	info := s.updates.Check(r.Context())
+	// ?refresh=1 forces a live re-check, bypassing the in-memory cache. This
+	// backs the dashboard "Check now" button so a just-published release is
+	// detected immediately instead of waiting for the cache TTL.
+	var info *update.Info
+	if q := r.URL.Query().Get("refresh"); q == "1" || q == "true" {
+		info = s.updates.Refresh(r.Context())
+	} else {
+		info = s.updates.Check(r.Context())
+	}
 	writeJSON(w, http.StatusOK, info)
 }

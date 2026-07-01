@@ -17,10 +17,10 @@ const DefaultWorkerURL = "https://abc-tunnel.us"
 
 // Manager orchestrates the Cloudflare quick tunnel lifecycle.
 type Manager struct {
-	dataDir    string
-	localPort  int
-	log        *slog.Logger
-	workerURL  string
+	dataDir   string
+	localPort int
+	log       *slog.Logger
+	workerURL string
 
 	mu              sync.Mutex
 	cancelToken     chan struct{}
@@ -53,11 +53,11 @@ type TunnelStatus struct {
 
 // EnableResult holds the result of enabling a tunnel.
 type EnableResult struct {
-	Success       bool   `json:"success"`
-	TunnelURL     string `json:"tunnelUrl"`
-	ShortID       string `json:"shortId"`
-	PublicURL     string `json:"publicUrl"`
-	AlreadyRunning bool  `json:"alreadyRunning,omitempty"`
+	Success        bool   `json:"success"`
+	TunnelURL      string `json:"tunnelUrl"`
+	ShortID        string `json:"shortId"`
+	PublicURL      string `json:"publicUrl"`
+	AlreadyRunning bool   `json:"alreadyRunning,omitempty"`
 }
 
 // registerTunnelUrl registers the tunnel URL with the worker to get a short
@@ -82,7 +82,7 @@ func (m *Manager) registerTunnelURL(shortID, tunnelURL string) error {
 	return nil
 }
 
-// Enable starts a Cloudflare quick tunnel. The flow mirrors 9router:
+// Enable starts a Cloudflare quick tunnel. The flow:
 // 1. Check if already running + health → reuse
 // 2. Kill existing cloudflared
 // 3. Spawn quick tunnel → get trycloudflare.com URL

@@ -27,6 +27,10 @@ jobs:
             goarch: amd64
           - goos: linux
             goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
     steps:
       - uses: actions/checkout@v5
 
@@ -51,19 +55,28 @@ jobs:
           CGO_ENABLED: "0"
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          MATRIX_GOOS: ${{ matrix.goos }}
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
+          BIN=keirouter
+          if [ "${MATRIX_GOOS}" = "windows" ]; then BIN=keirouter.exe; fi
           cd backend
-          go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o ../keirouter ./cmd/keirouter
+          go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o "../${BIN}" ./cmd/keirouter
 
       - name: Package
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
-          ARCHIVE="keirouter_${VERSION}_${MATRIX_GOOS}_${MATRIX_GOARCH}.tar.gz"
           mkdir -p dist/keirouter/frontend
-          cp keirouter dist/keirouter/
           cp -R frontend/dist dist/keirouter/frontend/
-          cd dist && tar -czf "../${ARCHIVE}" keirouter
+          if [ "${MATRIX_GOOS}" = "windows" ]; then
+            ARCHIVE="keirouter_${VERSION}_${MATRIX_GOOS}_${MATRIX_GOARCH}.zip"
+            cp keirouter.exe dist/keirouter/
+            ( cd dist && zip -qr "../${ARCHIVE}" keirouter )
+          else
+            ARCHIVE="keirouter_${VERSION}_${MATRIX_GOOS}_${MATRIX_GOARCH}.tar.gz"
+            cp keirouter dist/keirouter/
+            ( cd dist && tar -czf "../${ARCHIVE}" keirouter )
+          fi
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
         env:
           MATRIX_GOOS: ${{ matrix.goos }}
@@ -94,7 +107,7 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          sha256sum *.tar.gz > checksums.txt
+          sha256sum *.tar.gz *.zip > checksums.txt
           cat checksums.txt
 
       - name: Generate changelog
@@ -149,6 +162,7 @@ jobs:
           body_path: CHANGES.md
           files: |
             artifacts/*.tar.gz
+            artifacts/*.zip
             artifacts/checksums.txt
 
       - name: Update Homebrew formula
@@ -197,14 +211,14 @@ jobs:
               <<~EOS
                 Quick start:
                   keirouter -bootstrap    # create your first API key
-                  keirouter               # start server on :20180
+                  keirouter start         # start server on :20180
 
                 Dashboard: http://localhost:20180  (default password: keirouter)
               EOS
             end
 
             test do
-              assert_match "KeiRouter", shell_output("\#{bin}/keirouter --help 2>&1", 2)
+              assert_match "KeiRouter", shell_output("\#{bin}/keirouter --help 2>&1")
             end
           end
           EOF

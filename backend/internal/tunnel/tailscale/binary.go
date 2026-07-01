@@ -1,5 +1,4 @@
-// Package tailscale manages the Tailscale binary, daemon, and funnel lifecycle,
-// ported from 9router's src/lib/tunnel/tailscale/.
+// Package tailscale manages the Tailscale binary, daemon, and funnel lifecycle.
 package tailscale
 
 import (

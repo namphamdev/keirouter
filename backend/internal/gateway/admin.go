@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -32,7 +34,6 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Post("/providers/{id}/routing", s.adminUpdateProviderRouting)
 	r.Patch("/providers/{id}/routing", s.adminUpdateProviderRouting)
 
-	// Per-provider custom quota check script (JavaScript, executed server-side).
 	r.Get("/providers/{id}/quota-script", s.adminGetQuotaScript)
 	r.Post("/providers/{id}/quota-script", s.adminUpdateQuotaScript)
 
@@ -43,6 +44,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 
 	r.Get("/accounts", s.adminListAccounts)
 	r.Post("/accounts", s.adminCreateAccount)
+	r.Post("/accounts/bulk", s.adminBulkCreateAccounts)
 	r.Post("/validate-key", s.adminValidateKey)
 	r.Patch("/accounts/{id}", s.adminUpdateAccount)
 	r.Delete("/accounts/{id}", s.adminDeleteAccount)
@@ -96,12 +98,10 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/models/disabled", s.adminListDisabledModels)
 	r.Post("/models/disabled", s.adminDisableModels)
 	r.Delete("/models/disabled", s.adminEnableModels)
-	r.Get("/models/custom", s.adminListCustomModels)
-	r.Post("/models/custom", s.adminAddCustomModels)
-	r.Delete("/models/custom", s.adminRemoveCustomModels)
 
 	r.Get("/settings/endpoint", s.adminGetEndpointSettings)
 	r.Post("/settings/endpoint", s.adminUpdateEndpointSettings)
+	r.Post("/settings/headroom-test", s.adminTestHeadroom)
 	r.Get("/settings/access", s.adminGetAccessSettings)
 	r.Post("/settings/access", s.adminUpdateAccessSettings)
 	r.Get("/settings/database", s.adminExportDatabase)
@@ -126,6 +126,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 	s.mountOAuth(r)
 	s.mountKiro(r)
 	s.mountCustomFlows(r)
+	s.mountCustomProviders(r)
 
 	s.mountCLITools(r)
 
@@ -180,6 +181,12 @@ func (s *Server) adminListProviders(w http.ResponseWriter, r *http.Request) {
 			"input_per_m":   p.InputPerM,
 			"output_per_m":  p.OutputPerM,
 		}
+		// Custom (user-defined) provider instances expose their configured base
+		// URL so the dashboard can surface it on the provider detail page.
+		if p.Custom {
+			entry["custom"] = true
+			entry["base_url"] = p.BaseURL
+		}
 		if len(p.Regions) > 0 {
 			regions := make([]map[string]string, 0, len(p.Regions))
 			for _, r := range p.Regions {
@@ -224,10 +231,12 @@ func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type modelInfo struct {
-		ID     string `json:"id"`
-		Name   string `json:"name"`
-		Kind   string `json:"kind"`
-		Custom bool   `json:"custom,omitempty"`
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		Kind       string `json:"kind"`
+		Custom     bool   `json:"custom,omitempty"`
+		DBID       string `json:"db_id,omitempty"`
+		Discovered bool   `json:"discovered,omitempty"`
 	}
 	modelKind := func(kind core.ServiceKind) core.ServiceKind {
 		if kind == "" {
@@ -236,7 +245,17 @@ func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
 		return kind
 	}
 
-	// Static catalog models.
+	// User-registered custom models for this provider (db-backed). These are
+	// tracked separately so the dashboard can render an editable section.
+	customByID := map[string]store.CustomModel{}
+	if cms, cerr := s.db.CustomProviders().ListModelsByProvider(r.Context(), providerID); cerr == nil {
+		for _, cm := range cms {
+			customByID[cm.ModelID] = cm
+		}
+	}
+
+	// Static catalog models (already merged with custom models by
+	// ModelsForProvider). Flag any entry that is a user-defined custom model.
 	static := connectors.ModelsForProvider(providerID)
 	seen := map[string]bool{}
 	var out []modelInfo
@@ -245,7 +264,12 @@ func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
 		if kindFilter != "" && kind != kindFilter {
 			continue
 		}
-		out = append(out, modelInfo{ID: m.ID, Name: m.Name, Kind: string(kind)})
+		mi := modelInfo{ID: m.ID, Name: m.Name, Kind: string(kind)}
+		if cm, ok := customByID[m.ID]; ok {
+			mi.Custom = true
+			mi.DBID = cm.ID
+		}
+		out = append(out, mi)
 		seen[m.ID] = true
 	}
 
@@ -281,23 +305,6 @@ func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
 				break // only use first valid account
 			}
 		}
-	}
-
-	// Per-provider custom models (user-defined ids supplementing the catalog).
-	for _, cm := range s.loadCustomModels(r.Context(), providerID) {
-		kind := modelKind(core.ServiceKind(cm.Kind))
-		if kindFilter != "" && kind != kindFilter {
-			continue
-		}
-		if seen[cm.ID] {
-			continue
-		}
-		name := cm.Name
-		if name == "" {
-			name = cm.ID
-		}
-		out = append(out, modelInfo{ID: cm.ID, Name: name, Kind: string(kind), Custom: true})
-		seen[cm.ID] = true
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"models": out})
@@ -703,6 +710,232 @@ func (s *Server) adminCreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": acc.ID, "provider": acc.Provider, "label": acc.Label})
+}
+
+// bulkMaxItems caps the number of credentials accepted in a single bulk import
+// to bound memory, upstream validation fan-out, and DB write time.
+const bulkMaxItems = 1000
+
+// bulkValidateConcurrency bounds how many upstream credential probes run at
+// once during a bulk import with validation enabled.
+const bulkValidateConcurrency = 6
+
+type bulkAccountItem struct {
+	Label   string `json:"label"`
+	APIKey  string `json:"api_key"`
+	BaseURL string `json:"base_url"`
+}
+
+type bulkAccountsRequest struct {
+	Provider string `json:"provider"`
+	// Shared settings applied to every item unless an item overrides them.
+	BaseURL           string `json:"base_url"`
+	Region            string `json:"region"`
+	AccountID         string `json:"account_id"`
+	AzureEndpoint     string `json:"azure_endpoint"`
+	AzureDeployment   string `json:"azure_deployment"`
+	AzureAPIVersion   string `json:"azure_api_version"`
+	AzureOrganization string `json:"azure_organization"`
+	Priority          int    `json:"priority"`
+	ProxyPoolID       string `json:"proxy_pool_id"`
+	// Validate probes each credential against the upstream before persisting.
+	// Off by default for bulk to avoid slow imports and upstream rate limits.
+	Validate bool              `json:"validate"`
+	Items    []bulkAccountItem `json:"items"`
+}
+
+type bulkAccountResult struct {
+	Index  int    `json:"index"`
+	Label  string `json:"label"`
+	Status string `json:"status"` // created | error | skipped
+	ID     string `json:"id,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// adminBulkCreateAccounts imports many provider credentials in one request. It
+// reuses the same sealing, metadata, validation, and persistence path as the
+// single-create handler, but reports a per-item outcome so partial failures
+// don't abort the whole batch. Upstream validation (when enabled) runs with a
+// bounded worker pool; DB writes are serialized to stay friendly to SQLite.
+func (s *Server) adminBulkCreateAccounts(w http.ResponseWriter, r *http.Request) {
+	var body bulkAccountsRequest
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.Provider == "" {
+		writeError(w, http.StatusBadRequest, "provider is required")
+		return
+	}
+	spec, ok := connectors.SpecByID(body.Provider)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "unknown provider: "+body.Provider)
+		return
+	}
+	if s.vault == nil {
+		writeError(w, http.StatusInternalServerError, "vault not configured")
+		return
+	}
+	if len(body.Items) == 0 {
+		writeError(w, http.StatusBadRequest, "items is required")
+		return
+	}
+	if len(body.Items) > bulkMaxItems {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("too many items: %d (max %d)", len(body.Items), bulkMaxItems))
+		return
+	}
+
+	// SSRF Protection: validate the shared base/endpoint URLs once up front.
+	if body.BaseURL != "" {
+		if err := httputil.ValidateBaseURL(body.BaseURL); err != nil {
+			s.log.Warn("blocked suspicious base_url", "url", body.BaseURL, "error", err)
+			writeError(w, http.StatusBadRequest, "invalid base_url: URL blocked by security policy")
+			return
+		}
+	}
+	if body.AzureEndpoint != "" {
+		if err := httputil.ValidateBaseURL(body.AzureEndpoint); err != nil {
+			s.log.Warn("blocked suspicious azure_endpoint", "url", body.AzureEndpoint, "error", err)
+			writeError(w, http.StatusBadRequest, "invalid azure_endpoint: URL blocked by security policy")
+			return
+		}
+	}
+
+	results := make([]bulkAccountResult, len(body.Items))
+	var (
+		seen    = map[string]struct{}{} // de-dup api keys within the batch
+		seenMu  sync.Mutex
+		writeMu sync.Mutex // serialize DB writes (SQLite-friendly)
+		sem     = make(chan struct{}, bulkValidateConcurrency)
+		wg      sync.WaitGroup
+	)
+
+	for i, item := range body.Items {
+		label := strings.TrimSpace(item.Label)
+		key := strings.TrimSpace(item.APIKey)
+		results[i] = bulkAccountResult{Index: i, Label: label}
+
+		authKind := accountAuthKind(spec, key)
+		if authKind != store.AuthNone && key == "" {
+			results[i].Status = "error"
+			results[i].Error = "api_key is required"
+			continue
+		}
+
+		// De-duplicate identical keys within the same batch.
+		if key != "" {
+			seenMu.Lock()
+			if _, dup := seen[key]; dup {
+				seenMu.Unlock()
+				results[i].Status = "skipped"
+				results[i].Error = "duplicate api key in batch"
+				continue
+			}
+			seen[key] = struct{}{}
+			seenMu.Unlock()
+		}
+
+		// Per-item base URL overrides the shared one when present.
+		baseURL := strings.TrimSpace(item.BaseURL)
+		if baseURL == "" {
+			baseURL = body.BaseURL
+		}
+		if baseURL != "" {
+			if err := httputil.ValidateBaseURL(baseURL); err != nil {
+				results[i].Status = "error"
+				results[i].Error = "invalid base_url: URL blocked by security policy"
+				continue
+			}
+		}
+
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, label, key, baseURL string, authKind store.AuthKind) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			meta, err := providerAccountMetadata(spec, providerMetadataInput{
+				BaseURL:           baseURL,
+				Region:            body.Region,
+				AccountID:         body.AccountID,
+				AzureEndpoint:     body.AzureEndpoint,
+				AzureDeployment:   body.AzureDeployment,
+				AzureAPIVersion:   body.AzureAPIVersion,
+				AzureOrganization: body.AzureOrganization,
+			})
+			if err != nil {
+				results[i].Status = "error"
+				results[i].Error = err.Error()
+				return
+			}
+
+			now := time.Now()
+			displayLabel := label
+			if displayLabel == "" {
+				displayLabel = fmt.Sprintf("%s-%d", spec.DisplayName, i+1)
+			}
+			acc := store.Account{
+				ID:        uuid.NewString(),
+				TenantID:  adminTenant,
+				Provider:  body.Provider,
+				Label:     displayLabel,
+				AuthKind:  authKind,
+				Priority:  defaultInt(body.Priority, 100),
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+			if body.ProxyPoolID != "" {
+				acc.ProxyPoolID = body.ProxyPoolID
+			}
+			if err := s.vault.Seal(&acc, vault.NewSecret{APIKey: key, Metadata: meta}); err != nil {
+				results[i].Status = "error"
+				results[i].Error = "vault seal failed"
+				return
+			}
+
+			if body.Validate {
+				if verr := s.validateAccountCredentials(r.Context(), acc); verr != nil {
+					results[i].Status = "error"
+					results[i].Error = sanitizeError(s.log, verr, "credential validation failed")
+					return
+				}
+			}
+
+			writeMu.Lock()
+			err = s.accounts.Create(r.Context(), acc)
+			writeMu.Unlock()
+			if err != nil {
+				results[i].Status = "error"
+				results[i].Error = sanitizeError(s.log, err, "account creation failed")
+				return
+			}
+			results[i].Status = "created"
+			results[i].ID = acc.ID
+			results[i].Label = displayLabel
+		}(i, label, key, baseURL, authKind)
+	}
+
+	wg.Wait()
+
+	sort.Slice(results, func(a, b int) bool { return results[a].Index < results[b].Index })
+	var created, failed, skipped int
+	for _, res := range results {
+		switch res.Status {
+		case "created":
+			created++
+		case "skipped":
+			skipped++
+		default:
+			failed++
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total":   len(results),
+		"created": created,
+		"failed":  failed,
+		"skipped": skipped,
+		"results": results,
+	})
 }
 
 func (s *Server) adminDeleteAccount(w http.ResponseWriter, r *http.Request) {
@@ -1686,148 +1919,6 @@ func (s *Server) adminDeleteAlias(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ---- custom provider models -------------------------------------------------
-
-const customModelsPrefix = "custom_models_" // + provider id
-
-type customModelEntry struct {
-	ID   string `json:"id"`
-	Name string `json:"name,omitempty"`
-	Kind string `json:"kind,omitempty"`
-}
-
-func normalizeCustomModelKind(kind string) string {
-	k := strings.ToLower(strings.TrimSpace(kind))
-	if k == "" {
-		return string(core.ServiceLLM)
-	}
-	if !core.ValidServiceKind(core.ServiceKind(k)) {
-		return string(core.ServiceLLM)
-	}
-	return k
-}
-
-func (s *Server) loadCustomModels(ctx context.Context, provider string) []customModelEntry {
-	if s.settings == nil {
-		return nil
-	}
-	raw, err := s.settings.Get(ctx, customModelsPrefix+provider)
-	if err != nil || raw == "" {
-		return nil
-	}
-	var entries []customModelEntry
-	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
-		return nil
-	}
-	return entries
-}
-
-func (s *Server) saveCustomModels(ctx context.Context, provider string, entries []customModelEntry) error {
-	if s.settings == nil {
-		return nil
-	}
-	raw, err := json.Marshal(entries)
-	if err != nil {
-		return err
-	}
-	return s.settings.Set(ctx, customModelsPrefix+provider, string(raw))
-}
-
-func mergeCustomModels(existing []customModelEntry, add []customModelEntry) []customModelEntry {
-	byID := map[string]customModelEntry{}
-	order := make([]string, 0, len(existing)+len(add))
-	for _, e := range existing {
-		id := strings.TrimSpace(e.ID)
-		if id == "" {
-			continue
-		}
-		if _, ok := byID[id]; !ok {
-			order = append(order, id)
-		}
-		byID[id] = customModelEntry{ID: id, Name: strings.TrimSpace(e.Name), Kind: normalizeCustomModelKind(e.Kind)}
-	}
-	for _, e := range add {
-		id := strings.TrimSpace(e.ID)
-		if id == "" {
-			continue
-		}
-		if _, ok := byID[id]; !ok {
-			order = append(order, id)
-		}
-		byID[id] = customModelEntry{ID: id, Name: strings.TrimSpace(e.Name), Kind: normalizeCustomModelKind(e.Kind)}
-	}
-	out := make([]customModelEntry, 0, len(order))
-	for _, id := range order {
-		out = append(out, byID[id])
-	}
-	return out
-}
-
-func (s *Server) adminListCustomModels(w http.ResponseWriter, r *http.Request) {
-	provider := r.URL.Query().Get("provider")
-	if provider == "" {
-		writeError(w, http.StatusBadRequest, "provider query param is required")
-		return
-	}
-	entries := s.loadCustomModels(r.Context(), provider)
-	writeJSON(w, http.StatusOK, map[string]any{"models": entries})
-}
-
-func (s *Server) adminAddCustomModels(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Provider string             `json:"providerAlias"`
-		Models   []customModelEntry `json:"models"`
-	}
-	if !decodeJSON(w, r, &body) {
-		return
-	}
-	if body.Provider == "" {
-		writeError(w, http.StatusBadRequest, "providerAlias is required")
-		return
-	}
-	if len(body.Models) == 0 {
-		writeError(w, http.StatusBadRequest, "models is required")
-		return
-	}
-	existing := s.loadCustomModels(r.Context(), body.Provider)
-	merged := mergeCustomModels(existing, body.Models)
-	if err := s.saveCustomModels(r.Context(), body.Provider, merged); err != nil {
-		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"models": merged})
-}
-
-func (s *Server) adminRemoveCustomModels(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Provider string   `json:"providerAlias"`
-		IDs      []string `json:"ids"`
-	}
-	if !decodeJSON(w, r, &body) {
-		return
-	}
-	if body.Provider == "" {
-		writeError(w, http.StatusBadRequest, "providerAlias is required")
-		return
-	}
-	remove := map[string]bool{}
-	for _, id := range body.IDs {
-		remove[strings.TrimSpace(id)] = true
-	}
-	existing := s.loadCustomModels(r.Context(), body.Provider)
-	var kept []customModelEntry
-	for _, e := range existing {
-		if !remove[e.ID] {
-			kept = append(kept, e)
-		}
-	}
-	if err := s.saveCustomModels(r.Context(), body.Provider, kept); err != nil {
-		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"models": kept})
-}
-
 // ---- disabled models --------------------------------------------------------
 
 const disabledModelsPrefix = "disabled_models_" // + provider alias
@@ -1944,8 +2035,8 @@ func (s *Server) adminConsoleStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	// Send initial history.
-	lines := s.consoleLog.Lines()
-	initData, _ := json.Marshal(map[string]any{"type": "init", "logs": lines})
+	entries := s.consoleLog.Entries()
+	initData, _ := json.Marshal(map[string]any{"type": "init", "logs": entries})
 	fmt.Fprintf(w, "data: %s\n\n", initData)
 	flusher.Flush()
 
@@ -1967,7 +2058,7 @@ func (s *Server) adminConsoleStream(w http.ResponseWriter, r *http.Request) {
 			if ev.Clear {
 				data, _ = json.Marshal(map[string]any{"type": "clear"})
 			} else {
-				data, _ = json.Marshal(map[string]any{"type": "line", "line": ev.Line})
+				data, _ = json.Marshal(map[string]any{"type": "line", "log": ev.Entry})
 			}
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
@@ -2009,7 +2100,7 @@ func (s *Server) adminExportDatabase(w http.ResponseWriter, r *http.Request) {
 		}
 		if portable {
 			if err := s.exportPortableSecrets(out, a, passphrase); err != nil {
-				s.consoleLog.Logf("ERROR", "portable export failed for account %s: %v", a.ID, err)
+				s.consoleLog.Log("ERROR", fmt.Sprintf("Portable export failed for account %s", a.ID), err.Error())
 				writeError(w, http.StatusInternalServerError, "portable export failed: cannot re-key account "+a.ID+" (master key mismatch?)")
 				return
 			}
@@ -2173,7 +2264,7 @@ func (s *Server) adminImportDatabase(w http.ResponseWriter, r *http.Request) {
 				}
 				if portable {
 					if err := s.importPortableSecrets(&acc, a.PortableSecret, passphrase); err != nil {
-						s.consoleLog.Logf("ERROR", "portable import failed for account %s: %v", acc.ID, err)
+						s.consoleLog.Log("ERROR", fmt.Sprintf("Portable import failed for account %s", acc.ID), err.Error())
 						writeError(w, http.StatusBadRequest, "portable import failed: wrong passphrase or corrupt backup")
 						return
 					}

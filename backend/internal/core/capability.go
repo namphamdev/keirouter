@@ -9,6 +9,11 @@ const (
 	CapToolCalling      Capability = "tool_calling"
 	CapVision           Capability = "vision"
 	CapAudioInput       Capability = "audio_input"
+	CapVideoInput       Capability = "video_input"
+	CapDocumentInput    Capability = "document_input"
+	CapImageOutput      Capability = "image_output"
+	CapAudioOutput      Capability = "audio_output"
+	CapWebSearch        Capability = "web_search"
 	CapReasoning        Capability = "reasoning"
 	CapStructuredOutput Capability = "structured_output"
 	CapLongContext      Capability = "long_context" // >= 200k context window

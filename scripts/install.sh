@@ -208,7 +208,7 @@ run_source_install() {
   ok "Dashboard assets installed to $SHARE_DIR/frontend/dist"
   echo ""
   echo "Quick start:"
-  echo "  keirouter                  # start the server on :20180"
+  echo "  keirouter start            # start the server on :20180"
   echo "  keirouter -bootstrap       # create your first API key"
   echo ""
   echo "Dashboard: http://localhost:20180  (default password: keirouter)"

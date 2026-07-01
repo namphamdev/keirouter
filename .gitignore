@@ -10,6 +10,7 @@ backend/dist/
 coverage.txt
 /keirouter
 /keirouter.exe
+/backend/keirouter
 
 # Go build cache / vendor
 vendor/
@@ -49,5 +50,6 @@ data/
 .vscode/*
 !.vscode/extensions.json
 *.swp
+.kiro/*
 node_modules/
 codedb.snapshot

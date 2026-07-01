@@ -143,7 +143,13 @@ type UsageRecord struct {
 	SlimRules        string // comma-separated rule names that fired (e.g. "git-diff,grep")
 	CavemanActive    bool   // caveman output compression was active
 	TerseActive      bool   // terse output compression was active
-	CreatedAt        time.Time
+
+	HeadroomTokensSaved int  // estimated tokens saved by Headroom (input-side compression)
+	HeadroomBytesSaved  int  // bytes removed by Headroom (input-side compression)
+	HeadroomActive      bool // Headroom achieved real (non-phantom) savings
+	PonytailActive      bool // ponytail output injection was active
+
+	CreatedAt time.Time
 }
 
 // BudgetScope identifies what a budget applies to.

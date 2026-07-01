@@ -2,8 +2,9 @@ package transform
 
 import (
 	"bytes"
-	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 	"fmt"
+
+	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 )
@@ -49,6 +50,7 @@ func (GeminiCodec) ParseStreamLine(line []byte, _ string) ([]core.StreamChunk, e
 				chunks = append(chunks, core.StreamChunk{
 					Type: core.ChunkToolCall,
 					ToolCall: &core.ToolCall{
+						ID:        geminiCallID(p.FunctionCall.Name),
 						Name:      p.FunctionCall.Name,
 						Arguments: p.FunctionCall.Args,
 					},

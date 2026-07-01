@@ -17,7 +17,7 @@ import (
 // the request body is a hand-encoded protobuf wrapped in a Connect-RPC frame,
 // authenticated by the x-cursor-checksum "Jyh cipher" header set, and the
 // response is a sequence of Connect-RPC frames carrying protobuf payloads. This
-// connector ports 9router's CursorExecutor: it builds the framed body, reads the
+// connector builds the framed body, reads the
 // full framed response, and decodes each frame into canonical chunks.
 type Cursor struct {
 	id          string

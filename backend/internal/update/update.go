@@ -20,7 +20,7 @@ import (
 const defaultRepo = "mydisha/keirouter"
 
 // defaultTTL is how long a successful check is cached before refreshing.
-const defaultTTL = 6 * time.Hour
+const defaultTTL = 15 * time.Minute
 
 // Info is the update status reported to the dashboard.
 type Info struct {
@@ -99,6 +99,32 @@ func (c *Checker) Check(ctx context.Context) *Info {
 			return &cached
 		}
 		c.mu.Unlock()
+		return &Info{Current: c.current, Checked: false}
+	}
+
+	c.mu.Lock()
+	c.cached = info
+	c.cachedAt = time.Now()
+	c.mu.Unlock()
+
+	out := *info
+	return &out
+}
+
+// Refresh forces a live GitHub check, bypassing the cache, and stores the
+// result. It backs the dashboard's "Check now" action so a freshly-published
+// release shows up immediately instead of waiting for the cache TTL to expire.
+// On a network/API error it serves a stale cache when available, otherwise it
+// reports the current version with Checked=false.
+func (c *Checker) Refresh(ctx context.Context) *Info {
+	info, err := c.fetch(ctx)
+	if err != nil {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.cached != nil {
+			cached := *c.cached
+			return &cached
+		}
 		return &Info{Current: c.current, Checked: false}
 	}
 

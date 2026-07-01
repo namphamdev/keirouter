@@ -103,7 +103,7 @@ func (s *Server) adminTailscaleDisable(w http.ResponseWriter, r *http.Request) {
 }
 
 // adminTailscaleInstall handles Tailscale installation with SSE streaming
-// progress events, matching 9router's tailscale-install endpoint.
+// progress events.
 func (s *Server) adminTailscaleInstall(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {

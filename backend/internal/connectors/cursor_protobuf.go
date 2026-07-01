@@ -14,7 +14,7 @@ import (
 )
 
 // Cursor speaks a Connect-RPC protobuf wire format with no published .proto.
-// This is a faithful port of 9router's cursorProtobuf.js: every field number is
+// This is a faithful port of the Cursor client's protobuf encoding: every field number is
 // hardcoded, varints are written manually, and the request/response are wrapped
 // in Connect-RPC frames (1 flag byte + 4-byte big-endian length + payload).
 
@@ -42,30 +42,30 @@ const (
 	fREQUEST = 1
 
 	// StreamUnifiedChatRequest
-	fMESSAGES           = 1
-	fUNKNOWN_2          = 2
-	fINSTRUCTION        = 3
-	fUNKNOWN_4          = 4
-	fMODEL              = 5
-	fWEB_TOOL           = 8
-	fUNKNOWN_13         = 13
-	fCURSOR_SETTING     = 15
-	fUNKNOWN_19         = 19
-	fCONVERSATION_ID    = 23
-	fMETADATA           = 26
-	fIS_AGENTIC         = 27
-	fSUPPORTED_TOOLS    = 29
-	fMESSAGE_IDS        = 30
-	fMCP_TOOLS          = 34
-	fLARGE_CONTEXT      = 35
-	fUNKNOWN_38         = 38
-	fUNIFIED_MODE       = 46
-	fUNKNOWN_47         = 47
-	fSHOULD_DISABLE     = 48
-	fTHINKING_LEVEL     = 49
-	fUNKNOWN_51         = 51
-	fUNKNOWN_53         = 53
-	fUNIFIED_MODE_NAME  = 54
+	fMESSAGES          = 1
+	fUNKNOWN_2         = 2
+	fINSTRUCTION       = 3
+	fUNKNOWN_4         = 4
+	fMODEL             = 5
+	fWEB_TOOL          = 8
+	fUNKNOWN_13        = 13
+	fCURSOR_SETTING    = 15
+	fUNKNOWN_19        = 19
+	fCONVERSATION_ID   = 23
+	fMETADATA          = 26
+	fIS_AGENTIC        = 27
+	fSUPPORTED_TOOLS   = 29
+	fMESSAGE_IDS       = 30
+	fMCP_TOOLS         = 34
+	fLARGE_CONTEXT     = 35
+	fUNKNOWN_38        = 38
+	fUNIFIED_MODE      = 46
+	fUNKNOWN_47        = 47
+	fSHOULD_DISABLE    = 48
+	fTHINKING_LEVEL    = 49
+	fUNKNOWN_51        = 51
+	fUNKNOWN_53        = 53
+	fUNIFIED_MODE_NAME = 54
 
 	// ConversationMessage
 	fMSG_CONTENT        = 1

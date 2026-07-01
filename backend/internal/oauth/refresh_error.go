@@ -36,8 +36,7 @@ func IsPermanentRefresh(err error) bool {
 }
 
 // classifyRefreshError inspects the token endpoint response body and HTTP
-// status to decide whether a refresh failure is permanent. Mirrors the
-// classification logic used by 9router (classifyOAuthRefreshError).
+// status to decide whether a refresh failure is permanent.
 func classifyRefreshError(body []byte, status int) *RefreshError {
 	// The "error" field is polymorphic: standard OAuth uses a string
 	// ("error": "invalid_grant"), while OpenAI uses a nested object

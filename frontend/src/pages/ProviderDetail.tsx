@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Trash2, Plug, X, Zap, ArrowUp, ArrowDown, CheckCircle, ToggleLeft, ToggleRight, Search, Route, AlertCircle, AlertTriangle, RefreshCw, Terminal, Play } from "lucide-react";
-import { api, type DeviceCode, type OAuthProvider, type Provider, type Account, type ProxyPool, type UpstreamQuota, type ProviderRoutingSettings } from "../lib/api";
+import { ArrowLeft, Plus, Trash2, Plug, X, Zap, ArrowUp, ArrowDown, CheckCircle, ToggleLeft, ToggleRight, Search, Route, AlertCircle, AlertTriangle, RefreshCw, Globe, Copy, Check, Upload, Loader2, XCircle, Layers, FileText, Terminal, Play } from "lucide-react";
+import { api, type DeviceCode, type OAuthProvider, type Provider, type Account, type ProxyPool, type UpstreamQuota, type ProviderRoutingSettings, type BulkAccountResult } from "../lib/api";
 import { KiroConnectModal } from "../components/KiroConnectModal";
 import { QoderConnectModal } from "../components/QoderConnectModal";
 import { KilocodeConnectModal } from "../components/KilocodeConnectModal";
 import { CodebuddyConnectModal } from "../components/CodebuddyConnectModal";
 import { CursorConnectModal } from "../components/CursorConnectModal";
 import { CommandCodeConnectModal } from "../components/CommandCodeConnectModal";
+import { CustomModelsSection } from "../components/CustomModelsSection";
 import { useToast } from "../components/Toast";
+import { parseKeys } from "../lib/bulk";
+
 import {
   Card,
   CardHeader,
@@ -20,6 +23,7 @@ import {
   Spinner,
   EmptyState,
   ErrorBanner,
+  Modal,
 } from "../components/ui";
 
 // redirectURIForProvider returns the OAuth callback the provider redirects to
@@ -91,14 +95,12 @@ export function ProviderDetailPage() {
   const [cursorOpen, setCursorOpen] = useState(false);
   const [commandcodeOpen, setCommandcodeOpen] = useState(false);
   const [addKeyOpen, setAddKeyOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
 
   // Model search and pagination
   const [modelSearchQuery, setModelSearchQuery] = useState("");
   const [modelPage, setModelPage] = useState(1);
   const MODELS_PER_PAGE = 12;
-  const [customModelId, setCustomModelId] = useState("");
-  const [customModelName, setCustomModelName] = useState("");
-  const [customModelKind, setCustomModelKind] = useState("llm");
 
   // Multi-select state for bulk enable/disable. Holds the ids of selected
   // models; selection persists across pagination and search changes.
@@ -116,26 +118,16 @@ export function ProviderDetailPage() {
     });
   };
 
-  const modelList = models.data?.models ?? [];
-  const customModelIdSet = useMemo(
-    () => new Set(modelList.filter((m) => m.custom).map((m) => m.id)),
-    [modelList],
-  );
-  const selectedCustomIds = useMemo(
-    () => [...selectedModelIds].filter((mid) => customModelIdSet.has(mid)),
-    [selectedModelIds, customModelIdSet],
-  );
-
   const filteredModels = useMemo(() => {
-    if (!modelList.length) return [];
-    if (!modelSearchQuery.trim()) return modelList;
+    if (!models.data?.models) return [];
+    if (!modelSearchQuery.trim()) return models.data.models;
     const lowerQ = modelSearchQuery.toLowerCase();
-    return modelList.filter(m =>
-      m.id.toLowerCase().includes(lowerQ) ||
+    return models.data.models.filter(m => 
+      m.id.toLowerCase().includes(lowerQ) || 
       (m.name && m.name.toLowerCase().includes(lowerQ)) ||
       (m.kind && m.kind.toLowerCase().includes(lowerQ))
     );
-  }, [modelList, modelSearchQuery]);
+  }, [models.data?.models, modelSearchQuery]);
 
   useEffect(() => {
     setModelPage(1);
@@ -252,27 +244,6 @@ export function ProviderDetailPage() {
     onError: (e: Error) => toast.error("Couldn't enable models", e.message),
   });
 
-  const addCustomModelMut = useMutation({
-    mutationFn: (models: { id: string; name?: string; kind?: string }[]) => api.addCustomModels(id!, models),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["provider-models", id] });
-      setCustomModelId("");
-      setCustomModelName("");
-      toast.success("Custom model added", "The model appears in Available Models and can be used for routing.");
-    },
-    onError: (e: Error) => toast.error("Couldn't add model", e.message),
-  });
-
-  const removeCustomModelsMut = useMutation({
-    mutationFn: (ids: string[]) => api.removeCustomModels(id!, ids),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["provider-models", id] });
-      setSelectedModelIds(new Set());
-      toast.success("Custom models removed", "Removed user-defined models from this provider.");
-    },
-    onError: (e: Error) => toast.error("Couldn't remove models", e.message),
-  });
-
   const updateRouting = useMutation({
     mutationFn: (patch: Partial<ProviderRoutingSettings>) => api.updateProviderRouting(id!, patch),
     onSuccess: (data) => {
@@ -282,9 +253,72 @@ export function ProviderDetailPage() {
     onError: (e: Error) => toast.error("Routing update failed", e.message),
   });
 
+  // Multi-select for connected accounts: enables bulk enable / disable / delete.
+  const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(new Set());
+  const toggleAccountSelection = (accId: string) =>
+    setSelectedAccountIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(accId)) next.delete(accId);
+      else next.add(accId);
+      return next;
+    });
+  const clearAccountSelection = () => setSelectedAccountIds(new Set());
+
+  const bulkUpdateAccounts = useMutation({
+    mutationFn: async ({ ids, disabled }: { ids: string[]; disabled: boolean }) => {
+      await Promise.all(ids.map((accId) => api.updateAccount(accId, { disabled })));
+    },
+    onSuccess: (_, { ids, disabled }) => {
+      qc.invalidateQueries({ queryKey: ["accounts"] });
+      clearAccountSelection();
+      toast.success(
+        `${ids.length} account${ids.length > 1 ? "s" : ""} ${disabled ? "disabled" : "enabled"}`,
+        disabled ? "Selected accounts are paused and excluded from routing." : "Selected accounts are active again.",
+      );
+    },
+    onError: (e: Error) => toast.error("Bulk update failed", e.message),
+  });
+
+  const bulkDeleteAccounts = useMutation({
+    mutationFn: async (ids: string[]) => {
+      await Promise.all(ids.map((accId) => api.deleteAccount(accId)));
+    },
+    onSuccess: (_, ids) => {
+      qc.invalidateQueries({ queryKey: ["accounts"] });
+      clearAccountSelection();
+      toast.success(`${ids.length} account${ids.length > 1 ? "s" : ""} removed`, "Encrypted secrets have been purged.");
+    },
+    onError: (e: Error) => toast.error("Bulk removal failed", e.message),
+  });
+
   // Sort accounts by priority for display.
   const sortedAccounts = [...myAccounts].sort((a, b) => a.priority - b.priority);
   const disabledModelIds = new Set(disabledModels.data?.ids ?? []);
+
+  // Derived selection state (scoped to this provider's accounts).
+  const selectedList = sortedAccounts.filter((a) => selectedAccountIds.has(a.id));
+  const allAccountsSelected = sortedAccounts.length > 0 && selectedList.length === sortedAccounts.length;
+  const someAccountsSelected = selectedList.length > 0 && !allAccountsSelected;
+  const bulkBusy = bulkUpdateAccounts.isPending || bulkDeleteAccounts.isPending;
+
+  const toggleSelectAllAccounts = () => {
+    if (allAccountsSelected) clearAccountSelection();
+    else setSelectedAccountIds(new Set(sortedAccounts.map((a) => a.id)));
+  };
+  const handleBulkDisable = () => {
+    const ids = selectedList.filter((a) => !a.disabled).map((a) => a.id);
+    if (ids.length) bulkUpdateAccounts.mutate({ ids, disabled: true });
+  };
+  const handleBulkEnable = () => {
+    const ids = selectedList.filter((a) => a.disabled).map((a) => a.id);
+    if (ids.length) bulkUpdateAccounts.mutate({ ids, disabled: false });
+  };
+  const handleBulkDeleteAccounts = () => {
+    const ids = selectedList.map((a) => a.id);
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} account${ids.length > 1 ? "s" : ""}? Encrypted secrets will be purged. This cannot be undone.`)) return;
+    bulkDeleteAccounts.mutate(ids);
+  };
 
   // runTestAll tests every account sequentially (one at a time), updating each
   // row's status as it goes, then summarizes the outcome. Failures don't stop
@@ -356,6 +390,11 @@ export function ProviderDetailPage() {
     provider.auth_modes.includes("none") ||
     !oauthProvider
   );
+  // Bulk key upload applies to providers authenticated by API key. It is hidden
+  // for Azure (each key needs its own endpoint + deployment, so there is no
+  // shared config to bulk against) and for no-auth providers (nothing to bulk).
+  const providerSupportsApiKey = provider.auth_modes.includes("api_key") || provider.auth_kind === "api_key";
+  const supportsBulkUpload = supportsManualConnect && providerSupportsApiKey && provider.id !== "azure";
 
   return (
     <>
@@ -390,6 +429,9 @@ export function ProviderDetailPage() {
               <Badge tone="accent">free</Badge>
             )}
           </div>
+          {provider.custom && provider.base_url && (
+            <BaseURLDisplay baseURL={provider.base_url} dialect={provider.dialect} />
+          )}
         </div>
       </header>
 
@@ -467,6 +509,12 @@ export function ProviderDetailPage() {
                     {provider.auth_kind === "none" ? "Connect" : "Add API key"}
                   </Button>
                 )}
+                {supportsBulkUpload && (
+                  <Button variant="ghost" className="h-8 px-3 text-xs" onClick={() => setBulkOpen(true)}>
+                    <Layers className="h-3.5 w-3.5" />
+                    Bulk add
+                  </Button>
+                )}
               </div>
             }
           />
@@ -494,24 +542,63 @@ export function ProviderDetailPage() {
               hint="Add an account to start routing through this provider."
             />
           ) : (
-            <div className="divide-y divide-[var(--border)]">
-              {sortedAccounts.map((a, i) => (
-                <AccountRow
-                  key={a.id}
-                  account={a}
-                  index={i}
-                  total={sortedAccounts.length}
-                  pools={pools.data?.pools ?? []}
-                  onDelete={() => remove.mutate(a.id)}
-                  onMoveUp={() => moveAccount(a.id, "up")}
-                  onMoveDown={() => moveAccount(a.id, "down")}
-                  onTest={() => runTest(a.id)}
-                  onUpdateProxy={(patch) => updateAccount.mutate({ id: a.id, patch })}
-                  testResult={testResults[a.id]}
-                  disabledByBatch={testingAll}
-                />
-              ))}
-            </div>
+            <>
+              <div className="flex flex-wrap items-center gap-2 border-t border-[var(--border)] bg-[var(--bg-subtle)] px-4 py-2.5">
+                <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--text-muted)]">
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 rounded border-[var(--border)] accent-[var(--color-accent-500)]"
+                    checked={allAccountsSelected}
+                    ref={(el) => { if (el) el.indeterminate = someAccountsSelected; }}
+                    onChange={toggleSelectAllAccounts}
+                  />
+                  Select all
+                </label>
+                {selectedList.length > 0 ? (
+                  <>
+                    <span className="text-xs text-[var(--text-muted)]">{selectedList.length} selected</span>
+                    <div className="flex-1" />
+                    <Button variant="ghost" className="h-7 px-2 text-xs" onClick={handleBulkEnable} disabled={bulkBusy}>
+                      <ToggleRight className="h-3.5 w-3.5 text-emerald-500" />
+                      Enable
+                    </Button>
+                    <Button variant="ghost" className="h-7 px-2 text-xs" onClick={handleBulkDisable} disabled={bulkBusy}>
+                      <ToggleLeft className="h-3.5 w-3.5" />
+                      Disable
+                    </Button>
+                    <Button variant="ghost" className="h-7 px-2 text-xs" onClick={handleBulkDeleteAccounts} disabled={bulkBusy}>
+                      <Trash2 className="h-3.5 w-3.5 text-red-500" />
+                      Delete
+                    </Button>
+                    <Button variant="ghost" className="h-7 px-2 text-xs" onClick={clearAccountSelection} disabled={bulkBusy}>
+                      Clear
+                    </Button>
+                  </>
+                ) : (
+                  <span className="text-xs text-[var(--text-muted)]">Select accounts for bulk actions</span>
+                )}
+              </div>
+              <div className="divide-y divide-[var(--border)]">
+                {sortedAccounts.map((a, i) => (
+                  <AccountRow
+                    key={a.id}
+                    account={a}
+                    index={i}
+                    total={sortedAccounts.length}
+                    pools={pools.data?.pools ?? []}
+                    selected={selectedAccountIds.has(a.id)}
+                    onToggleSelect={() => toggleAccountSelection(a.id)}
+                    onDelete={() => remove.mutate(a.id)}
+                    onMoveUp={() => moveAccount(a.id, "up")}
+                    onMoveDown={() => moveAccount(a.id, "down")}
+                    onTest={() => runTest(a.id)}
+                    onUpdateProxy={(patch) => updateAccount.mutate({ id: a.id, patch })}
+                    testResult={testResults[a.id]}
+                    disabledByBatch={testingAll}
+                  />
+                ))}
+              </div>
+            </>
           )}
         </Card>
 
@@ -519,77 +606,12 @@ export function ProviderDetailPage() {
         <QuotaScriptCard providerId={id!} />
 
         {/* Available Models */}
-        <Card>
-          <CardHeader
-            title="Available Models"
-            description={
-              modelList.length > 0
-                ? `${modelList.length} model${modelList.length === 1 ? "" : "s"} configured for this provider.`
-                : "No catalog models yet. Add a custom model id below (e.g. for Ollama or a private gateway)."
-            }
-          />
-          <form
-            className="flex flex-col gap-3 border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-3 sm:flex-row sm:flex-wrap sm:items-end"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const mid = customModelId.trim();
-              if (!mid || addCustomModelMut.isPending) return;
-              addCustomModelMut.mutate([
-                {
-                  id: mid,
-                  name: customModelName.trim() || undefined,
-                  kind: customModelKind,
-                },
-              ]);
-            }}
-          >
-            <div className="min-w-[10rem] flex-1">
-              <Field label="Model id">
-                <Input
-                  value={customModelId}
-                  onChange={(e) => setCustomModelId(e.target.value)}
-                  placeholder="my-local-model"
-                  className="h-8 text-sm font-mono"
-                />
-              </Field>
-            </div>
-            <div className="min-w-[10rem] flex-1">
-              <Field label="Display name (optional)">
-                <Input
-                  value={customModelName}
-                  onChange={(e) => setCustomModelName(e.target.value)}
-                  placeholder="My Local Model"
-                  className="h-8 text-sm"
-                />
-              </Field>
-            </div>
-            <div className="w-36">
-              <Field label="Kind">
-              <select
-                value={customModelKind}
-                onChange={(e) => setCustomModelKind(e.target.value)}
-                className="h-8 w-full rounded-md border border-[var(--border)] bg-[var(--bg)] px-2 text-xs text-[var(--text)] outline-none focus:border-[var(--color-accent-500)]"
-              >
-                <option value="llm">LLM</option>
-                <option value="embedding">Embedding</option>
-                <option value="image">Image</option>
-                <option value="tts">TTS</option>
-                <option value="stt">STT</option>
-                <option value="search">Search</option>
-                <option value="fetch">Fetch</option>
-              </select>
-            </Field>
-            </div>
-            <Button
-              type="submit"
-              className="h-8 shrink-0 px-3 text-xs"
-              disabled={!customModelId.trim() || addCustomModelMut.isPending}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Add model
-            </Button>
-          </form>
-          {modelList.length > 0 && (
+        {models.data?.models && models.data.models.length > 0 && (
+          <Card>
+            <CardHeader
+              title="Available Models"
+              description={`${models.data.models.length} model${models.data.models.length === 1 ? "" : "s"} configured for this provider.`}
+            />
             <div className="flex flex-col gap-3 border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="relative w-full max-w-sm">
                 <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
@@ -648,17 +670,6 @@ export function ProviderDetailPage() {
                   <ToggleLeft className="h-3.5 w-3.5 text-[var(--text-muted)]" />
                   Disable
                 </Button>
-                {selectedCustomIds.length > 0 && (
-                  <Button
-                    variant="ghost"
-                    className="h-8 px-3 text-xs text-[color:var(--color-danger)]"
-                    onClick={() => removeCustomModelsMut.mutate(selectedCustomIds)}
-                    disabled={removeCustomModelsMut.isPending}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Remove custom
-                  </Button>
-                )}
                 {selectedModelIds.size > 0 && (
                   <Button
                     variant="ghost"
@@ -670,34 +681,32 @@ export function ProviderDetailPage() {
                 )}
               </div>
             </div>
-          )}
-          {modelList.length > 0 && filteredModels.length === 0 && (
-            <div className="px-6 py-12 text-center text-sm text-[var(--text-muted)] border-t border-[var(--border)]">
-              No models found matching "{modelSearchQuery}"
-            </div>
-          )}
-          {modelList.length > 0 && filteredModels.length > 0 && (
-            <div className={`grid grid-cols-1 gap-px overflow-hidden border-t border-[var(--border)] bg-[var(--border)] sm:grid-cols-2 lg:grid-cols-3 ${totalModelPages <= 1 ? "rounded-b-2xl" : ""}`}>
-              {paginatedModels.map((m) => (
-                <ModelCell
-                  key={m.id}
-                  model={m}
-                  provider={provider}
-                  disabled={disabledModelIds.has(m.id)}
-                  selected={selectedModelIds.has(m.id)}
-                  onToggleSelect={() => toggleModelSelection(m.id)}
-                  onToggleDisable={() => {
-                    if (disabledModelIds.has(m.id)) {
-                      enableModelsMut.mutate([m.id]);
-                    } else {
-                      disableModelsMut.mutate([m.id]);
-                    }
-                  }}
-                />
-              ))}
-            </div>
-          )}
-          {modelList.length > 0 && totalModelPages > 0 && (
+            {filteredModels.length === 0 ? (
+              <div className="px-6 py-12 text-center text-sm text-[var(--text-muted)] border-t border-[var(--border)]">
+                No models found matching "{modelSearchQuery}"
+              </div>
+            ) : (
+              <div className={`grid grid-cols-1 gap-px overflow-hidden border-t border-[var(--border)] bg-[var(--border)] sm:grid-cols-2 lg:grid-cols-3 ${totalModelPages <= 1 ? "rounded-b-2xl" : ""}`}>
+                {paginatedModels.map((m) => (
+                  <ModelCell
+                    key={m.id}
+                    model={m}
+                    provider={provider}
+                    disabled={disabledModelIds.has(m.id)}
+                    selected={selectedModelIds.has(m.id)}
+                    onToggleSelect={() => toggleModelSelection(m.id)}
+                    onToggleDisable={() => {
+                      if (disabledModelIds.has(m.id)) {
+                        enableModelsMut.mutate([m.id]);
+                      } else {
+                        disableModelsMut.mutate([m.id]);
+                      }
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+            {totalModelPages > 0 && (
               <div className="flex items-center justify-between rounded-b-2xl border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-3">
                 <span className="text-xs text-[var(--text-muted)]">
                   Showing {(modelPage - 1) * MODELS_PER_PAGE + 1} to {Math.min(modelPage * MODELS_PER_PAGE, filteredModels.length)} of {filteredModels.length} models
@@ -721,11 +730,16 @@ export function ProviderDetailPage() {
                   </Button>
                 </div>
               </div>
-          )}
-        </Card>
+            )}
+          </Card>
+        )}
+
+        {/* User-registered custom models (separate from the catalog list). */}
+        <CustomModelsSection provider={provider} />
       </div>
 
       {oauthOpen && oauthProvider && (
+
         <ConnectModal provider={oauthProvider} onClose={() => setOauthOpen(false)} />
       )}
       {kiroOpen && <KiroConnectModal onClose={() => setKiroOpen(false)} />}
@@ -762,7 +776,62 @@ export function ProviderDetailPage() {
           onClose={() => { setAddKeyOpen(false); setError(""); }}
         />
       )}
+      {bulkOpen && (
+        <BulkAddKeysModal provider={provider} onClose={() => setBulkOpen(false)} />
+      )}
     </>
+  );
+}
+
+// BaseURLDisplay shows the upstream base URL for a user-defined custom
+// provider (OpenAI- or Anthropic-compatible) on the provider detail header,
+// with a one-click copy affordance. Hidden for built-in providers whose base
+// URL is fixed and not user-configurable.
+function BaseURLDisplay({ baseURL, dialect }: { baseURL: string; dialect?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(baseURL);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard may be unavailable (insecure context); silently ignore.
+    }
+  };
+
+  const dialectLabel =
+    dialect === "anthropic"
+      ? "Anthropic-compatible"
+      : dialect === "openai"
+        ? "OpenAI-compatible"
+        : dialect;
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2">
+      <div className="inline-flex max-w-full items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] px-3 py-1.5">
+        <Globe className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
+        <span className="text-xs font-medium text-[var(--text-muted)]">Base URL</span>
+        <code className="truncate font-mono text-xs text-[var(--text)]" title={baseURL}>
+          {baseURL}
+        </code>
+        <button
+          type="button"
+          onClick={copy}
+          title="Copy base URL"
+          className="shrink-0 rounded-md p-1 text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text)]"
+        >
+          {copied ? (
+            <Check className="h-3.5 w-3.5 text-[color:var(--color-success)]" />
+          ) : (
+            <Copy className="h-3.5 w-3.5" />
+          )}
+        </button>
+      </div>
+      {dialectLabel && (
+        <Badge tone="neutral">{dialectLabel}</Badge>
+      )}
+    </div>
   );
 }
 
@@ -851,6 +920,8 @@ function AccountRow({
   index,
   total,
   pools,
+  selected,
+  onToggleSelect,
   onDelete,
   onMoveUp,
   onMoveDown,
@@ -863,6 +934,8 @@ function AccountRow({
   index: number;
   total: number;
   pools: ProxyPool[];
+  selected?: boolean;
+  onToggleSelect?: () => void;
   onDelete: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
@@ -895,7 +968,6 @@ function AccountRow({
     enabled: !a.disabled,
   });
 
-  // Custom quota script check state.
   const [quotaScriptChecking, setQuotaScriptChecking] = useState(false);
   const [quotaScriptOutput, setQuotaScriptOutput] = useState<{ ok: boolean; output?: unknown; error?: string; elapsed_ms: number } | null>(null);
 
@@ -916,9 +988,18 @@ function AccountRow({
   const boundPool = pools.find((p) => p.id === a.proxy_pool_id);
 
   return (
-    <div className={`px-4 py-3 ${a.disabled ? "opacity-60" : ""}`}>
+    <div className={`px-4 py-3 ${a.disabled ? "opacity-60" : ""} ${selected ? "bg-accent-50/50 dark:bg-accent-900/10" : ""}`}>
       {/* Header row */}
       <div className="flex items-center justify-between gap-3">
+        {onToggleSelect && (
+          <input
+            type="checkbox"
+            checked={!!selected}
+            onChange={onToggleSelect}
+            aria-label={`Select ${a.label || a.provider}`}
+            className="h-3.5 w-3.5 shrink-0 rounded border-[var(--border)] accent-[var(--color-accent-500)]"
+          />
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-sm font-medium">{a.label || a.provider}</span>
@@ -1039,8 +1120,10 @@ function AccountRow({
             </span>
           )}
         </div>
+      </div>
 
-        {/* Check Quota button (executes provider's custom script) */}
+      {/* Check Quota button (executes provider's custom script) */}
+      <div className="flex items-center gap-2">
         <Button
           variant="ghost"
           className="h-6 px-2 text-[11px]"
@@ -1085,6 +1168,8 @@ function AccountRow({
           )}
         </div>
       )}
+
+      {/* Quota / credit info */}
       {hasQuota && quota.data && (
         <div className="mt-2.5 rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] px-3 py-2.5">
           <div className="mb-2 flex items-center gap-2">
@@ -1208,6 +1293,258 @@ function QuotaScriptCard({ providerId }: { providerId: string }) {
         />
       </div>
     </Card>
+  );
+}
+
+// BulkAddKeysModal imports many API keys for a provider in one shot. Shared
+// provider config (base URL, region, Cloudflare account) is entered once and
+// applied to every key; only the key (and an optional inline label / base URL)
+// varies per line. The standardized paste format is parsed live with a preview,
+// keys can be loaded from a .txt/.csv file, and the backend returns a per-row
+// outcome that is rendered after import.
+function BulkAddKeysModal({ provider, onClose }: { provider: Provider; onClose: () => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [text, setText] = useState("");
+  const [validate, setValidate] = useState(false);
+  const [baseURL, setBaseURL] = useState(provider.base_url ?? "");
+  const [region, setRegion] = useState(provider.default_region ?? "");
+  const [accountID, setAccountID] = useState("");
+  const [results, setResults] = useState<BulkAccountResult[] | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const isCloudflare = provider.id === "cloudflare-ai";
+  const isCustom = provider.id === "custom-openai" || provider.id === "custom-anthropic" || !!provider.custom;
+  const hasRegions = (provider.regions?.length ?? 0) > 0;
+  const requiresBaseURL = isCustom;
+  // Generic providers expose an optional shared base URL; region/Cloudflare
+  // providers use their own dedicated control instead.
+  const showBaseURL = !hasRegions && !isCloudflare;
+  const keyPlaceholder = provider.id === "xai" ? "xai-..." : "sk-...";
+
+  const parsed = useMemo(() => parseKeys(text), [text]);
+  const validCount = parsed.entries.length;
+
+  const importMut = useMutation({
+    mutationFn: () =>
+      api.bulkCreateAccounts({
+        provider: provider.id,
+        base_url: showBaseURL && baseURL.trim() ? baseURL.trim() : undefined,
+        region: hasRegions ? region : undefined,
+        account_id: isCloudflare ? accountID.trim() : undefined,
+        validate,
+        items: parsed.entries.map((e) => ({
+          label: e.label || undefined,
+          api_key: e.apiKey,
+          base_url: e.baseURL,
+        })),
+      }),
+    onSuccess: (res) => {
+      setResults(res.results);
+      qc.invalidateQueries({ queryKey: ["accounts"] });
+      if (res.failed === 0) {
+        toast.success(
+          "Bulk import complete",
+          `${res.created} key${res.created === 1 ? "" : "s"} added${res.skipped ? `, ${res.skipped} duplicate skipped` : ""}.`,
+        );
+      } else {
+        toast.error(
+          "Bulk import finished with errors",
+          `${res.created} added, ${res.failed} failed${res.skipped ? `, ${res.skipped} skipped` : ""}.`,
+        );
+      }
+    },
+    onError: (e: Error) => toast.error("Bulk import failed", e.message),
+  });
+
+  const canImport =
+    validCount > 0 &&
+    !importMut.isPending &&
+    (!requiresBaseURL || !!baseURL.trim()) &&
+    (!isCloudflare || !!accountID.trim());
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const content = await file.text();
+    setText((prev) => (prev.trim() ? `${prev.replace(/\s+$/, "")}\n${content}` : content));
+    e.target.value = "";
+  };
+
+  const reset = () => {
+    setResults(null);
+    setText("");
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Bulk add API keys — ${provider.display_name}`}
+      subtitle="Paste one key per line, or load a .txt/.csv file."
+      maxWidth="max-w-2xl"
+    >
+      {results ? (
+        <BulkResultsView
+          results={results}
+          onClose={onClose}
+          onAgain={reset}
+        />
+      ) : (
+        <div className="space-y-4 px-6 py-5">
+          {/* Shared provider config applied to every key. */}
+          {(showBaseURL || hasRegions || isCloudflare) && (
+            <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)] p-4">
+              <p className="text-xs font-medium text-[var(--text-muted)]">Shared settings (applied to every key)</p>
+              {hasRegions && (
+                <Field label="Region">
+                  <select
+                    value={region}
+                    onChange={(e) => setRegion(e.target.value)}
+                    className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 text-sm focus:border-accent-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/40"
+                  >
+                    {(provider.regions ?? []).map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+              {isCloudflare && (
+                <Field label="Cloudflare account ID">
+                  <Input value={accountID} onChange={(e) => setAccountID(e.target.value)} placeholder="abc123def456..." required />
+                </Field>
+              )}
+              {showBaseURL && (
+                <Field label={requiresBaseURL ? "Base URL" : "Base URL (optional)"}>
+                  <Input
+                    value={baseURL}
+                    onChange={(e) => setBaseURL(e.target.value)}
+                    placeholder="for custom endpoints"
+                    required={requiresBaseURL}
+                  />
+                </Field>
+              )}
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">API keys</label>
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2 py-1 text-xs text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-subtle)] hover:text-[var(--text)]"
+              >
+                <FileText className="h-3.5 w-3.5" />
+                Load file
+              </button>
+              <input ref={fileRef} type="file" accept=".txt,.csv,text/plain,text/csv" className="hidden" onChange={onFile} />
+            </div>
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={8}
+              spellCheck={false}
+              placeholder={`${keyPlaceholder}\nlabel-2, ${keyPlaceholder}\n# lines starting with # are comments`}
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 font-mono text-xs placeholder:text-[var(--text-muted)] focus:border-accent-400 focus:outline-none"
+            />
+            <p className="text-[11px] leading-relaxed text-[var(--text-muted)]">
+              One key per line. Optional inline label: <code className="font-mono">label,key</code>. Blank lines and{" "}
+              <code className="font-mono">#</code> comments are ignored.
+            </p>
+          </div>
+
+          {/* Live parse preview. */}
+          {text.trim() && (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <Badge tone={validCount > 0 ? "success" : "neutral"}>{validCount} ready</Badge>
+              {parsed.duplicates > 0 && <Badge tone="warning">{parsed.duplicates} duplicate</Badge>}
+              {parsed.errors.length > 0 && <Badge tone="danger">{parsed.errors.length} invalid</Badge>}
+              {parsed.errors.slice(0, 3).map((err) => (
+                <span key={err.line} className="text-[var(--text-muted)]">
+                  line {err.line}: {err.message}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)] p-3">
+            <input
+              type="checkbox"
+              checked={validate}
+              onChange={(e) => setValidate(e.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5 rounded border-[var(--border)] accent-[var(--color-accent-500)]"
+            />
+            <span className="text-xs leading-relaxed text-[var(--text-muted)]">
+              <span className="font-medium text-[var(--text)]">Validate each key against the upstream</span> before saving.
+              Slower for large batches and may hit provider rate limits. Off by default.
+            </span>
+          </label>
+
+          <div className="flex gap-3">
+            <Button type="button" variant="ghost" onClick={onClose} className="flex-1">
+              Cancel
+            </Button>
+            <Button type="button" onClick={() => importMut.mutate()} disabled={!canImport} className="flex-1">
+              {importMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              {importMut.isPending ? "Importing…" : `Import ${validCount || ""}`.trim()}
+            </Button>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// BulkResultsView renders the per-row outcome of a bulk import.
+function BulkResultsView({
+  results,
+  onClose,
+  onAgain,
+}: {
+  results: BulkAccountResult[];
+  onClose: () => void;
+  onAgain: () => void;
+}) {
+  const created = results.filter((r) => r.status === "created").length;
+  const skipped = results.filter((r) => r.status === "skipped").length;
+  const failed = results.filter((r) => r.status === "error").length;
+
+  return (
+    <div className="space-y-4 px-6 py-5">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge tone="success">{created} added</Badge>
+        {skipped > 0 && <Badge tone="warning">{skipped} skipped</Badge>}
+        {failed > 0 && <Badge tone="danger">{failed} failed</Badge>}
+      </div>
+      <div className="max-h-72 divide-y divide-[var(--border)] overflow-y-auto rounded-xl border border-[var(--border)]">
+        {results.map((r) => (
+          <div key={r.index} className="flex items-center gap-3 px-3 py-2 text-xs">
+            {r.status === "created" ? (
+              <CheckCircle className="h-4 w-4 shrink-0 text-emerald-500" />
+            ) : r.status === "skipped" ? (
+              <AlertCircle className="h-4 w-4 shrink-0 text-amber-500" />
+            ) : (
+              <XCircle className="h-4 w-4 shrink-0 text-red-500" />
+            )}
+            <span className="w-10 shrink-0 text-[var(--text-muted)]">#{r.index + 1}</span>
+            <span className="flex-1 truncate font-medium">{r.label || "(unlabeled)"}</span>
+            {r.error && <span className="truncate text-[var(--text-muted)]" title={r.error}>{r.error}</span>}
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-3">
+        <Button type="button" variant="ghost" onClick={onAgain} className="flex-1">
+          <Layers className="h-4 w-4" />
+          Import more
+        </Button>
+        <Button type="button" onClick={onClose} className="flex-1">
+          <Check className="h-4 w-4" />
+          Done
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -1788,7 +2125,7 @@ function ModelCell({
   onToggleSelect,
   onToggleDisable,
 }: {
-  model: { id: string; name: string; kind: string; custom?: boolean };
+  model: { id: string; name: string; kind: string };
   provider: Provider;
   disabled?: boolean;
   selected?: boolean;
@@ -1819,7 +2156,7 @@ function ModelCell({
           )}
           <div className={`h-1.5 w-1.5 rounded-full ${disabled ? "bg-ink-400 dark:bg-ink-600" : "bg-accent-500 shadow-[0_0_8px_var(--color-accent-500)]"}`} />
           <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-            {model.custom ? "Custom" : model.kind || "Model"}
+            {model.kind || "Model"}
           </span>
         </div>
         <div className="flex items-center gap-0.5">

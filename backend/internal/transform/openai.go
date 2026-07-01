@@ -3,9 +3,10 @@ package transform
 import (
 	"bytes"
 	"fmt"
-	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 	"io"
 	"strings"
+
+	json "github.com/mydisha/keirouter/backend/internal/fastjson"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 )
@@ -446,8 +447,12 @@ func buildOAIRequest(req *core.ChatRequest, scope reasoningScope) (*oaiRequest, 
 		MaxTokens:      req.MaxTokens,
 		Stop:           req.Stop,
 		Stream:         req.Stream,
-		ToolChoice:     req.ToolChoice,
 		ResponseFormat: req.ResponseFormat,
+	}
+	// Only carry tool_choice when tools are present; providers such as Qwen
+	// reject a tool_choice paired with an empty/absent tools array.
+	if len(req.Tools) > 0 {
+		out.ToolChoice = req.ToolChoice
 	}
 	// Note: stream_options with include_usage is intentionally omitted. Many
 	// OpenAI-compatible providers (MiMo, Volcengine, etc.) reject this field
