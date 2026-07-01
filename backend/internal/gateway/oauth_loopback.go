@@ -172,7 +172,7 @@ func (s *Server) completeOAuthCallback(r *http.Request, providerHint string) err
 	if provider == "cline" {
 		tokens, err = cfg.ExchangeClineCode(r.Context(), code, sess.RedirectURI)
 	} else {
-		tokens, err = cfg.ExchangeCode(r.Context(), code, sess.RedirectURI, sess.Verifier)
+		tokens, err = cfg.ExchangeCode(r.Context(), code, sess.RedirectURI, sess.Verifier, state)
 	}
 	if err != nil {
 		return fmt.Errorf("token exchange failed: %w", err)

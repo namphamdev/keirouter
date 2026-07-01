@@ -84,12 +84,13 @@ var configs = map[string]ProviderConfig{
 		Flow:         FlowAuthCodePKCE,
 		ClientID:     "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
 		AuthorizeURL: "https://claude.ai/oauth/authorize",
-		TokenURL:     "https://api.anthropic.com/v1/oauth/token",
+		TokenURL:     "https://console.anthropic.com/v1/oauth/token",
 		Scopes:       []string{"org:create_api_key", "user:profile", "user:inference"},
 		// Claude's token endpoint expects a JSON body.
 		TokenContentType: "json",
-		ExtraAuthParams:  map[string]string{"code": "true"},
 		UserInfoURL:      "https://api.anthropic.com/v1/me",
+		// Claude's OAuth client only whitelists loopback URIs with path /callback.
+		CallbackPath: "/callback",
 	},
 	"codex": {
 		Provider:                  "codex",

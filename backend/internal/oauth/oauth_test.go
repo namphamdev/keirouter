@@ -69,6 +69,20 @@ func TestAuthURLPKCE(t *testing.T) {
 	}
 }
 
+func TestClaudeRedirectURIUsesCallbackPath(t *testing.T) {
+	cfg, _ := ConfigFor("claude")
+	if cfg.CallbackPath != "/callback" {
+		t.Fatalf("claude CallbackPath must be /callback, got %q", cfg.CallbackPath)
+	}
+	if cfg.TokenURL != "https://console.anthropic.com/v1/oauth/token" {
+		t.Fatalf("claude TokenURL must be console.anthropic.com, got %q", cfg.TokenURL)
+	}
+	redirectURI := cfg.ResolveRedirectURI("http://localhost:5180/oauth/callback")
+	if redirectURI != "http://localhost:5180/callback" {
+		t.Fatalf("claude redirect URI mismatch: got %q", redirectURI)
+	}
+}
+
 func TestCodexAuthURLMatchesCLIFlow(t *testing.T) {
 	cfg, _ := ConfigFor("codex")
 	redirectURI := cfg.ResolveRedirectURI("http://localhost:20180/oauth/callback")

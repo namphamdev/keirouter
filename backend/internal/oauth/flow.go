@@ -126,8 +126,10 @@ func randomHex(n int) string {
 }
 
 // ExchangeCode swaps an authorization code for tokens. verifier is the PKCE
-// verifier (ignored for non-PKCE flows).
-func (c ProviderConfig) ExchangeCode(ctx context.Context, code, redirectURI, verifier string) (*Tokens, error) {
+// verifier (ignored for non-PKCE flows). state is the OAuth state value
+// returned in the callback; some providers (Claude) require it in the token
+// exchange body.
+func (c ProviderConfig) ExchangeCode(ctx context.Context, code, redirectURI, verifier, state string) (*Tokens, error) {
 	// Some providers (Claude) append "#state" to the pasted code.
 	if i := strings.Index(code, "#"); i >= 0 {
 		code = code[:i]
@@ -140,6 +142,9 @@ func (c ProviderConfig) ExchangeCode(ctx context.Context, code, redirectURI, ver
 	form.Set("redirect_uri", redirectURI)
 	if c.Flow == FlowAuthCodePKCE && verifier != "" {
 		form.Set("code_verifier", verifier)
+	}
+	if state != "" {
+		form.Set("state", state)
 	}
 	if c.ClientSecret != "" && !c.UsesBasicAuth {
 		form.Set("client_secret", c.ClientSecret)

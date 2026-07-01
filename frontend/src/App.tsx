@@ -53,6 +53,7 @@ export function App() {
             <Routes>
               {/* OAuth callback — standalone page, no sidebar layout */}
               <Route path="oauth/callback" element={<OAuthCallbackPage />} />
+              <Route path="callback" element={<OAuthCallbackPage />} />
               <Route element={<Layout />}>
                 <Route index element={<OverviewPage />} />
                 <Route path="providers" element={<ProvidersPage />} />

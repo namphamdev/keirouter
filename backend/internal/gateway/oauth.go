@@ -157,7 +157,7 @@ func (s *Server) oauthExchange(w http.ResponseWriter, r *http.Request) {
 		// JSON body with client_type=extension).
 		tokens, err = cfg.ExchangeClineCode(r.Context(), body.Code, sess.RedirectURI)
 	} else {
-		tokens, err = cfg.ExchangeCode(r.Context(), body.Code, sess.RedirectURI, sess.Verifier)
+		tokens, err = cfg.ExchangeCode(r.Context(), body.Code, sess.RedirectURI, sess.Verifier, body.State)
 	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())

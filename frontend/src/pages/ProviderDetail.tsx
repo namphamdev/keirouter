@@ -44,7 +44,8 @@ function redirectURIForProvider(provider: OAuthProvider): string {
     return `http://${host}:${provider.fixed_port}${provider.callback_path}`;
   }
   const appPort = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
-  return `http://localhost:${appPort}/oauth/callback`;
+  const callbackPath = provider.callback_path || "/oauth/callback";
+  return `http://localhost:${appPort}${callbackPath}`;
 }
 
 export function ProviderDetailPage() {
