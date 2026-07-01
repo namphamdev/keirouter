@@ -378,6 +378,20 @@ func isDeepSeekTarget(providerID, model string) bool {
 	return strings.Contains(strings.ToLower(model), "deepseek")
 }
 
+// streamUsageProviders need stream_options.include_usage on streaming requests.
+// Without it, many OpenAI-compatible APIs (notably xAI) omit usage on SSE
+// chunks, so the zero-copy direct stream path records zero tokens.
+var streamUsageProviders = map[string]bool{
+	"xai": true,
+}
+
+func applyStreamUsageOption(out *oaiRequest, providerID string, stream bool) {
+	if !stream || !streamUsageProviders[providerID] {
+		return
+	}
+	out.StreamOpts = &oaiStreamOpt{IncludeUsage: true}
+}
+
 // shouldInjectReasoning reports whether a placeholder reasoning_content should
 // be injected on the given rendered message. The scope controls the breadth:
 //   - reasoningAll: all assistant messages without real reasoning (DeepSeek)
@@ -420,6 +434,7 @@ func renderOAIRequestForProvider(req *core.ChatRequest, providerID string, scope
 	if err != nil {
 		return nil, err
 	}
+	applyStreamUsageOption(out, providerID, req.Stream)
 	if isDeepSeekTarget(providerID, req.Model) {
 		applyDeepSeekRequestFixes(out, req, providerID)
 	}
