@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useMemo } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Plus, Trash2, Plug, X, Zap, ArrowUp, ArrowDown, CheckCircle, ToggleLeft, ToggleRight, Search, Route, AlertCircle, AlertTriangle, RefreshCw, Globe, Copy, Check, Upload, Loader2, XCircle, Layers, FileText, Terminal, Play } from "lucide-react";
-import { api, type DeviceCode, type OAuthProvider, type Provider, type Account, type ProxyPool, type UpstreamQuota, type ProviderRoutingSettings, type BulkAccountResult } from "../lib/api";
+import { api, type DeviceCode, type OAuthProvider, type Provider, type Account, type ProxyPool, type UpstreamQuota, type ProviderRoutingSettings, type BulkAccountResult, type QuotaAccount } from "../lib/api";
 import { KiroConnectModal } from "../components/KiroConnectModal";
 import { QoderConnectModal } from "../components/QoderConnectModal";
 import { KilocodeConnectModal } from "../components/KilocodeConnectModal";
@@ -55,6 +55,15 @@ export function ProviderDetailPage() {
 
   const providers = useQuery({ queryKey: ["providers"], queryFn: () => api.providers() });
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: () => api.listAccounts() });
+  const bulkQuota = useQuery({
+    queryKey: ["quota", "today", id],
+    queryFn: () => api.quotaByProvider(id!),
+    enabled: !!id,
+    staleTime: 60_000,
+  });
+  const quotaMap: Record<string, QuotaAccount> = Object.fromEntries(
+    (bulkQuota.data?.accounts ?? []).map((a) => [a.id, a]),
+  );
   const oauthProviders = useQuery({ queryKey: ["oauth-providers"], queryFn: () => api.oauthProviders() });
   const pools = useQuery({ queryKey: ["proxy-pools"], queryFn: () => api.listProxyPools() });
   const routing = useQuery({
@@ -602,6 +611,7 @@ export function ProviderDetailPage() {
                     onUpdateProxy={(patch) => updateAccount.mutate({ id: a.id, patch })}
                     testResult={testResults[a.id]}
                     disabledByBatch={testingAll}
+                    quotaData={quotaMap[a.id]}
                   />
                 ))}
               </div>
@@ -984,6 +994,7 @@ function AccountRow({
   onUpdateProxy,
   testResult,
   disabledByBatch,
+  quotaData,
 }: {
   account: Account;
   index: number;
@@ -998,6 +1009,7 @@ function AccountRow({
   onUpdateProxy: (patch: { priority?: number; proxy_pool_id?: string; disabled?: boolean }) => void;
   testResult?: { status: "testing" | "ok" | "error"; message?: string };
   disabledByBatch?: boolean;
+  quotaData?: QuotaAccount;
 }) {
   const testing = testResult?.status === "testing";
   const [localPriority, setLocalPriority] = useState(a.priority);
@@ -1016,13 +1028,6 @@ function AccountRow({
     }
   };
 
-  const quota = useQuery({
-    queryKey: ["account-quota", a.id],
-    queryFn: () => api.accountQuota(a.id),
-    staleTime: 60_000,
-    enabled: !a.disabled,
-  });
-
   const [quotaScriptChecking, setQuotaScriptChecking] = useState(false);
   const [quotaScriptOutput, setQuotaScriptOutput] = useState<{ ok: boolean; output?: unknown; error?: string; elapsed_ms: number } | null>(null);
 
@@ -1039,7 +1044,7 @@ function AccountRow({
     }
   };
 
-  const hasQuota = quota.data?.supported && quota.data?.quotas && quota.data.quotas.length > 0;
+  const hasQuota = !!quotaData?.upstream_quotas && quotaData.upstream_quotas.length > 0;
   const boundPool = pools.find((p) => p.id === a.proxy_pool_id);
 
   return (
@@ -1223,17 +1228,17 @@ function AccountRow({
       )}
 
       {/* Quota / credit info */}
-      {hasQuota && quota.data && (
+      {hasQuota && quotaData && (
         <div className="mt-2.5 rounded-lg border border-[var(--border)] bg-[var(--bg-subtle)] px-3 py-2.5">
           <div className="mb-2 flex items-center gap-2">
             <Zap className="h-3.5 w-3.5 text-[var(--text-muted)]" />
             <span className="text-xs font-medium">
-              {quota.data.plan_name ? `${quota.data.plan_name} — Credits` : "Credits & Quota"}
+              {quotaData.plan_name ? `${quotaData.plan_name} — Credits` : "Credits & Quota"}
             </span>
           </div>
-          {quota.data.quotas && (
+          {quotaData.upstream_quotas && (
             <div className="space-y-2">
-              {quota.data.quotas.map((q) => (
+              {quotaData.upstream_quotas.map((q) => (
                 <QuotaBarInline key={q.resource_type} quota={q} />
               ))}
             </div>
