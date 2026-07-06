@@ -29,6 +29,7 @@ const OAuthCallbackPage = lazy(routeLoaders["/oauth-callback"]);
 const KeyPortalPage = lazy(routeLoaders["/portal"]);
 const KeyDetailPage = lazy(routeLoaders["/key-detail"]);
 const GuardrailsPage = lazy(routeLoaders["/guardrails"]);
+const ProviderHealthPage = lazy(routeLoaders["/provider-health"]);
 
 function PageFallback() {
   return (
@@ -73,6 +74,8 @@ export function App() {
                 <Route path="keys" element={<KeysPage />} />
                 <Route path="keys/:id" element={<KeyDetailPage />} />
                 <Route path="guardrails" element={<GuardrailsPage />} />
+                <Route path="provider-health" element={<ProviderHealthPage />} />
+                <Route path="provider-health/:provider" element={<ProviderHealthPage />} />
                 <Route path="plans" element={<PlansPage />} />
                 <Route path="budgets" element={<PlansPage />} />
                 <Route path="system" element={<SystemPage />} />

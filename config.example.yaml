@@ -82,6 +82,38 @@ health:
   recent_model_window: 24h
   max_models_per_provider: 8
 
+# Actionable provider health dashboard: real-traffic telemetry aggregation +
+# synthetic probes. All optional — sensible defaults apply when omitted.
+provider_health:
+  enabled: true
+  probe_interval: 60s
+  probe_timeout: 15s
+  failure_threshold: 3
+  queue_size: 5000
+  current_flush_interval: 30s
+  snapshot_interval: 60s
+  rolling_window: 15m
+  latency_thresholds:
+    chat_completions: 10000
+    embeddings: 5000
+    image_generation: 60000
+    audio: 60000
+    search: 15000
+  capabilities:
+    chat_completions:
+      enabled: true
+      max_tokens: 5
+      prompt: "Reply with OK only."
+    embeddings:
+      enabled: true
+      input: "health check"
+    image_generation:
+      enabled: false
+    audio:
+      enabled: false
+    search:
+      enabled: false
+
 cache:
   # Semantic response cache. Off by default. When enabled, repeated or
   # near-identical prompts are served from cache for zero upstream cost.

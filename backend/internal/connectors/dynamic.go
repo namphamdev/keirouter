@@ -1,6 +1,7 @@
 package connectors
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
@@ -101,6 +102,22 @@ func dynamicModelsFor(providerID string) []ModelSpec {
 	cp := make([]ModelSpec, len(models))
 	copy(cp, models)
 	return cp
+}
+
+// IsCustomProviderID reports whether a provider id belongs to a user-defined
+// dynamic provider instance or a generic custom-compatible gateway. These
+// providers have unknown upstream capabilities, so the routing layer relaxes
+// capability guards for them — unsupported modalities are stripped downstream
+// rather than blocking the request.
+//
+// Matches:
+//   - "custom-openai" and "custom-anthropic" (the built-in generic gateways)
+//   - "custom-openai-*" and "custom-anthropic-*" (user-defined dynamic instances)
+func IsCustomProviderID(id string) bool {
+	if id == "custom-openai" || id == "custom-anthropic" {
+		return true
+	}
+	return strings.HasPrefix(id, CustomOpenAIPrefix) || strings.HasPrefix(id, CustomAnthropicPrefix)
 }
 
 // dynamicConnector builds a connector on demand for a dynamic provider. Custom

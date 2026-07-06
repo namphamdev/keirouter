@@ -26,6 +26,7 @@ type Config struct {
 	Meter      MeterConfig      `koanf:"meter"`
 	Limits     LimitsConfig     `koanf:"limits"`
 	Health     HealthConfig     `koanf:"health"`
+	ProviderHealth ProviderHealthConfig `koanf:"provider_health"`
 	Log        LogConfig        `koanf:"log"`
 	Data       DataConfig       `koanf:"data"`
 	Guardrails GuardrailsConfig `koanf:"guardrails"`
@@ -155,6 +156,50 @@ type HealthConfig struct {
 	MaxModelsPerProvider int           `koanf:"max_models_per_provider"`
 }
 
+// ProviderHealthConfig controls the actionable provider health dashboard:
+// real-traffic telemetry aggregation, synthetic probes, and latency thresholds.
+type ProviderHealthConfig struct {
+	// Enabled gates telemetry recording and the probe worker.
+	Enabled bool `koanf:"enabled"`
+	// ProbeInterval is the scheduled probe cadence.
+	ProbeInterval time.Duration `koanf:"probe_interval"`
+	// ProbeTimeout bounds one probe call.
+	ProbeTimeout time.Duration `koanf:"probe_timeout"`
+	// FailureThreshold is how many consecutive probe failures mark a target
+	// unhealthy when no real traffic exists.
+	FailureThreshold int `koanf:"failure_threshold"`
+	// QueueSize is the async telemetry channel capacity.
+	QueueSize int `koanf:"queue_size"`
+	// CurrentFlushInterval recomputes provider_health_current this often.
+	CurrentFlushInterval time.Duration `koanf:"current_flush_interval"`
+	// SnapshotInterval writes 1-minute snapshot rows this often.
+	SnapshotInterval time.Duration `koanf:"snapshot_interval"`
+	// RollingWindow is the lookback for current-state aggregation.
+	RollingWindow time.Duration `koanf:"rolling_window"`
+	// LatencyThresholds maps capability to its p95 threshold in ms.
+	LatencyThresholds map[string]int `koanf:"latency_thresholds"`
+	// Capabilities controls which capability types are auto-probed.
+	Capabilities ProviderHealthCapabilityConfig `koanf:"capabilities"`
+}
+
+// ProviderHealthCapabilityConfig toggles per-capability scheduled probes. Image,
+// audio, and search are off by default to avoid expensive probes.
+type ProviderHealthCapabilityConfig struct {
+	ChatCompletions ProviderHealthProbeConfig `koanf:"chat_completions"`
+	Embeddings      ProviderHealthProbeConfig `koanf:"embeddings"`
+	ImageGeneration ProviderHealthProbeConfig `koanf:"image_generation"`
+	Audio           ProviderHealthProbeConfig `koanf:"audio"`
+	Search          ProviderHealthProbeConfig `koanf:"search"`
+}
+
+// ProviderHealthProbeConfig configures one capability's probe payload.
+type ProviderHealthProbeConfig struct {
+	Enabled  bool   `koanf:"enabled"`
+	MaxTokens int   `koanf:"max_tokens"`
+	Prompt   string `koanf:"prompt"`
+	Input    string `koanf:"input"`
+}
+
 // LogConfig controls structured logging.
 type LogConfig struct {
 	// Level: debug, info, warn, error.
@@ -253,6 +298,27 @@ func Default() Config {
 			SuccessThreshold:     1,
 			RecentModelWindow:    24 * time.Hour,
 			MaxModelsPerProvider: 8,
+		},
+		ProviderHealth: ProviderHealthConfig{
+			Enabled:              true,
+			ProbeInterval:        60 * time.Second,
+			ProbeTimeout:         15 * time.Second,
+			FailureThreshold:     3,
+			QueueSize:            5000,
+			CurrentFlushInterval: 30 * time.Second,
+			SnapshotInterval:     60 * time.Second,
+			RollingWindow:        15 * time.Minute,
+			LatencyThresholds: map[string]int{
+				"chat_completions": 10_000,
+				"embeddings":       5_000,
+				"image_generation": 60_000,
+				"audio":            60_000,
+				"search":           15_000,
+			},
+			Capabilities: ProviderHealthCapabilityConfig{
+				ChatCompletions: ProviderHealthProbeConfig{Enabled: true, MaxTokens: 5, Prompt: "Reply with OK only."},
+				Embeddings:      ProviderHealthProbeConfig{Enabled: true, Input: "health check"},
+			},
 		},
 		Log: LogConfig{Level: "info", Format: "text"},
 	}

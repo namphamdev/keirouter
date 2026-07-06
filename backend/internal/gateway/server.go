@@ -26,6 +26,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
 	"github.com/mydisha/keirouter/backend/internal/fastjson"
 	"github.com/mydisha/keirouter/backend/internal/guardrails"
+	"github.com/mydisha/keirouter/backend/internal/health"
 	"github.com/mydisha/keirouter/backend/internal/healthcheck"
 	"github.com/mydisha/keirouter/backend/internal/identity"
 	"github.com/mydisha/keirouter/backend/internal/oauth"
@@ -85,6 +86,8 @@ type Server struct {
 	guardrailTestRL     *guardrailTestRateLimiter
 	health          *store.HealthRepo
 	healthChecker   *healthcheck.Checker
+	providerHealth  *health.Service
+	probeRunner     *health.ProbeRunner
 	router          chi.Router
 }
 
@@ -130,6 +133,8 @@ type Deps struct {
 	GuardrailTenantFlags *guardrails.SettingsTenantPolicy
 	Health          *store.HealthRepo
 	HealthChecker   *healthcheck.Checker
+	ProviderHealth  *health.Service
+	ProbeRunner     *health.ProbeRunner
 }
 
 // New builds a gateway Server and wires its routes.
@@ -194,6 +199,8 @@ func New(d Deps) *Server {
 		guardrailTestRL:     newGuardrailTestRateLimiter(10, time.Minute),
 		health:          d.Health,
 		healthChecker:   d.HealthChecker,
+		providerHealth:  d.ProviderHealth,
+		probeRunner:     d.ProbeRunner,
 	}
 	s.router = s.routes()
 	startSystemCollector(d.Resources)

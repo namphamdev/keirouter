@@ -10,6 +10,9 @@ type KiloTool struct{}
 func (t *KiloTool) ID() string   { return "kilo" }
 func (t *KiloTool) Name() string { return "Kilo Code" }
 
+// Command returns "" — Kilo Code is a VS Code extension, not a standalone CLI.
+func (t *KiloTool) Command() string { return "" }
+
 func (t *KiloTool) configPath(homeDir string) string {
 	return expandHome(homeDir, "~/.local/share/kilo/auth.json")
 }
@@ -20,7 +23,7 @@ func (t *KiloTool) DetectStatus(homeDir string) (bool, bool, string, error) {
 		return false, false, path, nil
 	}
 	var cfg map[string]any
-	if err := readJSON(path, &cfg); err != nil {
+	if err := readJSONC(path, &cfg); err != nil {
 		return true, false, path, nil
 	}
 	if oc, ok := cfg["openai-compatible"].(map[string]any); ok {

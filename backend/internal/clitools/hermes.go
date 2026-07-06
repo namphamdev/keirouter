@@ -9,8 +9,9 @@ import (
 // HermesTool auto-configures Hermes Agent (~/.hermes/config.yaml + .env).
 type HermesTool struct{}
 
-func (t *HermesTool) ID() string   { return "hermes" }
-func (t *HermesTool) Name() string { return "Hermes Agent" }
+func (t *HermesTool) ID() string      { return "hermes" }
+func (t *HermesTool) Name() string    { return "Hermes Agent" }
+func (t *HermesTool) Command() string { return "hermes" }
 
 func (t *HermesTool) configPath(homeDir string) string {
 	return expandHome(homeDir, "~/.hermes/config.yaml")

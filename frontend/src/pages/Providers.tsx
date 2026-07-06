@@ -263,18 +263,25 @@ function CreateCustomProviderModal({ open, onClose }: { open: boolean; onClose: 
   const [name, setName] = useState("");
   const [dialect, setDialect] = useState("openai");
   const [baseURL, setBaseURL] = useState("");
+  const [alias, setAlias] = useState("");
   const [error, setError] = useState("");
 
   const reset = () => {
     setName("");
     setDialect("openai");
     setBaseURL("");
+    setAlias("");
     setError("");
   };
 
   const create = useMutation({
     mutationFn: () =>
-      api.createCustomProvider({ display_name: name.trim(), dialect, base_url: baseURL.trim() }),
+      api.createCustomProvider({
+        display_name: name.trim(),
+        dialect,
+        base_url: baseURL.trim(),
+        alias: alias.trim() ? alias.trim() : undefined,
+      }),
     onSuccess: (p) => {
       qc.invalidateQueries({ queryKey: ["providers"] });
       toast.success("Custom provider created", "Add an account and models to start routing.");
@@ -321,6 +328,26 @@ function CreateCustomProviderModal({ open, onClose }: { open: boolean; onClose: 
             onChange={(e) => { setBaseURL(e.target.value); setError(""); }}
             placeholder="https://llm.example.com/v1"
           />
+        </Field>
+        <Field label="Alias / prefix (optional)">
+          <Input
+            value={alias}
+            onChange={(e) => {
+              const slug = e.target.value
+                .toLowerCase()
+                .replace(/\s+/g, "-")
+                .replace(/[^a-z0-9-]/g, "")
+                .replace(/-+/g, "-");
+              setAlias(slug);
+              setError("");
+            }}
+            placeholder="e.g. kei-ai — models route as <alias>/<model>"
+            pattern="[A-Za-z0-9-]*"
+            maxLength={32}
+          />
+          <p className="text-xs text-[var(--text-muted)]">
+            Letters, digits, hyphens only (max 32). Leave blank to derive from the name. Models route as <code>&lt;alias&gt;/&lt;model&gt;</code>.
+          </p>
         </Field>
         <p className="text-xs text-[var(--text-muted)]">
           Tip: add two separate instances for two endpoints of the same type — they will never share models or credentials.

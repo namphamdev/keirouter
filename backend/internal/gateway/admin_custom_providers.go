@@ -2,11 +2,11 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
-
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -31,9 +31,52 @@ func (s *Server) mountCustomProviders(r chi.Router) {
 	r.Post("/providers/{id}/custom-models", s.adminCreateCustomModel)
 	r.Patch("/providers/{id}/custom-models/{modelDBID}", s.adminUpdateCustomModel)
 	r.Delete("/providers/{id}/custom-models/{modelDBID}", s.adminDeleteCustomModel)
+
+	// Import models: fetch the upstream /models listing and persist each entry
+	// as a custom model, so a custom provider becomes routable without manual
+	// model entry. Available for any provider with a LiveModelSource.
+	r.Post("/providers/{id}/import-models", s.adminImportModels)
 }
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+// aliasInputRe constrains a user-provided alias to url-safe slug characters
+// (letters, digits, hyphen). slugify then lowercases/compacts it.
+var aliasInputRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
+
+// resolveCustomAlias derives the routing alias for a custom provider. When the
+// user supplies an alias it is validated (slug-safe, 1-32 chars, no collision
+// with an existing provider alias/id other than the provider's own id). When
+// omitted, it defaults to the slugified display name, falling back to the
+// unique provider id when the name yields no usable slug.
+func resolveCustomAlias(rawAlias, name, ownID string) (string, error) {
+	raw := strings.TrimSpace(rawAlias)
+	if raw == "" {
+		// Default from the display name.
+		if a := slugify(name); a != "" {
+			if _, ok := connectors.SpecByAlias(a); !ok && a != ownID {
+				return a, nil
+			}
+		}
+		return ownID, nil
+	}
+	if !aliasInputRe.MatchString(raw) {
+		return "", fmt.Errorf("alias must contain only letters, digits, and hyphens")
+	}
+	alias := slugify(raw)
+	if alias == "" {
+		return "", fmt.Errorf("alias must contain only letters, digits, and hyphens")
+	}
+	if len(alias) > 32 {
+		return "", fmt.Errorf("alias must be 32 characters or fewer")
+	}
+	if alias != ownID {
+		if _, ok := connectors.SpecByAlias(alias); ok {
+			return "", fmt.Errorf("alias already in use: %s", alias)
+		}
+	}
+	return alias, nil
+}
 
 // slugify produces a short url-safe token from a display name.
 func slugify(s string) string {
@@ -91,6 +134,7 @@ func (s *Server) adminCreateCustomProvider(w http.ResponseWriter, r *http.Reques
 		DisplayName string `json:"display_name"`
 		Dialect     string `json:"dialect"` // "openai" | "anthropic"
 		BaseURL     string `json:"base_url"`
+		Alias       *string `json:"alias"` // optional routing prefix; defaults to the generated id
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -123,11 +167,25 @@ func (s *Server) adminCreateCustomProvider(w http.ResponseWriter, r *http.Reques
 		return false
 	})
 
+	// Alias is the user-facing routing prefix ("<alias>/<model>"). It is NOT
+	// forced under the custom-openai-/custom-anthropic- namespace, mirroring
+	// the decoupling of internal node id from the user-chosen prefix.
+	// Empty defaults to the slugified name (fallback: the unique id).
+	var aliasInput string
+	if body.Alias != nil {
+		aliasInput = *body.Alias
+	}
+	alias, aerr := resolveCustomAlias(aliasInput, name, id)
+	if aerr != nil {
+		writeError(w, http.StatusBadRequest, aerr.Error())
+		return
+	}
+
 	p := store.CustomProvider{
 		ID:          id,
 		TenantID:    adminTenant,
 		DisplayName: name,
-		Alias:       id, // alias defaults to the full unique id; user can override
+		Alias:       alias,
 		Dialect:     string(dialect),
 		BaseURL:     baseURL,
 		CreatedAt:   time.Now(),
@@ -165,10 +223,12 @@ func (s *Server) adminUpdateCustomProvider(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if body.Alias != nil {
-		existing.Alias = strings.TrimSpace(*body.Alias)
-		if existing.Alias == "" {
-			existing.Alias = existing.ID
+		alias, aerr := resolveCustomAlias(*body.Alias, existing.DisplayName, existing.ID)
+		if aerr != nil {
+			writeError(w, http.StatusBadRequest, aerr.Error())
+			return
 		}
+		existing.Alias = alias
 	}
 	if body.BaseURL != nil {
 		b := strings.TrimSpace(*body.BaseURL)
@@ -212,7 +272,7 @@ func (s *Server) adminDeleteCustomProvider(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) adminListCustomModels(w http.ResponseWriter, r *http.Request) {
 	providerID := chi.URLParam(r, "id")
-	models, err := s.db.CustomProviders().ListModelsByProvider(r.Context(), providerID)
+	models, err := s.db.CustomProviders().ListManualModelsByProvider(r.Context(), providerID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
@@ -401,4 +461,95 @@ func uniqueCustomProviderID(prefix, name string, taken func(string) bool) string
 		return candidate
 	}
 	return prefix + slug + "-" + strings.Split(uuid.NewString(), "-")[0]
+}
+
+// adminImportModels fetches the upstream /models listing for a provider and
+// persists each discovered model as a custom model, so a custom provider
+// becomes routable without manual model entry. Models already registered are
+// skipped (matched by model id). Requires a LiveModelSource for the provider;
+// credentials are taken from the first enabled account, if any.
+func (s *Server) adminImportModels(w http.ResponseWriter, r *http.Request) {
+	providerID := chi.URLParam(r, "id")
+	if _, ok := connectors.SpecByID(providerID); !ok {
+		writeError(w, http.StatusNotFound, "unknown provider: "+providerID)
+		return
+	}
+	src := connectors.GetLiveModelSource(providerID)
+	if src == nil {
+		writeError(w, http.StatusBadRequest, "provider does not support model discovery")
+		return
+	}
+
+	// Collect credentials from the first enabled account, if any.
+	var creds core.Credentials
+	if s.accounts != nil && s.vault != nil {
+		accs, err := s.accounts.ListByProvider(r.Context(), adminTenant, providerID)
+		if err == nil {
+			for _, acc := range accs {
+				if acc.Disabled {
+					continue
+				}
+				if c, oerr := s.vault.Open(acc); oerr == nil {
+					creds = c
+					break
+				}
+			}
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	discovered, err := src.ListModels(ctx, creds)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "model discovery failed: "+sanitizeError(s.log, err, "model discovery failed"))
+		return
+	}
+
+	existing, _ := s.db.CustomProviders().ListModelsByProvider(r.Context(), providerID)
+	seen := make(map[string]bool, len(existing))
+	for _, m := range existing {
+		seen[m.ModelID] = true
+	}
+
+	imported := 0
+	skipped := 0
+	for _, m := range discovered {
+		if m.ID == "" || seen[m.ID] {
+			skipped++
+			continue
+		}
+		name := m.Name
+		if name == "" {
+			name = m.ID
+		}
+		kind := string(m.Kind)
+		if kind == "" {
+			kind = string(core.ServiceLLM)
+		}
+		cm := store.CustomModel{
+			ID:          uuid.NewString(),
+			TenantID:    adminTenant,
+			ProviderID:  providerID,
+			ModelID:     m.ID,
+			DisplayName: name,
+			Kind:        kind,
+			Source:      "imported",
+		}
+		if err := s.db.CustomProviders().CreateModel(r.Context(), cm); err != nil {
+			// Likely a unique-constraint race; skip rather than abort the batch.
+			skipped++
+			continue
+		}
+		seen[m.ID] = true
+		imported++
+	}
+	if imported > 0 {
+		s.reloadCustomModels(r.Context(), providerID)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"provider_id": providerID,
+		"imported":    imported,
+		"skipped":     skipped,
+		"total":       len(discovered),
+	})
 }

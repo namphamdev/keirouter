@@ -7,8 +7,8 @@ import { useToast } from "../components/Toast";
 import { Card, SectionHeader, CardHeader, Button, Input, Field, Spinner, EmptyState, Toggle, ErrorBanner } from "../components/ui";
 
 // Built-in reference skills — documentation pages that teach AI agents how to
-// call KeiRouter endpoints. These mirror 9router's skills model: static docs
-// with copyable URLs, not runtime request modifiers.
+// call KeiRouter endpoints. These are static docs with copyable URLs, not
+// runtime request modifiers.
 const REFERENCE_SKILLS = [
   { id: "keirouter", name: "KeiRouter (Entry)", endpoint: null as string | null, description: "Setup guide and index of all capabilities." },
   { id: "keirouter-chat", name: "Chat", endpoint: "/v1/chat/completions", description: "Chat and code generation via OpenAI or Anthropic format with streaming." },

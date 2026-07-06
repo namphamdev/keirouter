@@ -35,13 +35,13 @@ func (r *UsageRepo) RecordBatch(ctx context.Context, records []UsageRecord) erro
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	const cols = 26
+	const cols = 27
 	var b strings.Builder
 	b.WriteString(`INSERT INTO usage_records
 		(id, tenant_id, project_id, api_key_id, provider, model, account_id, client,
 		 prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
 		 cost_micros, cache_hit, latency_ms, ttft_ms,
-		 slim_bytes_saved, slim_tokens_saved, slim_rules, caveman_active, terse_active,
+		 slim_bytes_saved, slim_tokens_saved, slim_rules, slim_active, caveman_active, terse_active,
 		 headroom_tokens_saved, headroom_bytes_saved, headroom_active, ponytail_active,
 		 created_at) VALUES `)
 	args := make([]any, 0, len(records)*cols)
@@ -49,7 +49,7 @@ func (r *UsageRepo) RecordBatch(ctx context.Context, records []UsageRecord) erro
 		if i > 0 {
 			b.WriteString(",")
 		}
-		b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+		b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 		args = append(args, usageArgs(u)...)
 	}
 	q := r.db.rebind(b.String())
@@ -70,10 +70,10 @@ func insertUsage(ctx context.Context, exec interface {
 			(id, tenant_id, project_id, api_key_id, provider, model, account_id, client,
 			 prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
 			 cost_micros, cache_hit, latency_ms, ttft_ms,
-			 slim_bytes_saved, slim_tokens_saved, slim_rules, caveman_active, terse_active,
+			 slim_bytes_saved, slim_tokens_saved, slim_rules, slim_active, caveman_active, terse_active,
 			 headroom_tokens_saved, headroom_bytes_saved, headroom_active, ponytail_active,
 			 created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err := exec.ExecContext(ctx, q, usageArgs(u)...)
 	return err
 }
@@ -84,7 +84,7 @@ func usageArgs(u UsageRecord) []any {
 		u.Provider, u.Model, nullString(u.AccountID), u.Client,
 		u.PromptTokens, u.CompletionTokens, u.CachedTokens, u.CacheWriteTokens,
 		u.CostMicros, boolToInt(u.CacheHit), u.LatencyMS, u.TTFTMS,
-		u.SlimBytesSaved, u.SlimTokensSaved, u.SlimRules, boolToInt(u.CavemanActive), boolToInt(u.TerseActive),
+		u.SlimBytesSaved, u.SlimTokensSaved, u.SlimRules, boolToInt(u.SlimActive), boolToInt(u.CavemanActive), boolToInt(u.TerseActive),
 		u.HeadroomTokensSaved, u.HeadroomBytesSaved, boolToInt(u.HeadroomActive), boolToInt(u.PonytailActive),
 		formatTime(u.CreatedAt),
 	}
@@ -349,6 +349,7 @@ type RecentRecord struct {
 	SlimBytesSaved   int    // bytes saved by RTK slimmer
 	SlimTokensSaved  int    // estimated tokens saved by RTK
 	SlimRules        string // comma-separated rule names that fired
+	SlimActive       bool   // RTK slimmer was enabled for this request
 	CavemanActive    bool
 	TerseActive      bool
 
@@ -368,7 +369,7 @@ func (r *UsageRepo) Recent(ctx context.Context, tenantID string, limit int) ([]R
 	q := r.db.rebind(`
 		SELECT id, provider, model, prompt_tokens, completion_tokens, cached_tokens,
 		       cache_write_tokens, cost_micros, cache_hit, latency_ms, ttft_ms,
-		       slim_bytes_saved, slim_tokens_saved, slim_rules, caveman_active, terse_active,
+		       slim_bytes_saved, slim_tokens_saved, slim_rules, slim_active, caveman_active, terse_active,
 		       headroom_tokens_saved, headroom_bytes_saved, headroom_active, ponytail_active,
 		       created_at
 		FROM usage_records
@@ -387,17 +388,19 @@ func (r *UsageRepo) Recent(ctx context.Context, tenantID string, limit int) ([]R
 			rec                            RecentRecord
 			cacheHit, caveman, terse       int
 			headroomActive, ponytailActive int
+			slimActive                     int
 			createdAt                      string
 		)
 		if err := rows.Scan(&rec.ID, &rec.Provider, &rec.Model, &rec.PromptTokens,
 			&rec.CompletionTokens, &rec.CachedTokens, &rec.CacheWriteTokens,
 			&rec.CostMicros, &cacheHit, &rec.LatencyMS, &rec.TTFTMS,
-			&rec.SlimBytesSaved, &rec.SlimTokensSaved, &rec.SlimRules, &caveman, &terse,
+			&rec.SlimBytesSaved, &rec.SlimTokensSaved, &rec.SlimRules, &slimActive, &caveman, &terse,
 			&rec.HeadroomTokensSaved, &rec.HeadroomBytesSaved, &headroomActive, &ponytailActive,
 			&createdAt); err != nil {
 			return nil, err
 		}
 		rec.CacheHit = cacheHit != 0
+		rec.SlimActive = slimActive != 0
 		rec.CavemanActive = caveman != 0
 		rec.TerseActive = terse != 0
 		rec.HeadroomActive = headroomActive != 0
@@ -730,6 +733,57 @@ func (r *UsageRepo) SavingsByClient(ctx context.Context, tenantID string, since 
 			return nil, err
 		}
 		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// RecentByKey returns the most recent usage records for a specific API key
+// since the given time, newest first. Used by the customer portal to show
+// per-request details including token in/out and optimization flags.
+func (r *UsageRepo) RecentByKey(ctx context.Context, keyID string, since time.Time, limit int) ([]RecentRecord, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	q := r.db.rebind(`
+		SELECT id, provider, model, prompt_tokens, completion_tokens, cached_tokens,
+		       cache_write_tokens, cost_micros, cache_hit, latency_ms, ttft_ms,
+		       slim_bytes_saved, slim_tokens_saved, slim_rules, slim_active, caveman_active, terse_active,
+		       headroom_tokens_saved, headroom_bytes_saved, headroom_active, ponytail_active,
+		       created_at
+		FROM usage_records
+		WHERE api_key_id = ? AND created_at >= ?
+		ORDER BY created_at DESC
+		LIMIT ?`)
+	rows, err := r.db.sql.QueryContext(ctx, q, keyID, formatTime(since), limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: recent usage by key: %w", err)
+	}
+	defer rows.Close()
+	var out []RecentRecord
+	for rows.Next() {
+		var (
+			rec                            RecentRecord
+			cacheHit, caveman, terse       int
+			headroomActive, ponytailActive int
+			slimActive                     int
+			createdAt                      string
+		)
+		if err := rows.Scan(&rec.ID, &rec.Provider, &rec.Model, &rec.PromptTokens,
+			&rec.CompletionTokens, &rec.CachedTokens, &rec.CacheWriteTokens,
+			&rec.CostMicros, &cacheHit, &rec.LatencyMS, &rec.TTFTMS,
+			&rec.SlimBytesSaved, &rec.SlimTokensSaved, &rec.SlimRules, &slimActive, &caveman, &terse,
+			&rec.HeadroomTokensSaved, &rec.HeadroomBytesSaved, &headroomActive, &ponytailActive,
+			&createdAt); err != nil {
+			return nil, err
+		}
+		rec.CacheHit = cacheHit != 0
+		rec.SlimActive = slimActive != 0
+		rec.CavemanActive = caveman != 0
+		rec.TerseActive = terse != 0
+		rec.HeadroomActive = headroomActive != 0
+		rec.PonytailActive = ponytailActive != 0
+		rec.CreatedAt = parseTime(createdAt)
+		out = append(out, rec)
 	}
 	return out, rows.Err()
 }

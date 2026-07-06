@@ -10,6 +10,9 @@ type ClineTool struct{}
 func (t *ClineTool) ID() string   { return "cline" }
 func (t *ClineTool) Name() string { return "Cline / Roo" }
 
+// Command returns "" — Cline is a VS Code extension, not a standalone CLI.
+func (t *ClineTool) Command() string { return "" }
+
 func (t *ClineTool) globalStatePath(homeDir string) string {
 	return expandHome(homeDir, "~/.cline/data/globalState.json")
 }
@@ -23,7 +26,7 @@ func (t *ClineTool) DetectStatus(homeDir string) (bool, bool, string, error) {
 		return false, false, path, nil
 	}
 	var cfg map[string]any
-	if err := readJSON(path, &cfg); err != nil {
+	if err := readJSONC(path, &cfg); err != nil {
 		return true, false, path, nil
 	}
 	v, _ := cfg["openAiBaseUrl"].(string)

@@ -2,15 +2,25 @@ package clitools
 
 import (
 	"os"
+	"path/filepath"
 )
 
 // OpenCodeTool auto-configures OpenCode (~/.config/opencode/opencode.json).
 type OpenCodeTool struct{}
 
-func (t *OpenCodeTool) ID() string   { return "opencode" }
-func (t *OpenCodeTool) Name() string { return "OpenCode" }
+func (t *OpenCodeTool) ID() string      { return "opencode" }
+func (t *OpenCodeTool) Name() string    { return "OpenCode" }
+func (t *OpenCodeTool) Command() string { return "opencode" }
 
+// configPath resolves the OpenCode config path. OpenCode honors XDG_CONFIG_HOME
+// (and the opencode.json file is JSONC-tolerant). Falls back to ~/.config.
 func (t *OpenCodeTool) configPath(homeDir string) string {
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		if !filepath.IsAbs(xdg) {
+			xdg = filepath.Join(homeDir, xdg)
+		}
+		return filepath.Join(xdg, "opencode", "opencode.json")
+	}
 	return expandHome(homeDir, "~/.config/opencode/opencode.json")
 }
 

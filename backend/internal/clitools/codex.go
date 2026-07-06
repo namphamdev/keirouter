@@ -10,8 +10,9 @@ import (
 // CodexTool auto-configures Codex CLI (~/.codex/config.toml + auth.json).
 type CodexTool struct{}
 
-func (t *CodexTool) ID() string   { return "codex" }
-func (t *CodexTool) Name() string { return "Codex CLI" }
+func (t *CodexTool) ID() string      { return "codex" }
+func (t *CodexTool) Name() string    { return "Codex CLI" }
+func (t *CodexTool) Command() string { return "codex" }
 
 func (t *CodexTool) configPath(homeDir string) string {
 	return expandHome(homeDir, "~/.codex/config.toml")
@@ -56,9 +57,9 @@ func (t *CodexTool) Configure(homeDir, baseURL, apiKey string, models []string) 
 		providers = make(map[string]any)
 	}
 	providers["keirouter"] = map[string]any{
-		"name":      "KeiRouter",
-		"base_url":  ensureSuffix(baseURL, "/v1"),
-		"wire_api":  "responses",
+		"name":     "KeiRouter",
+		"base_url": ensureSuffix(baseURL, "/v1"),
+		"wire_api": "responses",
 	}
 	cfg["model_providers"] = providers
 

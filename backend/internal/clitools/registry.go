@@ -7,11 +7,15 @@
 package clitools
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // Tool describes a CLI tool that can be auto-configured to use KeiRouter.
@@ -20,6 +24,11 @@ type Tool interface {
 	ID() string
 	// Name returns the human-readable display name.
 	Name() string
+	// Command returns the CLI binary name used to verify installation
+	// (e.g. "claude", "codex"). Return "" for tools that ship only as IDE
+	// extensions (cline, copilot, kilo) — those are detected via their config
+	// files instead of a binary lookup.
+	Command() string
 	// DetectStatus checks whether the tool is installed and whether KeiRouter
 	// is already configured. configPath is the path that was checked.
 	DetectStatus(homeDir string) (installed, configured bool, configPath string, err error)
@@ -36,6 +45,15 @@ type Status struct {
 	Installed  bool   `json:"installed"`
 	Configured bool   `json:"configured"`
 	ConfigPath string `json:"config_path"`
+	// BinaryPath is the resolved executable path, or "" when no binary was
+	// found (e.g. IDE-only tools or uninstalled CLIs).
+	BinaryPath string `json:"binary_path,omitempty"`
+	// Version is the best-effort version string reported by the binary, or ""
+	// when unavailable.
+	Version string `json:"version,omitempty"`
+	// Error holds a detection error message when detection failed for reasons
+	// other than the tool simply being absent.
+	Error string `json:"error,omitempty"`
 }
 
 // Registry holds all known CLI tools.
@@ -76,17 +94,104 @@ func (r *Registry) All() []Tool {
 	return out
 }
 
-// DetectAll returns the status of every registered tool.
+// DetectAll returns the status of every registered tool. Detection runs in
+// parallel with a per-tool timeout so one slow or misbehaving CLI cannot stall
+// the batch. For each tool, detection combines:
+//   - a binary lookup (exec.LookPath over an augmented PATH) — so a stale
+//     config file left behind after uninstall no longer false-positives as
+//     "installed";
+//   - the tool's own config-file check; and
+//   - a best-effort `<cmd> --version` probe.
+//
+// A tool counts as installed if EITHER its binary is on PATH OR its config
+// file exists (the config file is the only signal for IDE-only extensions).
 func (r *Registry) DetectAll(homeDir string) []Status {
-	out := make([]Status, 0, len(r.tools))
-	for _, t := range r.All() {
-		inst, conf, path, _ := t.DetectStatus(homeDir)
-		out = append(out, Status{
-			ID: t.ID(), Name: t.Name(),
-			Installed: inst, Configured: conf, ConfigPath: path,
+	tools := r.All()
+	out := make([]Status, len(tools))
+	idx := make(map[string]int, len(tools))
+	for i, t := range tools {
+		idx[t.ID()] = i
+		out[i] = Status{ID: t.ID(), Name: t.Name()}
+	}
+
+	var mu sync.Mutex
+	g, gctx := errgroup.WithContext(context.Background())
+	for i, t := range tools {
+		i, t := i, t
+		g.Go(func() error {
+			ctx, cancel := context.WithTimeout(gctx, detectTimeout)
+			defer cancel()
+
+			st := detectOne(ctx, t, homeDir)
+			mu.Lock()
+			out[i] = st
+			mu.Unlock()
+			return nil
 		})
 	}
+	_ = g.Wait()
 	return out
+}
+
+// detectOne runs the full detection pipeline for a single tool. It never
+// panics on errors — failures are surfaced via Status.Error so the UI can
+// distinguish "not installed" from "detection broke".
+func detectOne(ctx context.Context, t Tool, homeDir string) Status {
+	st := Status{ID: t.ID(), Name: t.Name()}
+
+	// Binary lookup (no timeout needed — exec.LookPath is fast).
+	if bin, ok := lookupBinary(t.Command()); ok {
+		st.BinaryPath = bin
+	}
+
+	// Tool-specific config check. Wrapped so a panic/long read cannot kill the
+	// goroutine; the ctx timeout bounds the whole pipeline.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		inst, conf, path, err := t.DetectStatus(homeDir)
+		if err != nil {
+			st.Error = err.Error()
+		}
+		st.ConfigPath = path
+		// A tool is installed if the binary is on PATH OR its config file
+		// exists. This avoids false negatives when the binary is shadowed by
+		// a shell alias/function, and avoids false positives being the only
+		// signal: a stale config alone still counts, because the user may have
+		// a non-standard install location.
+		st.Installed = inst || st.BinaryPath != ""
+		st.Configured = conf
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		if st.Error == "" {
+			st.Error = "detection timed out"
+		}
+		// If we already found a binary, keep "installed" true even on timeout.
+		if st.BinaryPath != "" {
+			st.Installed = true
+		}
+	}
+
+	// Best-effort version probe (skipped on timeout). Only probe real CLIs;
+	// IDE extensions have no binary.
+	if st.BinaryPath != "" && ctx.Err() == nil {
+		vctx, vcancel := context.WithTimeout(context.Background(), versionProbeTimeout)
+		v := make(chan string, 1)
+		go func() {
+			v <- detectVersion(st.BinaryPath, t.Command())
+		}()
+		select {
+		case ver := <-v:
+			st.Version = ver
+		case <-vctx.Done():
+		}
+		vcancel()
+	}
+
+	return st
 }
 
 // ---- common helpers --------------------------------------------------------

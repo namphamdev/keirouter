@@ -40,6 +40,7 @@ type CustomModel struct {
 	ContextWindow int
 	InputPerM     float64
 	OutputPerM    float64
+	Source        string // "manual" (user-entered) | "imported" (from /models)
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }
@@ -125,7 +126,7 @@ func (r *CustomProviderRepo) DeleteProvider(ctx context.Context, id string) erro
 	return tx.Commit()
 }
 
-const customModelColumns = `id, tenant_id, provider_id, model_id, display_name, kind, context_window, input_per_m, output_per_m, created_at, updated_at`
+const customModelColumns = `id, tenant_id, provider_id, model_id, display_name, kind, context_window, input_per_m, output_per_m, source, created_at, updated_at`
 
 // ListModels returns all custom models for a tenant.
 func (r *CustomProviderRepo) ListModels(ctx context.Context, tenantID string) ([]CustomModel, error) {
@@ -167,14 +168,42 @@ func (r *CustomProviderRepo) ListModelsByProvider(ctx context.Context, providerI
 	return out, rows.Err()
 }
 
+// ListManualModelsByProvider returns only user-entered custom models (source =
+// "manual") for a provider. Imported models from /models are excluded — they
+// surface in the Available Models catalog, not the editable Custom Models list.
+func (r *CustomProviderRepo) ListManualModelsByProvider(ctx context.Context, providerID string) ([]CustomModel, error) {
+	q := r.db.rebind(`SELECT ` + customModelColumns + ` FROM custom_models
+		WHERE provider_id = ? AND (source = 'manual' OR source = '')
+		ORDER BY model_id`)
+	rows, err := r.db.sql.QueryContext(ctx, q, providerID)
+	if err != nil {
+		return nil, fmt.Errorf("store: list manual custom models by provider: %w", err)
+	}
+	defer rows.Close()
+
+	var out[]CustomModel
+	for rows.Next() {
+		m, err := scanCustomModel(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // CreateModel inserts a custom model.
 func (r *CustomProviderRepo) CreateModel(ctx context.Context, m CustomModel) error {
 	now := formatTime(time.Now())
+	source := m.Source
+	if source == "" {
+		source = "manual"
+	}
 	q := r.db.rebind(`INSERT INTO custom_models (` + customModelColumns + `)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err := r.db.sql.ExecContext(ctx, q,
 		m.ID, m.TenantID, m.ProviderID, m.ModelID, m.DisplayName, m.Kind,
-		m.ContextWindow, m.InputPerM, m.OutputPerM, now, now)
+		m.ContextWindow, m.InputPerM, m.OutputPerM, source, now, now)
 	if err != nil {
 		return fmt.Errorf("store: create custom model: %w", err)
 	}
@@ -244,7 +273,7 @@ func scanCustomModel(s scanner) (CustomModel, error) {
 	var m CustomModel
 	var created, updated string
 	if err := s.Scan(&m.ID, &m.TenantID, &m.ProviderID, &m.ModelID, &m.DisplayName, &m.Kind,
-		&m.ContextWindow, &m.InputPerM, &m.OutputPerM, &created, &updated); err != nil {
+		&m.ContextWindow, &m.InputPerM, &m.OutputPerM, &m.Source, &created, &updated); err != nil {
 		return CustomModel{}, err
 	}
 	m.CreatedAt = parseTime(created)

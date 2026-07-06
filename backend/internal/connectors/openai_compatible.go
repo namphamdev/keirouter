@@ -109,8 +109,116 @@ func (c *OpenAICompatible) chatCompletionsURL(creds core.Credentials, model stri
 	return joinURL(c.baseURL(creds), "chat/completions")
 }
 
-// Chat performs a non-streaming completion.
+// providerRequiresStreaming reports whether the given provider only accepts
+// streaming requests. Some OpenAI-compatible providers reject non-streaming
+// requests with "Stream must be set to true" (HTTP 400). For these providers,
+// the Chat method must use the Stream method internally and drain the chunks
+// into a single response.
+func providerRequiresStreaming(providerID string) bool {
+	switch providerID {
+	// Add providers here that require streaming-only requests.
+	// These providers return 400 "Stream must be set to true" when
+	// a non-streaming request is sent.
+	case "xiaomi-mimo", "xiaomi-tokenplan", "mimo-free":
+		return true
+	default:
+		return false
+	}
+}
+
+// isStreamRequiredError reports whether the error indicates the upstream
+// provider rejected a non-streaming request with "Stream must be set to true".
+// This is used for auto-retry with streaming when an unknown (custom) OpenAI-
+// compatible provider requires streaming.
+func isStreamRequiredError(err error) bool {
+	if err == nil {
+		return false
+	}
+	pe := core.AsProviderError(err)
+	if pe == nil || pe.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	msg := strings.ToLower(pe.Message)
+	return strings.Contains(msg, "stream must be set to true") ||
+		strings.Contains(msg, "streaming is required") ||
+		strings.Contains(msg, "stream parameter is required")
+}
+
+// drainStreamToResponse consumes a stream channel and folds the chunks into a
+// single ChatResponse. Used by Chat when the provider requires streaming.
+func drainStreamToResponse(stream <-chan core.StreamChunk, model string) (*core.ChatResponse, error) {
+	msg := core.Message{Role: core.RoleAssistant}
+	var text, thinking string
+	toolCalls := map[string]*core.ToolCall{}
+	var toolOrder []string
+	finish := core.FinishStop
+	var usage core.Usage
+
+	for ch := range stream {
+		switch ch.Type {
+		case core.ChunkText:
+			text += ch.Delta
+		case core.ChunkThinking:
+			thinking += ch.Delta
+		case core.ChunkToolCall:
+			if ch.ToolCall != nil {
+				existing, ok := toolCalls[ch.ToolCall.ID]
+				if !ok {
+					tc := *ch.ToolCall
+					toolCalls[ch.ToolCall.ID] = &tc
+					toolOrder = append(toolOrder, ch.ToolCall.ID)
+				} else if len(ch.ToolCall.Arguments) > 0 {
+					existing.Arguments = append(existing.Arguments, ch.ToolCall.Arguments...)
+				}
+				finish = core.FinishToolCalls
+			}
+		case core.ChunkFinish:
+			if ch.FinishReason != "" {
+				finish = ch.FinishReason
+			}
+		case core.ChunkUsage:
+			if ch.Usage != nil {
+				usage = *ch.Usage
+			}
+		case core.ChunkError:
+			if ch.Err != nil {
+				return nil, ch.Err
+			}
+		}
+	}
+
+	if thinking != "" {
+		msg.Content = append(msg.Content, core.ContentPart{Type: core.PartThinking, Text: thinking})
+	}
+	if text != "" {
+		msg.Content = append(msg.Content, core.ContentPart{Type: core.PartText, Text: text})
+	}
+	for _, id := range toolOrder {
+		tc := toolCalls[id]
+		if len(tc.Arguments) == 0 {
+			tc.Arguments = json.RawMessage("{}")
+		}
+		msg.Content = append(msg.Content, core.ContentPart{Type: core.PartToolCall, ToolCall: tc})
+	}
+
+	return &core.ChatResponse{Model: model, Message: msg, FinishReason: finish, Usage: usage}, nil
+}
+
 func (c *OpenAICompatible) Chat(ctx context.Context, req *core.ChatRequest, creds core.Credentials) (*core.ChatResponse, error) {
+	// Some OpenAI-compatible providers only accept streaming requests and reject
+	// non-streaming requests with 400 "Stream must be set to true". For known
+	// stream-only providers, use the Stream method directly. For unknown
+	// providers (including custom OpenAI-compatible ones), the initial non-
+	// streaming call may fail with this error — we detect it and retry with
+	// streaming transparently.
+	if providerRequiresStreaming(c.id) {
+		stream, err := c.Stream(ctx, req, creds, core.StreamConfig{})
+		if err != nil {
+			return nil, err
+		}
+		return drainStreamToResponse(stream, req.Model)
+	}
+
 	req.Stream = false
 	body, err := c.codec.RenderRequestForProvider(req, c.id)
 	if err != nil {
@@ -124,6 +232,14 @@ func (c *OpenAICompatible) Chat(ctx context.Context, req *core.ChatRequest, cred
 	if sc, ok := interface{}(c.codec).(transform.StreamingResponseCodec); ok {
 		_, respBody, decErr := doJSONDecode(ctx, c.id, req.Model, url, body, c.headers(creds))
 		if decErr != nil {
+			// Auto-retry with streaming if the provider requires it.
+			if isStreamRequiredError(decErr) {
+				stream, sErr := c.Stream(ctx, req, creds, core.StreamConfig{})
+				if sErr != nil {
+					return nil, sErr
+				}
+				return drainStreamToResponse(stream, req.Model)
+			}
 			return nil, decErr
 		}
 		defer respBody.Close()
@@ -137,6 +253,14 @@ func (c *OpenAICompatible) Chat(ctx context.Context, req *core.ChatRequest, cred
 	// Fallback: buffer the entire response body.
 	respBody, err := doJSON(ctx, c.id, req.Model, url, body, c.headers(creds))
 	if err != nil {
+		// Auto-retry with streaming if the provider requires it.
+		if isStreamRequiredError(err) {
+			stream, sErr := c.Stream(ctx, req, creds, core.StreamConfig{})
+			if sErr != nil {
+				return nil, sErr
+			}
+			return drainStreamToResponse(stream, req.Model)
+		}
 		return nil, err
 	}
 
@@ -208,6 +332,18 @@ func (c *OpenAICompatible) Validate(ctx context.Context, creds core.Credentials)
 // (e.g. a 400/404 for an unknown probe model) still proves the key was accepted.
 func (c *OpenAICompatible) chatAuthProbe(ctx context.Context, creds core.Credentials) error {
 	probeModel := firstCatalogModel(c.id)
+	// Custom/dynamic providers may have no catalog models until the user imports
+	// them. Sending a synthetic "test" model id to such endpoints triggers
+	// upstream403 model_not_allowed, which is misclassified as an auth failure.
+	// When no real model is known, skip the chat probe for custom providers and
+	// rely on the GET /models probe above. Built-in providers keep the "test"
+	// fallback so a bad key is still rejected when /models is publicly readable.
+	if probeModel == "" {
+		if IsCustomProviderID(c.id) {
+			return nil
+		}
+		probeModel = "test"
+	}
 	body, _ := json.Marshal(map[string]any{
 		"model": probeModel,
 		"messages": []map[string]string{
@@ -244,7 +380,7 @@ func firstCatalogModel(provider string) string {
 			return m.ID
 		}
 	}
-	return "test"
+	return ""
 }
 
 func strictModelsValidation(provider string) bool {

@@ -77,7 +77,7 @@ export function CustomModelsSection({ provider }: { provider: Provider }) {
     <Card>
       <CardHeader
         title="Custom Models"
-        description="Models you register yourself, beyond the predefined catalog. Useful for endpoints that don't expose a /models list."
+        description="Models you register yourself, beyond the predefined catalog. Use Fetch from /models to import the upstream listing, or add entries manually."
         action={
 
           <Button variant="ghost" className="h-8 px-3 text-xs" onClick={openAdd}>

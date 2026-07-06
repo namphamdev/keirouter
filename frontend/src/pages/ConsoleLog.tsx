@@ -255,6 +255,12 @@ export function ConsoleLogPage() {
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 20,
+    // Key measurements by the stable log seq, not the array index. The log
+    // list mutates constantly (SSE appends + slice(-MAX_LINES) shifts every
+    // index), so an index-keyed cache would attach an expanded row's tall
+    // height to whatever entry later lands on that index, leaving neighboring
+    // rows with stale offsets and causing overlapping "glitch" rows.
+    getItemKey: (index) => filtered[index].seq,
   });
 
   // ── Auto-scroll ──────────────────────────────────────────────────────────

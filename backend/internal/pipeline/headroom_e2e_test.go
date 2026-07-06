@@ -180,7 +180,7 @@ func TestHeadroomEndToEnd_PipelineMeterStore(t *testing.T) {
 				Account: store.Account{ID: "acc-1"},
 			}
 			usage := core.Usage{PromptTokens: 100, CompletionTokens: 50}
-			p.record(ctx, req.Metadata, attempt, usage, false, 5*time.Millisecond, save)
+			p.record(ctx, req.Metadata, attempt, usage, false, 5*time.Millisecond, save, false)
 
 			// Read the persisted record back from the store.
 			recent, err := db.Usage().Recent(ctx, store.DefaultTenantID, 10)

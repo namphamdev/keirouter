@@ -111,6 +111,7 @@ type Event struct {
 
 	// Token-saving analytics.
 	SlimStats      *SlimSnapshot     // nil when RTK did not fire
+	SlimActive     bool              // RTK slimmer was enabled for this request
 	CavemanActive  bool              // caveman output compression was active
 	TerseActive    bool              // terse output compression was active
 	HeadroomStats  *HeadroomSnapshot // nil when Headroom did not yield non-phantom savings
@@ -202,6 +203,7 @@ func (m *Meter) Record(ctx context.Context, ev Event) (int64, error) {
 		LatencyMS:        int(ev.Latency.Milliseconds()),
 		TTFTMS:           int(ev.TTFT.Milliseconds()),
 		CavemanActive:    ev.CavemanActive,
+		SlimActive:       ev.SlimActive,
 		TerseActive:      ev.TerseActive,
 		PonytailActive:   ev.PonytailActive,
 		CreatedAt:        time.Now(),

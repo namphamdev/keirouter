@@ -141,6 +141,7 @@ type UsageRecord struct {
 	SlimBytesSaved   int    // bytes removed by RTK slimmer (input-side compression)
 	SlimTokensSaved  int    // estimated tokens saved by RTK (bytes/4)
 	SlimRules        string // comma-separated rule names that fired (e.g. "git-diff,grep")
+	SlimActive       bool   // RTK slimmer was enabled for this request
 	CavemanActive    bool   // caveman output compression was active
 	TerseActive      bool   // terse output compression was active
 
@@ -359,4 +360,89 @@ type ResourceBucket struct {
 
 	InflightAvg float64
 	InflightMax int64
+}
+
+// ProviderHealthCurrent is the rolled-up current health state for one
+// provider/account/model/capability key. It is updated by both real-traffic
+// telemetry aggregation and synthetic probes for fast dashboard loading.
+type ProviderHealthCurrent struct {
+	ID                  string     `json:"id"`
+	Provider            string     `json:"provider"`
+	ProviderAccountID   string     `json:"provider_account_id"`
+	Model               string     `json:"model"`
+	Capability          string     `json:"capability"`
+	HealthStatus        string     `json:"health_status"` // healthy | degraded | unhealthy | unknown | disabled
+	HealthScore         int        `json:"health_score"`
+	SuccessRate         float64    `json:"success_rate"`  // 0-1
+	ErrorRate           float64    `json:"error_rate"`    // 0-1
+	RequestCount        int64      `json:"request_count"`
+	FallbackCount       int64      `json:"fallback_count"`
+	LatencyP95Ms        *int       `json:"latency_p95_ms"`
+	TTFTP95Ms           *int       `json:"ttft_p95_ms"`
+	ConsecutiveFailures int        `json:"consecutive_failures"`
+	MainIssue           *string    `json:"main_issue"`
+	Recommendation      *string    `json:"recommendation"`
+	LastSuccessAt       *time.Time `json:"last_success_at"`
+	LastFailureAt       *time.Time `json:"last_failure_at"`
+	LastProbeAt         *time.Time `json:"last_probe_at"`
+	LastUpdatedAt       time.Time  `json:"last_updated_at"`
+}
+
+// ProviderHealthSnapshot is one aggregated time bucket of provider health,
+// stored for historical charts and trend analysis.
+type ProviderHealthSnapshot struct {
+	ID                  string     `json:"id"`
+	BucketStart         time.Time  `json:"bucket_start"`
+	BucketSizeSeconds   int        `json:"bucket_size_seconds"`
+	Provider            string     `json:"provider"`
+	ProviderAccountID   string     `json:"provider_account_id"`
+	Model               string     `json:"model"`
+	Capability          string     `json:"capability"`
+	RequestCount        int64      `json:"request_count"`
+	SuccessCount        int64      `json:"success_count"`
+	FailureCount        int64      `json:"failure_count"`
+	FallbackCount       int64      `json:"fallback_count"`
+	FinalFailureCount   int64      `json:"final_failure_count"`
+	InputTokens         int64      `json:"input_tokens"`
+	OutputTokens        int64      `json:"output_tokens"`
+	EstimatedCostMicros int64      `json:"estimated_cost_microusd"`
+	LatencyP50Ms        *int       `json:"latency_p50_ms"`
+	LatencyP95Ms        *int       `json:"latency_p95_ms"`
+	LatencyP99Ms        *int       `json:"latency_p99_ms"`
+	TTFTP50Ms           *int       `json:"ttft_p50_ms"`
+	TTFTP95Ms           *int       `json:"ttft_p95_ms"`
+	TTFTP99Ms           *int       `json:"ttft_p99_ms"`
+	RateLimitedCount    int64      `json:"rate_limited_count"`
+	AuthErrorCount      int64      `json:"auth_error_count"`
+	QuotaExceededCount  int64      `json:"quota_exceeded_count"`
+	TimeoutCount        int64      `json:"timeout_count"`
+	Provider5xxCount    int64      `json:"provider_5xx_count"`
+	BadRequestCount     int64      `json:"bad_request_count"`
+	NetworkErrorCount   int64      `json:"network_error_count"`
+	UnsupportedCount    int64      `json:"unsupported_count"`
+	UnknownErrorCount   int64      `json:"unknown_error_count"`
+	HealthScore         int        `json:"health_score"`
+	HealthStatus        string     `json:"health_status"`
+	MainIssue           *string    `json:"main_issue"`
+	CreatedAt           time.Time  `json:"created_at"`
+}
+
+// ProviderProbeResult is one synthetic probe outcome (scheduled or manual).
+type ProviderProbeResult struct {
+	ID                  string     `json:"id"`
+	Provider            string     `json:"provider"`
+	ProviderAccountID   string     `json:"provider_account_id"`
+	Model               string     `json:"model"`
+	Capability          string     `json:"capability"`
+	Status              string     `json:"status"` // success | failed
+	HTTPStatus          *int       `json:"http_status"`
+	LatencyMs           *int       `json:"latency_ms"`
+	TTFTMs              *int       `json:"ttft_ms"`
+	ErrorType           *string    `json:"error_type"`
+	ErrorMessage        *string    `json:"error_message"`
+	PromptTokens        *int       `json:"prompt_tokens"`
+	CompletionTokens    *int       `json:"completion_tokens"`
+	EstimatedCostMicros *int64     `json:"estimated_cost_microusd"`
+	TriggeredBy         string     `json:"triggered_by"` // scheduled | manual | after_failure | startup
+	CreatedAt           time.Time  `json:"created_at"`
 }

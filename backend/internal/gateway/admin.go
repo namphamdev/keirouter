@@ -76,6 +76,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Get("/quota", s.adminQuotaUsage)
 	r.Get("/health/accounts", s.adminListAccountHealth)
 	r.Post("/health/check-now", s.adminRunHealthCheck)
+	s.mountProviderHealth(r)
 	r.Get("/console", s.adminConsoleLog)
 	r.Delete("/console", s.adminConsoleClear)
 	r.Get("/console/stream", s.adminConsoleStream)
@@ -258,7 +259,7 @@ func (s *Server) adminProviderModels(w http.ResponseWriter, r *http.Request) {
 	// ModelsForProvider). Flag any entry that is a user-defined custom model.
 	static := connectors.ModelsForProvider(providerID)
 	seen := map[string]bool{}
-	var out []modelInfo
+	out := make([]modelInfo, 0, len(static))
 	for _, m := range static {
 		kind := modelKind(m.Kind)
 		if kindFilter != "" && kind != kindFilter {

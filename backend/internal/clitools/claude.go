@@ -8,8 +8,9 @@ import (
 // ClaudeTool auto-configures Claude Code (~/.claude/settings.json).
 type ClaudeTool struct{}
 
-func (t *ClaudeTool) ID() string   { return "claude" }
-func (t *ClaudeTool) Name() string { return "Claude Code" }
+func (t *ClaudeTool) ID() string      { return "claude" }
+func (t *ClaudeTool) Name() string    { return "Claude Code" }
+func (t *ClaudeTool) Command() string { return "claude" }
 
 func (t *ClaudeTool) configPath(homeDir string) string {
 	return expandHome(homeDir, "~/.claude/settings.json")
@@ -21,7 +22,7 @@ func (t *ClaudeTool) DetectStatus(homeDir string) (bool, bool, string, error) {
 		return false, false, path, nil
 	}
 	var cfg map[string]any
-	if err := readJSON(path, &cfg); err != nil {
+	if err := readJSONC(path, &cfg); err != nil {
 		return true, false, path, nil
 	}
 	return true, t.hasKeiRouter(cfg), path, nil

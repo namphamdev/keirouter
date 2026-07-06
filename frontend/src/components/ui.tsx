@@ -1,6 +1,6 @@
 // Reusable UI primitives styled with the KeiRouter design system. Calm,
 // generously spaced, soft shadows and rounded surfaces — no gradients or neon.
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type {
   ButtonHTMLAttributes,
   InputHTMLAttributes,
@@ -456,4 +456,56 @@ export function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: 
       />
     </button>
   );
+}
+
+// TablePagination is the footer row shown below a paginated table. It renders
+// a total count on the left and Prev / page-indicator / Next on the right.
+export function TablePagination({
+  page,
+  pages,
+  total,
+  onPage,
+}: {
+  page: number;
+  pages: number;
+  total: number;
+  onPage: (p: number) => void;
+}) {
+  if (pages <= 1) return null;
+  return (
+    <div className="flex items-center justify-between border-t border-[var(--border)] px-4 py-2 text-xs">
+      <span className="text-[var(--text-muted)]">{total.toLocaleString()} total</span>
+      <div className="flex items-center gap-1">
+        <button
+          disabled={page <= 1}
+          onClick={() => onPage(page - 1)}
+          className="rounded px-2 py-1 hover:bg-[var(--bg-subtle)] disabled:opacity-40"
+        >
+          Prev
+        </button>
+        <span className="px-2 py-1 tabular-nums">{page}/{pages}</span>
+        <button
+          disabled={page >= pages}
+          onClick={() => onPage(page + 1)}
+          className="rounded px-2 py-1 hover:bg-[var(--bg-subtle)] disabled:opacity-40"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// useClientPagination splits a client-side array into pages. Returns the
+// current page slice, page number, total pages, and a setter. Pass `pageSize`
+// to control how many rows appear per page.
+export function useClientPagination<T>(items: T[], pageSize = 10) {
+  const [page, setPage] = useState(1);
+  const pages = Math.max(1, Math.ceil(items.length / pageSize));
+  const clampedPage = Math.min(page, pages);
+  const paged = useMemo(
+    () => items.slice((clampedPage - 1) * pageSize, clampedPage * pageSize),
+    [items, clampedPage, pageSize],
+  );
+  return { page: clampedPage, pages, paged, setPage, total: items.length };
 }

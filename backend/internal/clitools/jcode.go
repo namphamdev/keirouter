@@ -9,8 +9,9 @@ import (
 // JcodeTool auto-configures jcode (~/.jcode/config.toml + env file).
 type JcodeTool struct{}
 
-func (t *JcodeTool) ID() string   { return "jcode" }
-func (t *JcodeTool) Name() string { return "jcode" }
+func (t *JcodeTool) ID() string      { return "jcode" }
+func (t *JcodeTool) Name() string    { return "jcode" }
+func (t *JcodeTool) Command() string { return "jcode" }
 
 func (t *JcodeTool) configPath(homeDir string) string {
 	return expandHome(homeDir, "~/.jcode/config.toml")

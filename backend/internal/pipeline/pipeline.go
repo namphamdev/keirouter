@@ -26,6 +26,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/dispatch"
 	"github.com/mydisha/keirouter/backend/internal/guardrails"
 	"github.com/mydisha/keirouter/backend/internal/headroom"
+	"github.com/mydisha/keirouter/backend/internal/health"
 	"github.com/mydisha/keirouter/backend/internal/limits"
 	"github.com/mydisha/keirouter/backend/internal/meter"
 	"github.com/mydisha/keirouter/backend/internal/normalizer"
@@ -60,6 +61,7 @@ type Pipeline struct {
 	guardrails *guardrails.Engine
 	limiter    limits.Limiter
 	log        *slog.Logger
+	telemetry  *health.Service
 
 	requestTimeout     time.Duration // upper bound on non-streaming upstream calls
 	streamStallTimeout time.Duration // aborts a stream with no bytes for this long
@@ -87,6 +89,8 @@ type Deps struct {
 	// TimeoutReader provides dynamic timeout values from dashboard settings.
 	// When set, it overrides RequestTimeout and StreamStallTimeout.
 	TimeoutReader TimeoutReader
+	// Telemetry records provider health events. Best-effort, never blocks.
+	Telemetry *health.Service
 }
 
 // New builds a Pipeline.
@@ -107,6 +111,7 @@ func New(d Deps) *Pipeline {
 		guardrails: d.Guardrails,
 		limiter:    d.Limiter,
 		log:        log,
+		telemetry:  d.Telemetry,
 
 		requestTimeout:     d.RequestTimeout,
 		streamStallTimeout: d.StreamStallTimeout,
@@ -230,7 +235,11 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	}
 	save := buildSaveState(slimStats, hrStats, opts)
 
-	required := capability.Required(req)
+	// HardRequired returns only non-strippable capabilities (tool calling,
+	// streaming). Strippable modalities (vision, audio) are handled by the
+	// pipeline's modality stripping, not the dispatch guard, so a request with
+	// images is never hard-rejected just because a model profile lacks vision.
+	required := capability.HardRequired(req)
 	attempts, err := p.planWithCooldownRetry(ctx, req.Metadata.TenantID, opts.Targets, required, opts.PlanOpts)
 	if err != nil {
 		p.log.Debug("dispatcher plan failed", "err", err)
@@ -240,11 +249,24 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 
 	scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
 	var lastErr error
+	fellBack := false // tracks whether the current request triggered ≥1 fallback
 	for i, attempt := range attempts {
 		started := time.Now()
 		p.log.Debug("attempt start", "i", i, "provider", attempt.Target.Provider,
 			"model", attempt.Target.Model, "account", attempt.Account.ID)
 		attemptReq := cloneForAttempt(req, attempt.Target.Model)
+
+		// Soft-degrade unsupported modalities. Stripping replaces input
+		// modalities the resolved profile cannot handle with text placeholders,
+		// so the upstream receives a valid request it can process. For built-in
+		// providers this is normally a no-op (the dispatch guard already verifies
+		// capabilities), but it provides a safety net when a profile is incomplete.
+		// For custom/dynamic providers (where the guard is relaxed), stripping
+		// is the primary downgrade mechanism.
+		if capability.StripUnsupportedModalities(attemptReq, attempt.Target.Provider, attempt.Target.Model) {
+			p.log.Debug("stripped unsupported modalities",
+				"provider", attempt.Target.Provider, "model", attempt.Target.Model)
+		}
 
 		// Inject proxy config from credentials into context so the connector's
 		// HTTP client uses the right proxy/relay for this account.
@@ -259,6 +281,40 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 		}
 		latency := time.Since(started)
 
+		// Some upstream providers reject non-streaming requests with 400
+		// "Stream must be set to true". ErrBadRequest is not fallbackable, so
+		// the pipeline would normally abort the entire chain. Detect this
+		// specific error and transparently retry with streaming, draining the
+		// stream into a single ChatResponse. This handles all connectors
+		// uniformly (OpenAI-compatible, Qwen, IFlow, etc.) without requiring
+		// per-connector fixes.
+		if callErr != nil && isStreamRequiredError(callErr) {
+			p.log.Debug("provider requires streaming, retrying via Stream()",
+				"provider", attempt.Target.Provider, "model", attempt.Target.Model)
+			streamCtx := core.WithProxy(ctx, attempt.Creds)
+			var streamCancel context.CancelFunc
+			if reqTimeout := p.resolvedRequestTimeout(); reqTimeout > 0 {
+				streamCtx, streamCancel = context.WithTimeout(streamCtx, reqTimeout)
+			}
+			streamReq := cloneForAttempt(req, attempt.Target.Model)
+			stream, sErr := attempt.Conn.Stream(streamCtx, streamReq, attempt.Creds, core.StreamConfig{})
+			if streamCancel != nil {
+				streamCancel()
+			}
+			if sErr == nil {
+				sResp, drainErr := drainStream(stream, req.Model)
+				if drainErr == nil {
+					callErr = nil
+					resp = sResp
+					latency = time.Since(started)
+				} else {
+					callErr = drainErr
+				}
+			} else {
+				callErr = sErr
+			}
+		}
+
 		if callErr != nil {
 			pe := core.AsProviderError(callErr)
 			lastErr = pe
@@ -266,6 +322,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 			if p.metrics != nil {
 				p.metrics.RecordUpstreamError(attempt.Target.Provider, string(pe.Kind))
 			}
+			p.recordFailureTelemetry(req.Metadata, attempt, pe, latency, pe.Fallbackable())
 			if !pe.Fallbackable() {
 				p.log.Debug("attempt not fallbackable, aborting", "kind", pe.Kind)
 				p.budgetRelease(scope)
@@ -274,6 +331,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 			if p.metrics != nil {
 				p.metrics.RecordFallback(string(pe.Kind))
 			}
+			fellBack = true
 			p.log.Warn("chat attempt failed, falling back",
 				"provider", attempt.Target.Provider, "model", attempt.Target.Model, "kind", pe.Kind)
 			continue
@@ -287,12 +345,12 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 		// still costs the user but never returns the leaked content.
 		if gres := p.guardrails.Outbound(ctx, req, resp); gres.Action == guardrails.ActionBlock {
 			p.log.Debug("guardrails blocked outbound", "reason", gres.Reason)
-			cost := p.record(ctx, req.Metadata, attempt, resp.Usage, false, latency, save)
+			cost := p.record(ctx, req.Metadata, attempt, resp.Usage, false, latency, save, fellBack)
 			p.budgetConfirm(scope, cost)
 			return nil, &core.ProviderError{Kind: core.ErrPolicyBlocked, Message: gres.Reason}
 		}
 
-		cost := p.record(ctx, req.Metadata, attempt, resp.Usage, false, latency, save)
+		cost := p.record(ctx, req.Metadata, attempt, resp.Usage, false, latency, save, fellBack)
 		p.cacheStore(ctx, vec, resp)
 		// Confirm budget reservation — usage is now recorded in DB.
 		p.budgetConfirm(scope, cost)
@@ -313,6 +371,7 @@ func (p *Pipeline) Chat(ctx context.Context, req *core.ChatRequest, opts Options
 	if lastErr == nil {
 		lastErr = &core.ProviderError{Kind: core.ErrInternal, Message: "pipeline: no attempts executed"}
 	}
+	p.recordFinalFailureTelemetry(req.Metadata, lastErr, fellBack)
 	p.budgetRelease(scope)
 	return nil, lastErr
 }
@@ -377,7 +436,10 @@ func (p *Pipeline) Stream(ctx context.Context, req *core.ChatRequest, opts Optio
 	slimStats, hrStats := p.applyTokenSaving(ctx, req, opts)
 	save := buildSaveState(slimStats, hrStats, opts)
 
-	required := capability.Required(req)
+	// HardRequired: only non-strippable capabilities are enforced by the
+	// dispatch guard. Strippable modalities (vision, audio) are soft-degraded
+	// by modality stripping in the attempt loop below.
+	required := capability.HardRequired(req)
 	scope := budget.Scope{TenantID: req.Metadata.TenantID, ProjectID: req.Metadata.ProjectID, APIKeyID: req.Metadata.APIKeyID}
 	attempts, err := p.planWithCooldownRetry(ctx, req.Metadata.TenantID, opts.Targets, required, opts.PlanOpts)
 	if err != nil {
@@ -445,11 +507,24 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 	required core.CapabilitySet, scope budget.Scope, release limits.ReleaseFunc) (*StreamResult, error, bool) {
 
 	var lastErr error
+	fellBack := false // tracks whether the current request triggered ≥1 fallback
 	for i, attempt := range attempts {
 		attemptReq := cloneForAttempt(req, attempt.Target.Model)
 		started := time.Now()
 		p.log.Debug("stream attempt start", "i", i, "provider", attempt.Target.Provider,
 			"model", attempt.Target.Model, "account", attempt.Account.ID)
+
+		// Soft-degrade unsupported modalities. Stripping replaces input
+		// modalities the resolved profile cannot handle with text placeholders,
+		// so the upstream receives a valid request it can process. For built-in
+		// providers this is normally a no-op (the dispatch guard already verifies
+		// capabilities), but it provides a safety net when a profile is incomplete.
+		// For custom/dynamic providers (where the guard is relaxed), stripping
+		// is the primary downgrade mechanism.
+		if capability.StripUnsupportedModalities(attemptReq, attempt.Target.Provider, attempt.Target.Model) {
+			p.log.Debug("stripped unsupported modalities",
+				"provider", attempt.Target.Provider, "model", attempt.Target.Model)
+		}
 
 		// Capture TTFT from the connector's first-chunk callback.
 		// StartedAt is set to the attempt start so connectors measure TTFT
@@ -487,23 +562,25 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 				body, _, rawErr := ds.StreamRaw(callCtx, attemptReq, attempt.Creds, streamCfg)
 				if rawErr != nil {
 
-					pe := core.AsProviderError(rawErr)
-					lastErr = pe
-					p.dispatcher.NoteFailure(ctx, attempt.Account.ID, pe)
-					if p.metrics != nil {
-						p.metrics.RecordUpstreamError(attempt.Target.Provider, string(pe.Kind))
-					}
-					if !pe.Fallbackable() {
-						release(0)
-						p.budgetRelease(scope)
-						return nil, pe, true
-					}
-					if p.metrics != nil {
-						p.metrics.RecordFallback(string(pe.Kind))
-					}
-					p.log.Warn("direct stream attempt failed, falling back",
-						"provider", attempt.Target.Provider, "model", attempt.Target.Model, "kind", pe.Kind)
-					continue
+				pe := core.AsProviderError(rawErr)
+				lastErr = pe
+				p.dispatcher.NoteFailure(ctx, attempt.Account.ID, pe)
+				if p.metrics != nil {
+					p.metrics.RecordUpstreamError(attempt.Target.Provider, string(pe.Kind))
+				}
+				p.recordFailureTelemetry(req.Metadata, attempt, pe, time.Since(started), pe.Fallbackable())
+				if !pe.Fallbackable() {
+					release(0)
+					p.budgetRelease(scope)
+					return nil, pe, true
+				}
+			if p.metrics != nil {
+				p.metrics.RecordFallback(string(pe.Kind))
+			}
+			fellBack = true
+			p.log.Warn("direct stream attempt failed, falling back",
+				"provider", attempt.Target.Provider, "model", attempt.Target.Model, "kind", pe.Kind)
+			continue
 				}
 				p.log.Debug("direct stream connected (zero-copy)", "provider", attempt.Target.Provider,
 					"model", attempt.Target.Model)
@@ -527,7 +604,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 					defer release(0)
 					usage := extractUsageFromStream(capture.Bytes())
 					totalLatency := time.Since(started)
-					cost := p.recordWithTTFT(ctx, meta, acc, usage, false, totalLatency, ttft, saveCopy)
+					cost := p.recordWithTTFT(ctx, meta, acc, usage, false, totalLatency, ttft, saveCopy, fellBack)
 					p.budgetConfirm(budgetScope, cost)
 				}
 				return &StreamResult{
@@ -550,18 +627,20 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 			if p.metrics != nil {
 				p.metrics.RecordUpstreamError(attempt.Target.Provider, string(pe.Kind))
 			}
+			p.recordFailureTelemetry(req.Metadata, attempt, pe, time.Since(started), pe.Fallbackable())
 			if !pe.Fallbackable() {
 				p.log.Debug("stream attempt not fallbackable, aborting", "kind", pe.Kind)
 				release(0)
 				p.budgetRelease(scope)
 				return nil, pe, true
 			}
-			if p.metrics != nil {
-				p.metrics.RecordFallback(string(pe.Kind))
-			}
-			p.log.Warn("stream attempt failed, falling back",
-				"provider", attempt.Target.Provider, "model", attempt.Target.Model, "kind", pe.Kind)
-			continue
+		if p.metrics != nil {
+			p.metrics.RecordFallback(string(pe.Kind))
+		}
+		fellBack = true
+		p.log.Warn("stream attempt failed, falling back",
+			"provider", attempt.Target.Provider, "model", attempt.Target.Model, "kind", pe.Kind)
+		continue
 		}
 
 		p.log.Debug("stream connected", "provider", attempt.Target.Provider,
@@ -573,7 +652,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 		out := make(chan core.StreamChunk, 16)
 		meta := req.Metadata
 		acc := attempt
-		go p.pumpStream(ctx, req, upstream, out, meta, acc, started, &ttft, save, scope, release)
+		go p.pumpStream(ctx, req, upstream, out, meta, acc, started, &ttft, save, scope, release, fellBack)
 
 		return &StreamResult{
 			Chunks:    out,
@@ -586,6 +665,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 	if lastErr == nil {
 		lastErr = &core.ProviderError{Kind: core.ErrInternal, Message: "pipeline: no attempts executed"}
 	}
+	p.recordFinalFailureTelemetry(req.Metadata, lastErr, fellBack)
 	release(0)
 	p.budgetRelease(scope)
 	return nil, lastErr, true
@@ -605,7 +685,7 @@ func (p *Pipeline) streamExec(ctx context.Context, req *core.ChatRequest, opts O
 // tail before forwarding; on a Block decision the stream is cancelled and an
 // error chunk is delivered to the client.
 func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-chan core.StreamChunk, out chan<- core.StreamChunk,
-	meta core.RequestMetadata, attempt dispatch.Attempt, started time.Time, ttft *time.Duration, save *saveState, scope budget.Scope, release limits.ReleaseFunc) {
+	meta core.RequestMetadata, attempt dispatch.Attempt, started time.Time, ttft *time.Duration, save *saveState, scope budget.Scope, release limits.ReleaseFunc, fellBack bool) {
 	defer close(out)
 	defer release(0)
 
@@ -672,10 +752,10 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 		case chunk, ok := <-in:
 			if !ok {
 				// Upstream closed — stream complete.
-				// If the client opted into a usage event (stream_options.
-				// include_usage) but the provider never sent one, synthesize an
-				// estimate so the client still receives a final usage event.
-				// Mirrors 9router's estimateUsage/addBufferToUsage behavior.
+			// If the client opted into a usage event (stream_options.
+			// include_usage) but the provider never sent one, synthesize an
+			// estimate so the client still receives a final usage event.
+			// Mirrors the estimateUsage/addBufferToUsage behavior.
 				if req.IncludeUsage && !sawUsage {
 					est := estimateStreamUsage(req, completionChars)
 					if est.TotalTokens > 0 {
@@ -689,7 +769,7 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 				// Record actual total upstream duration as latency; TTFT is
 				// stored separately in ttft_ms by recordWithTTFT.
 				totalLatency := time.Since(started)
-				cost := p.recordWithTTFT(ctx, meta, attempt, usage, false, totalLatency, *ttft, save)
+				cost := p.recordWithTTFT(ctx, meta, attempt, usage, false, totalLatency, *ttft, save, fellBack)
 				p.budgetConfirm(scope, cost)
 				return
 			}
@@ -728,7 +808,7 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 						for range in {
 						}
 						totalLatency := time.Since(started)
-						cost := p.recordWithTTFT(ctx, meta, attempt, usage, false, totalLatency, *ttft, save)
+				cost := p.recordWithTTFT(ctx, meta, attempt, usage, false, totalLatency, *ttft, save, fellBack)
 						p.budgetConfirm(scope, cost)
 						return
 					}
@@ -764,7 +844,7 @@ func (p *Pipeline) pumpStream(ctx context.Context, req *core.ChatRequest, in <-c
 			for range in {
 			}
 			totalLatency := time.Since(started)
-			cost := p.recordWithTTFT(ctx, meta, attempt, usage, false, totalLatency, *ttft, save)
+			cost := p.recordWithTTFT(ctx, meta, attempt, usage, false, totalLatency, *ttft, save, fellBack)
 			p.budgetConfirm(scope, cost)
 			return
 		}
@@ -997,6 +1077,7 @@ func (p *Pipeline) applyTokenSaving(ctx context.Context, req *core.ChatRequest, 
 type saveState struct {
 	slimSnap     *meter.SlimSnapshot
 	headroomSnap *meter.HeadroomSnapshot
+	slim         bool
 	caveman      bool
 	terse        bool
 	ponytail     bool
@@ -1029,6 +1110,7 @@ func splitRuleNames(s string) []string {
 // flag mirrors opts.Ponytail.Enabled.
 func buildSaveState(stats *slimmer.Stats, hr *headroom.Stats, opts Options) *saveState {
 	save := &saveState{
+		slim:      opts.Slimmer.Enabled,
 		caveman:  opts.Caveman.Enabled,
 		terse:    opts.Terse.Enabled,
 		ponytail: opts.Ponytail.Enabled,
@@ -1069,13 +1151,100 @@ func buildSaveState(stats *slimmer.Stats, hr *headroom.Stats, opts Options) *sav
 
 // record meters a completed attempt; failures to record are logged, not fatal.
 func (p *Pipeline) record(ctx context.Context, meta core.RequestMetadata, attempt dispatch.Attempt,
-	usage core.Usage, cacheHit bool, latency time.Duration, save *saveState) int64 {
-	return p.recordWithTTFT(ctx, meta, attempt, usage, cacheHit, latency, 0, save)
+	usage core.Usage, cacheHit bool, latency time.Duration, save *saveState, fellBack bool) int64 {
+	return p.recordWithTTFT(ctx, meta, attempt, usage, cacheHit, latency, 0, save, fellBack)
+}
+
+// recordSuccessTelemetry emits a best-effort health telemetry event for a
+// successful upstream attempt. fellBack reports whether the request triggered
+// at least one fallback before succeeding, so the chain-impact view computes
+// an accurate fallback rate per request (not per attempt).
+func (p *Pipeline) recordSuccessTelemetry(meta core.RequestMetadata, attempt dispatch.Attempt,
+	usage core.Usage, latency, ttft time.Duration, fellBack bool) {
+	if p.telemetry == nil {
+		return
+	}
+	ev := health.ProviderTelemetryEvent{
+		Timestamp:         time.Now(),
+		Provider:          attempt.Target.Provider,
+		ProviderAccountID: attempt.Account.ID,
+		Model:             attempt.Target.Model,
+		Capability:        capabilityOf(attempt.Target.Provider, attempt.Target.Model),
+		Status:            "success",
+		LatencyMs:         int(latency.Milliseconds()),
+		TTFTMs:            int(ttft.Milliseconds()),
+		InputTokens:       usage.PromptTokens,
+		OutputTokens:      usage.CompletionTokens,
+		ChainID:           meta.ChainID,
+		FallbackTriggered: fellBack,
+	}
+	p.telemetry.Record(ev)
+}
+
+// recordFailureTelemetry emits a best-effort health telemetry event for a
+// failed upstream attempt. fallbackable reports whether the dispatcher
+// advanced to the next candidate (i.e. fallback was triggered).
+func (p *Pipeline) recordFailureTelemetry(meta core.RequestMetadata, attempt dispatch.Attempt,
+	pe *core.ProviderError, latency time.Duration, fallbackable bool) {
+	if p.telemetry == nil || pe == nil {
+		return
+	}
+	ev := health.ProviderTelemetryEvent{
+		Timestamp:         time.Now(),
+		Provider:          attempt.Target.Provider,
+		ProviderAccountID: attempt.Account.ID,
+		Model:             attempt.Target.Model,
+		Capability:        capabilityOf(attempt.Target.Provider, attempt.Target.Model),
+		Status:            "failed",
+		HTTPStatus:        pe.StatusCode,
+		LatencyMs:         int(latency.Milliseconds()),
+		ErrorType:         health.ClassifyError(pe),
+		ErrorMessage:      pe.Message,
+		ChainID:           meta.ChainID,
+		FallbackTriggered: fallbackable,
+	}
+	p.telemetry.Record(ev)
+}
+
+// recordFinalFailureTelemetry emits a best-effort health telemetry event when
+// all attempts in a chain have failed, so the chain-impact view can count
+// final failures (requests lost after every fallback).
+func (p *Pipeline) recordFinalFailureTelemetry(meta core.RequestMetadata, lastErr error, fellBack bool) {
+	if p.telemetry == nil || lastErr == nil {
+		return
+	}
+	pe, _ := lastErr.(*core.ProviderError)
+	if pe == nil {
+		pe = core.AsProviderError(lastErr)
+	}
+	ev := health.ProviderTelemetryEvent{
+		Timestamp:         time.Now(),
+		Provider:          pe.Provider,
+		Model:             pe.Model,
+		Capability:        capabilityOf(pe.Provider, pe.Model),
+		Status:            "failed",
+		HTTPStatus:        pe.StatusCode,
+		ErrorType:         health.ClassifyError(pe),
+		ErrorMessage:      pe.Message,
+		ChainID:           meta.ChainID,
+		FinalFailure:      true,
+		FallbackTriggered: fellBack,
+	}
+	p.telemetry.Record(ev)
+}
+
+// capabilityOf derives the capability label for a target. KeiRouter routes by
+// service kind, but telemetry keys on a stable capability string; default to
+// chat_completions for LLM models.
+func capabilityOf(provider, model string) string {
+	_ = provider
+	_ = model
+	return "chat_completions"
 }
 
 // recordWithTTFT is like record but also records time-to-first-token.
 func (p *Pipeline) recordWithTTFT(ctx context.Context, meta core.RequestMetadata, attempt dispatch.Attempt,
-	usage core.Usage, cacheHit bool, latency, ttft time.Duration, save *saveState) int64 {
+	usage core.Usage, cacheHit bool, latency, ttft time.Duration, save *saveState, fellBack bool) int64 {
 	if p.meter == nil {
 		return 0
 	}
@@ -1094,6 +1263,7 @@ func (p *Pipeline) recordWithTTFT(ctx context.Context, meta core.RequestMetadata
 	}
 	if save != nil {
 		ev.SlimStats = save.slimSnap
+		ev.SlimActive = save.slim
 		ev.CavemanActive = save.caveman
 		ev.TerseActive = save.terse
 		ev.HeadroomStats = save.headroomSnap
@@ -1102,6 +1272,10 @@ func (p *Pipeline) recordWithTTFT(ctx context.Context, meta core.RequestMetadata
 	cost, err := p.meter.Record(ctx, ev)
 	if err != nil {
 		p.log.Error("failed to record usage", "err", err)
+	}
+	// Best-effort provider health telemetry (non-blocking, never fails).
+	if !cacheHit {
+		p.recordSuccessTelemetry(meta, attempt, usage, latency, ttft, fellBack)
 	}
 
 	if p.metrics != nil {
@@ -1176,6 +1350,92 @@ func cloneForAttempt(req *core.ChatRequest, model string) *core.ChatRequest {
 	clone := *req
 	clone.Model = model
 	return &clone
+}
+
+// isStreamRequiredError reports whether the error indicates the upstream
+// provider rejected a non-streaming request with "Stream must be set to true".
+// Some providers only accept streaming requests and return HTTP 400 when
+// stream=false. Since ErrBadRequest is not fallbackable, the pipeline must
+// detect this specific case and retry with streaming.
+func isStreamRequiredError(err error) bool {
+	if err == nil {
+		return false
+	}
+	pe := core.AsProviderError(err)
+	if pe == nil {
+		return false
+	}
+	// Accept any 4xx (some providers return 400, others 422).
+	if pe.StatusCode < 400 || pe.StatusCode >= 500 {
+		return false
+	}
+	msg := strings.ToLower(pe.Message)
+	return strings.Contains(msg, "stream must be set to true") ||
+		strings.Contains(msg, "streaming is required") ||
+		strings.Contains(msg, "stream parameter is required") ||
+		strings.Contains(msg, `"stream" must be true`)
+}
+
+// drainStream consumes a stream channel and folds the chunks into a single
+// ChatResponse. Used by the pipeline when a non-streaming Chat() call failed
+// with a "Stream must be set to true" error and the pipeline retries with
+// streaming internally.
+func drainStream(stream <-chan core.StreamChunk, model string) (*core.ChatResponse, error) {
+	msg := core.Message{Role: core.RoleAssistant}
+	var text, thinking string
+	toolCalls := map[string]*core.ToolCall{}
+	var toolOrder []string
+	finish := core.FinishStop
+	var usage core.Usage
+
+	for ch := range stream {
+		switch ch.Type {
+		case core.ChunkText:
+			text += ch.Delta
+		case core.ChunkThinking:
+			thinking += ch.Delta
+		case core.ChunkToolCall:
+			if ch.ToolCall != nil {
+				existing, ok := toolCalls[ch.ToolCall.ID]
+				if !ok {
+					tc := *ch.ToolCall
+					toolCalls[ch.ToolCall.ID] = &tc
+					toolOrder = append(toolOrder, ch.ToolCall.ID)
+				} else if len(ch.ToolCall.Arguments) > 0 {
+					existing.Arguments = append(existing.Arguments, ch.ToolCall.Arguments...)
+				}
+				finish = core.FinishToolCalls
+			}
+		case core.ChunkFinish:
+			if ch.FinishReason != "" {
+				finish = ch.FinishReason
+			}
+		case core.ChunkUsage:
+			if ch.Usage != nil {
+				usage = *ch.Usage
+			}
+		case core.ChunkError:
+			if ch.Err != nil {
+				return nil, ch.Err
+			}
+		}
+	}
+
+	if thinking != "" {
+		msg.Content = append(msg.Content, core.ContentPart{Type: core.PartThinking, Text: thinking})
+	}
+	if text != "" {
+		msg.Content = append(msg.Content, core.ContentPart{Type: core.PartText, Text: text})
+	}
+	for _, id := range toolOrder {
+		tc := toolCalls[id]
+		if len(tc.Arguments) == 0 {
+			tc.Arguments = json.RawMessage("{}")
+		}
+		msg.Content = append(msg.Content, core.ContentPart{Type: core.PartToolCall, ToolCall: tc})
+	}
+
+	return &core.ChatResponse{Model: model, Message: msg, FinishReason: finish, Usage: usage}, nil
 }
 
 // ---- direct-body usage capture -----------------------------------------------

@@ -771,8 +771,24 @@ func (s *Server) handlePortalKeyUsage(w http.ResponseWriter, r *http.Request) {
 		s.log.Error("key usage: summarize failed", "err", err)
 	}
 
-	// Daily usage series for the portal chart (last 30 days).
-	daily, _ := s.usage.DailyByKey(ctx, key.ID, now.AddDate(0, 0, -30))
+	// days lookback for charts, model breakdown, and recent requests.
+	// Default is 30 days. Valid values: 7, 14, 30, 90.
+	days := 30
+	if d := r.URL.Query().Get("days"); d != "" {
+		switch d {
+		case "7":
+			days = 7
+		case "14":
+			days = 14
+		case "30":
+			days = 30
+		case "90":
+			days = 90
+		}
+	}
+
+	// Daily usage series for the portal chart.
+	daily, _ := s.usage.DailyByKey(ctx, key.ID, now.AddDate(0, 0, -days))
 	var dailyOut []map[string]any
 	for _, d := range daily {
 		dailyOut = append(dailyOut, map[string]any{
@@ -784,8 +800,8 @@ func (s *Server) handlePortalKeyUsage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Per-model breakdown for this key (last 30 days).
-	models, _ := s.usage.ByModelByKey(ctx, key.ID, now.AddDate(0, 0, -30))
+	// Per-model breakdown for this key.
+	models, _ := s.usage.ByModelByKey(ctx, key.ID, now.AddDate(0, 0, -days))
 	var modelOut []map[string]any
 	for _, m := range models {
 		modelOut = append(modelOut, map[string]any{
@@ -796,6 +812,53 @@ func (s *Server) handlePortalKeyUsage(w http.ResponseWriter, r *http.Request) {
 			"completion_tokens": m.CompletionTokens,
 			"cost_usd":          float64(m.CostMicros) / 1_000_000,
 		})
+	}
+
+	// Recent per-request records with token in/out and optimization flags.
+	recent, _ := s.usage.RecentByKey(ctx, key.ID, now.AddDate(0, 0, -days), 200)
+	recentOut := make([]map[string]any, 0, len(recent))
+	for _, rec := range recent {
+		entry := map[string]any{
+			"id":                rec.ID,
+			"provider":          rec.Provider,
+			"model":             rec.Model,
+			"prompt_tokens":     rec.PromptTokens,
+			"completion_tokens": rec.CompletionTokens,
+			"cost_usd":          float64(rec.CostMicros) / 1_000_000,
+			"cache_hit":         rec.CacheHit,
+			"latency_ms":        rec.LatencyMS,
+			"created_at":        rec.CreatedAt,
+			"optimizations":     []string{},
+		}
+		var optNames []string
+		if rec.SlimActive || rec.SlimBytesSaved >0 {
+			if rec.SlimBytesSaved >0 {
+				entry["slim_bytes_saved"] = rec.SlimBytesSaved
+				entry["slim_tokens_saved"] = rec.SlimTokensSaved
+			}
+			if rec.SlimRules != "" {
+				entry["slim_rules"] = rec.SlimRules
+			}
+			optNames = append(optNames, "RTK")
+		}
+		if rec.CavemanActive {
+			optNames = append(optNames, "Caveman")
+		}
+		if rec.TerseActive {
+			optNames = append(optNames, "Terse")
+		}
+		if rec.HeadroomActive {
+			entry["headroom_tokens_saved"] = rec.HeadroomTokensSaved
+			optNames = append(optNames, "Headroom")
+		}
+		if rec.PonytailActive {
+			optNames = append(optNames, "Ponytail")
+		}
+		entry["optimizations"] = optNames
+		if rec.TTFTMS > 0 {
+			entry["ttft_ms"] = rec.TTFTMS
+		}
+		recentOut = append(recentOut, entry)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -811,6 +874,8 @@ func (s *Server) handlePortalKeyUsage(w http.ResponseWriter, r *http.Request) {
 		},
 		"daily":  dailyOut,
 		"models": modelOut,
+		"recent": recentOut,
+		"days":   days,
 	})
 }
 

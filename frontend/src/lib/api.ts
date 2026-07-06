@@ -922,6 +922,26 @@ export interface KeyUsageData {
     completion_tokens: number;
     cost_usd: number;
   }[];
+  recent?: PortalRecentRequest[];
+  days?: number;
+}
+
+export interface PortalRecentRequest {
+  id: string;
+  provider: string;
+  model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cost_usd: number;
+  cache_hit: boolean;
+  latency_ms: number;
+  created_at: string;
+  optimizations: string[];
+  ttft_ms?: number;
+  slim_bytes_saved?: number;
+  slim_tokens_saved?: number;
+  slim_rules?: string;
+  headroom_tokens_saved?: number;
 }
 
 /**
@@ -938,8 +958,9 @@ export async function fetchPortalBranding(): Promise<BrandingSettings> {
 /**
  * Fetch usage stats for an API Key, authenticated via the key itself (public portal)
  */
-export async function fetchKeyUsage(key: string): Promise<KeyUsageData> {
-  const resp = await fetch("/v1/keys/me/usage", {
+export async function fetchKeyUsage(key: string, days?: number): Promise<KeyUsageData> {
+  const qs = days ? `?days=${days}` : "";
+  const resp = await fetch(`/v1/keys/me/usage${qs}`, {
     headers: { Authorization: `Bearer ${key}` },
   });
   if (!resp.ok) {
@@ -952,8 +973,9 @@ export async function fetchKeyUsage(key: string): Promise<KeyUsageData> {
 /**
  * Fetch usage stats for an API Key using its database ID (public portal link sharing)
  */
-export async function fetchKeyUsageById(id: string): Promise<KeyUsageData> {
-  const resp = await fetch(`/v1/portal/keys/${id}/usage`);
+export async function fetchKeyUsageById(id: string, days?: number): Promise<KeyUsageData> {
+  const qs = days ? `?days=${days}` : "";
+  const resp = await fetch(`/v1/portal/keys/${id}/usage${qs}`);
   if (!resp.ok) {
     const data = await resp.json().catch(() => ({}));
     throw new Error(data.error || "Invalid key ID or server error");
@@ -989,12 +1011,18 @@ export const api = {
   // Custom provider instances (dynamic OpenAI-/Anthropic-compatible providers).
   listCustomProviders: () =>
     request<{ providers: CustomProvider[] }>("GET", "/custom-providers"),
-  createCustomProvider: (input: { display_name: string; dialect: string; base_url: string }) =>
+  createCustomProvider: (input: { display_name: string; dialect: string; base_url: string; alias?: string }) =>
     request<CustomProvider>("POST", "/custom-providers", input),
   updateCustomProvider: (id: string, patch: { display_name?: string; alias?: string; base_url?: string }) =>
     request<CustomProvider>("PATCH", `/custom-providers/${id}`, patch),
   deleteCustomProvider: (id: string) =>
     request<{ id: string; deleted: boolean }>("DELETE", `/custom-providers/${id}`),
+
+  importModels: (id: string) =>
+    request<{ provider_id: string; imported: number; skipped: number; total: number }>(
+      "POST",
+      `/providers/${id}/import-models`,
+    ),
 
   // Custom models, attachable to any provider id (custom or built-in).
   listCustomModels: (providerId: string) =>
@@ -1356,7 +1384,207 @@ export const api = {
       "/guardrails/tenant-flags",
       flags,
     ),
+
+  // ---- Actionable provider health dashboard ----
+
+  healthOverview: (range = "1h", status?: string) =>
+    request<HealthOverview>(
+      "GET",
+      `/health/overview?range=${encodeURIComponent(range)}${status ? `&status=${encodeURIComponent(status)}` : ""}`,
+    ),
+
+  healthProviderDetail: (provider: string, range = "24h") =>
+    request<HealthProviderDetail>(
+      "GET",
+      `/health/providers/${encodeURIComponent(provider)}?range=${encodeURIComponent(range)}`,
+    ),
+
+  healthModels: (range = "1h", status?: string) =>
+    request<{ models: HealthModelRow[] }>(
+      "GET",
+      `/health/models?range=${encodeURIComponent(range)}${status ? `&status=${encodeURIComponent(status)}` : ""}`,
+    ),
+
+  healthChains: (range = "1h") =>
+    request<{ chains: HealthChainRow[] }>(
+      "GET",
+      `/health/chains?range=${encodeURIComponent(range)}`,
+    ),
+
+  healthChainDetail: (id: string) =>
+    request<HealthChainDetail>("GET", `/health/chains/${encodeURIComponent(id)}`),
+
+  healthProbeHistory: (params: { provider?: string; range?: string; page?: number; limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.provider) qs.set("provider", params.provider);
+    qs.set("range", params.range ?? "24h");
+    qs.set("page", String(params.page ?? 1));
+    qs.set("limit", String(params.limit ?? 50));
+    return request<{ items: HealthProbeRow[]; pagination: { page: number; limit: number; total: number } }>(
+      "GET",
+      `/health/probes?${qs.toString()}`,
+    );
+  },
+
+  runHealthProbe: (input: { provider: string; provider_account_id?: string; model: string; capability?: string }) =>
+    request<HealthProbeResult>("POST", "/health/probes/run", input),
 };
+
+// ---- Provider health types ----
+
+export type HealthStatus = "healthy" | "degraded" | "unhealthy" | "unknown" | "disabled";
+
+export interface HealthSummary {
+  healthy: number;
+  degraded: number;
+  unhealthy: number;
+  unknown: number;
+  disabled: number;
+  fallbacks: number;
+  avg_p95_latency_ms: number;
+}
+
+export interface HealthProviderRow {
+  provider: string;
+  status: HealthStatus;
+  score: number;
+  accounts: number;
+  models_monitored: number;
+  success_rate: number;
+  error_rate: number;
+  latency_p95_ms: number;
+  ttft_p95_ms: number;
+  fallback_count: number;
+  last_probe_at?: string;
+  main_issue?: string;
+  recommendation?: string;
+}
+
+export interface HealthOverview {
+  summary: HealthSummary;
+  providers: HealthProviderRow[];
+}
+
+export interface HealthSnapshot {
+  bucket_start: string;
+  request_count: number;
+  success_count: number;
+  failure_count: number;
+  fallback_count: number;
+  latency_p50_ms?: number;
+  latency_p95_ms?: number;
+  latency_p99_ms?: number;
+  ttft_p50_ms?: number;
+  ttft_p95_ms?: number;
+  ttft_p99_ms?: number;
+  rate_limited_count: number;
+  auth_error_count: number;
+  quota_exceeded_count: number;
+  timeout_count: number;
+  provider_5xx_count: number;
+  bad_request_count: number;
+  network_error_count: number;
+  health_score: number;
+  health_status: HealthStatus;
+}
+
+export interface HealthProviderDetail {
+  provider: string;
+  status: HealthStatus;
+  score: number;
+  main_issue: string;
+  recommendation: string;
+  metrics: {
+    requests: number;
+    success_rate: number;
+    error_rate: number;
+    latency_p95_ms: number;
+    ttft_p95_ms: number;
+    fallback_count: number;
+  };
+  error_breakdown: Record<string, number>;
+  models: HealthModelRow[];
+  snapshots: HealthSnapshot[];
+}
+
+export interface HealthModelRow {
+  provider?: string;
+  provider_account_id?: string;
+  model: string;
+  capability?: string;
+  status: HealthStatus;
+  score: number;
+  success_rate: number;
+  error_rate: number;
+  latency_p95_ms?: number;
+  ttft_p95_ms?: number;
+  fallback_count: number;
+  main_issue?: string;
+  last_updated_at?: string;
+}
+
+export interface HealthChainRow {
+  chain_id: string;
+  name: string;
+  status: HealthStatus;
+  affected_provider: string;
+  affected_model: string;
+  main_issue?: string;
+  step_count?: number;
+  requests: number;
+  fallback_rate: number;
+  fallback_count: number;
+  final_failure_count: number;
+  recommendation: string;
+}
+
+export interface HealthChainStep {
+  position: number;
+  provider: string;
+  model: string;
+  status: HealthStatus;
+  score: number;
+  main_issue: string;
+}
+
+export interface HealthChainDetail {
+  chain_id: string;
+  name: string;
+  strategy: string;
+  steps: HealthChainStep[];
+  requests?: number;
+  fallback_rate?: number;
+  fallback_count?: number;
+  final_failure_count?: number;
+  fallback_provider?: string;
+  fallback_model?: string;
+}
+
+export interface HealthProbeRow {
+  time: string;
+  provider: string;
+  provider_account_id: string;
+  model: string;
+  capability: string;
+  status: string;
+  http_status?: number;
+  latency_ms?: number;
+  ttft_ms?: number;
+  error_type?: string;
+  error_message?: string;
+  triggered_by: string;
+}
+
+export interface HealthProbeResult {
+  status: string;
+  provider: string;
+  model: string;
+  http_status?: number;
+  latency_ms?: number;
+  ttft_ms?: number;
+  error_type?: string;
+  message: string;
+}
 
 export interface GuardrailTemplate {
   id: string;

@@ -1,7 +1,7 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Plus, Copy, Check, ToggleLeft, ToggleRight, ArrowLeft, ArrowRight, Trash2, Wallet, Wrench, DollarSign, Gauge, Link2, Activity, Ban, ListFilter } from "lucide-react";
+import { KeyRound, Plus, Copy, Check, ToggleLeft, ToggleRight, ArrowLeft, ArrowRight, Trash2, Wallet, Wrench, DollarSign, Gauge, Link2, Activity, Ban, ListFilter, Search, X, ArrowUpDown } from "lucide-react";
 import { api, type APIKey, type CreatedKey, type Plan } from "../lib/api";
 import { microsToUSD, formatTokens } from "../lib/format";
 import { PageHeader } from "../components/Layout";
@@ -220,6 +220,41 @@ export function KeysPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortKey, setSortKey] = useState<"created_desc" | "created_asc" | "name_asc" | "name_desc">("created_desc");
+
+  const visibleKeys = useMemo(() => {
+    const all = keys.data?.keys ?? [];
+    return all
+      .filter((k) => {
+        if (statusFilter === "active") return !k.disabled;
+        if (statusFilter === "inactive") return k.disabled;
+        return true;
+      })
+      .filter((k) => {
+        if (!searchQuery.trim()) return true;
+        const q = searchQuery.toLowerCase();
+        return (
+          k.name.toLowerCase().includes(q) ||
+          k.id.toLowerCase().includes(q) ||
+          k.display.toLowerCase().includes(q) ||
+          (k.plan_name ?? "").toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        switch (sortKey) {
+          case "name_asc":
+            return a.name.localeCompare(b.name);
+          case "name_desc":
+            return b.name.localeCompare(a.name);
+          case "created_asc":
+            return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+          case "created_desc":
+          default:
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        }
+      });
+  }, [keys.data, statusFilter, searchQuery, sortKey]);
 
   // Step 1 — name
   const [name, setName] = useState("");
@@ -318,12 +353,12 @@ export function KeysPage() {
   }, []);
 
   const toggleSelectAll = useCallback(() => {
-    if (!keys.data?.keys) return;
+    if (!visibleKeys.length) return;
     setSelectedIds((prev) => {
-      if (prev.size === keys.data!.keys!.length) return new Set();
-      return new Set(keys.data!.keys!.map((k) => k.id));
+      if (prev.size === visibleKeys.length && visibleKeys.every((k) => prev.has(k.id))) return new Set();
+      return new Set(visibleKeys.map((k) => k.id));
     });
-  }, [keys.data]);
+  }, [visibleKeys]);
 
   const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
 
@@ -477,20 +512,52 @@ export function KeysPage() {
           <KeyEmptyState onCreate={openModal} />
         ) : (
           <div>
-            {keys.data.keys.length > 0 && (
-              <div className="flex items-center justify-between gap-4 border-b border-[var(--border)] bg-[var(--bg-subtle)] px-5 py-3 sm:px-6">
-                <label className="flex cursor-pointer items-center gap-3">
+            <div className="flex flex-col gap-3 border-b border-[var(--border)] bg-[var(--bg-subtle)] px-5 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+              <label className="flex cursor-pointer items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={visibleKeys.length >0 && visibleKeys.every((k) => selectedIds.has(k.id))}
+                  onChange={toggleSelectAll}
+                  className="h-4 w-4 rounded border-[var(--border)] accent-[var(--color-accent)]"
+                />
+                <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">
+                  Select all
+                </span>
+              </label>
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="relative max-w-xs flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
                   <input
-                    type="checkbox"
-                    checked={selectedIds.size > 0 && selectedIds.size === keys.data.keys.length}
-                    onChange={toggleSelectAll}
-                    className="h-4 w-4 rounded border-[var(--border)] accent-[var(--color-accent)]"
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search keys…"
+                    className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] py-1.5 pl-9 pr-9 text-sm placeholder:text-[var(--text-muted)] focus:border-accent-400 focus:outline-none focus:ring-2 focus:ring-accent-400/40"
                   />
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">
-                    Select all
-                  </span>
-                </label>
-                <div className="flex items-center gap-2 text-[11px] font-medium text-[var(--text-muted)]">
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery("")}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--text-muted)] hover:text-[var(--text)]"
+                      aria-label="Clear search"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 text-[11px] font-medium text-[var(--text-muted)]">
+                  <ArrowUpDown className="h-3.5 w-3.5" />
+                  <select
+                    className="bg-transparent font-semibold text-[var(--text)] outline-none cursor-pointer"
+                    value={sortKey}
+                    onChange={(e) => setSortKey(e.target.value as any)}
+                  >
+                    <option value="created_desc">Newest first</option>
+                    <option value="created_asc">Oldest first</option>
+                    <option value="name_asc">Name A–Z</option>
+                    <option value="name_desc">Name Z–A</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-1.5 text-[11px] font-medium text-[var(--text-muted)]">
                   <span>Filter:</span>
                   <select
                     className="bg-transparent font-semibold text-[var(--text)] outline-none cursor-pointer"
@@ -503,27 +570,27 @@ export function KeysPage() {
                   </select>
                 </div>
               </div>
-            )}
-            <div className="divide-y divide-[var(--border)]">
-              {keys.data.keys
-                .filter(k => {
-                  if (statusFilter === "active") return !k.disabled;
-                  if (statusFilter === "inactive") return k.disabled;
-                  return true;
-                })
-                .map((k) => (
-                <KeyRow
-                  key={k.id}
-                  apiKey={k}
-                  selected={selectedIds.has(k.id)}
-                  onSelect={() => toggleSelect(k.id)}
-                  onToggle={() => toggleDisabled.mutate({ id: k.id, disabled: !k.disabled })}
-                  onConfigure={() => navigate(`/keys/${k.id}`)}
-                  onRevoke={() => remove.mutate(k.id)}
-                  togglePending={toggleDisabled.isPending}
-                />
-              ))}
             </div>
+            {visibleKeys.length ===0 ? (
+              <div className="px-6 py-10 text-center text-sm text-[var(--text-muted)]">
+                No keys match your search or filters.
+              </div>
+            ) : (
+              <div className="divide-y divide-[var(--border)]">
+                {visibleKeys.map((k) => (
+                  <KeyRow
+                    key={k.id}
+                    apiKey={k}
+                    selected={selectedIds.has(k.id)}
+                    onSelect={() => toggleSelect(k.id)}
+                    onToggle={() => toggleDisabled.mutate({ id: k.id, disabled: !k.disabled })}
+                    onConfigure={() => navigate(`/keys/${k.id}`)}
+                    onRevoke={() => remove.mutate(k.id)}
+                    togglePending={toggleDisabled.isPending}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         )}
       </Card>

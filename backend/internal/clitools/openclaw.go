@@ -7,8 +7,9 @@ import (
 // OpenClawTool auto-configures OpenClaw (~/.openclaw/openclaw.json).
 type OpenClawTool struct{}
 
-func (t *OpenClawTool) ID() string   { return "openclaw" }
-func (t *OpenClawTool) Name() string { return "OpenClaw" }
+func (t *OpenClawTool) ID() string      { return "openclaw" }
+func (t *OpenClawTool) Name() string    { return "OpenClaw" }
+func (t *OpenClawTool) Command() string { return "openclaw" }
 
 func (t *OpenClawTool) configPath(homeDir string) string {
 	return expandHome(homeDir, "~/.openclaw/openclaw.json")

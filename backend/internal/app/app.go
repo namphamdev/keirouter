@@ -32,6 +32,7 @@ import (
 	"github.com/mydisha/keirouter/backend/internal/guardrails/pii"
 	"github.com/mydisha/keirouter/backend/internal/guardrails/topics"
 	"github.com/mydisha/keirouter/backend/internal/guardrails/toxicity"
+	"github.com/mydisha/keirouter/backend/internal/health"
 	"github.com/mydisha/keirouter/backend/internal/healthcheck"
 	"github.com/mydisha/keirouter/backend/internal/httputil"
 	"github.com/mydisha/keirouter/backend/internal/identity"
@@ -62,6 +63,8 @@ type App struct {
 	guardrailRetention *guardrails.RetentionSweeper
 	meter              *meter.Meter
 	healthChecker      *healthcheck.Checker
+	providerHealth     *health.Service
+	probeRunner        *health.ProbeRunner
 
 	// bg tracks long-lived background workers that touch the DB (oauth
 	// keepalive, health checker, cooldown sweeper) so shutdown can wait for
@@ -299,6 +302,19 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		CleanupInterval: cfg.Limits.CleanupInterval,
 	})
 
+	// Actionable provider health dashboard: real-traffic telemetry aggregation
+	// + synthetic probe runner. Best-effort, never blocks the request path.
+	healthSvc := health.New(health.Config{
+		Enabled:              cfg.ProviderHealth.Enabled,
+		QueueSize:            cfg.ProviderHealth.QueueSize,
+		CurrentFlushInterval: cfg.ProviderHealth.CurrentFlushInterval,
+		SnapshotInterval:     cfg.ProviderHealth.SnapshotInterval,
+		RollingWindow:        cfg.ProviderHealth.RollingWindow,
+		LatencyThresholds:    cfg.ProviderHealth.LatencyThresholds,
+	}, log, db.ProviderHealth())
+	probeRunner := health.NewProbeRunner(log, db.ProviderHealth(), db.Accounts(), connRegistry, v,
+		cfg.ProviderHealth.LatencyThresholds, cfg.ProviderHealth.ProbeTimeout)
+
 	pipe := pipeline.New(pipeline.Deps{
 		Dispatcher:         disp,
 		Meter:              mtr,
@@ -313,6 +329,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		RequestTimeout:     cfg.Server.RequestTimeout,
 		StreamStallTimeout: cfg.Server.StreamStallTimeout,
 		TimeoutReader:      timeoutNotifier,
+		Telemetry:          healthSvc,
 	})
 
 	// Resolve frontend dist directory. Check common install locations, then cwd.
@@ -379,6 +396,8 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 		GuardrailTenantFlags: guardrailTenantPolicy,
 		Health:               db.Health(),
 		HealthChecker:        healthChecker,
+		ProviderHealth:       healthSvc,
+		ProbeRunner:          probeRunner,
 	})
 
 	srv := &http.Server{
@@ -393,7 +412,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, version str
 	// usable without a manual "connect" step in the dashboard.
 	seedFreeAccounts(ctx, db.Accounts(), log)
 
-	return &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker}, nil
+	return &App{cfg: cfg, log: log, db: db, accounts: db.Accounts(), server: srv, keepAlive: keepAlive, guardrailAudit: guardrailAudit, guardrailRetention: guardrailRetention, meter: mtr, healthChecker: healthChecker, providerHealth: healthSvc, probeRunner: probeRunner}, nil
 }
 
 // seedFreeAccounts auto-creates a default account for providers that are free
@@ -473,6 +492,11 @@ func (a *App) Run(ctx context.Context) error {
 			a.healthChecker.Run(ctx, store.DefaultTenantID)
 		}()
 	}
+	// Provider health telemetry aggregator (best-effort, non-blocking).
+	// It manages its own goroutine; Close is called during shutdown to flush.
+	if a.providerHealth != nil {
+		a.providerHealth.Start(ctx)
+	}
 
 	// Background cooldown sweeper: periodically clears expired cooldowns so
 	// accounts recover automatically without a restart.
@@ -525,6 +549,9 @@ func (a *App) Run(ctx context.Context) error {
 		}
 		if a.meter != nil {
 			a.meter.Close(a.cfg.Meter.ShutdownFlushTimeout)
+		}
+		if a.providerHealth != nil {
+			a.providerHealth.Close(5 * time.Second)
 		}
 		return a.db.Close()
 	case err := <-errCh:

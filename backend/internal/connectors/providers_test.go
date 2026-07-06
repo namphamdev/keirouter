@@ -547,12 +547,25 @@ func TestAntigravity_Dialect(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestXiaomiMiMo_Chat(t *testing.T) {
+	// xiaomi-mimo requires streaming; the Chat method drains the stream
+	// internally, so the mock must return SSE format.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/chat/completions", r.URL.Path)
 		require.Equal(t, "Bearer test-api-key", r.Header.Get("Authorization"))
 
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, openaiResponse("mimo-v2.5-pro", "Hello from MiMo V2.5 Pro"))
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		require.Equal(t, true, body["stream"], "xiaomi-mimo must send stream:true")
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flush, _ := w.(http.Flusher)
+		fmt.Fprintf(w, "%s\n\n", openaiStreamChunk("Hello from MiMo V2.5 Pro"))
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\n")
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		if flush != nil {
+			flush.Flush()
+		}
 	}))
 	defer srv.Close()
 
@@ -584,13 +597,23 @@ func TestXiaomiMiMo_Chat_MultipleModels(t *testing.T) {
 
 	for _, model := range models {
 		t.Run(model.id, func(t *testing.T) {
+			// xiaomi-mimo requires streaming; the Chat method drains the stream
+			// internally, so the mock must return SSE format.
+			expectedText := "ok from " + model.display
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body map[string]any
 				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 				require.Equal(t, model.id, body["model"])
+				require.Equal(t, true, body["stream"], "xiaomi-mimo must send stream:true")
 
-				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprint(w, openaiResponse(model.id, "ok from "+model.display))
+				w.Header().Set("Content-Type", "text/event-stream")
+				flush, _ := w.(http.Flusher)
+				fmt.Fprintf(w, "%s\n\n", openaiStreamChunk(expectedText))
+				fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+				fmt.Fprintf(w, "data: [DONE]\n\n")
+				if flush != nil {
+					flush.Flush()
+				}
 			}))
 			defer srv.Close()
 
@@ -604,7 +627,7 @@ func TestXiaomiMiMo_Chat_MultipleModels(t *testing.T) {
 			}
 			resp, err := c.Chat(context.Background(), req, core.Credentials{APIKey: "test-key"})
 			require.NoError(t, err)
-			require.Equal(t, "ok from "+model.display, resp.Message.TextContent())
+			require.Equal(t, expectedText, resp.Message.TextContent())
 		})
 	}
 }
@@ -766,12 +789,24 @@ func TestXiaomiMiMo_Dialect(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestXiaomiTokenPlan_Chat(t *testing.T) {
+	// xiaomi-tokenplan requires streaming; the Chat method drains the stream
+	// internally, so the mock must return SSE format.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/chat/completions", r.URL.Path)
 		require.Equal(t, "Bearer tp-test-key", r.Header.Get("Authorization"))
 
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, openaiResponse("mimo-v2.5-pro", "Hello from Token Plan"))
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		require.Equal(t, true, body["stream"], "xiaomi-tokenplan must send stream:true")
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flush, _ := w.(http.Flusher)
+		fmt.Fprintf(w, "%s\n\n", openaiStreamChunk("Hello from Token Plan"))
+		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		if flush != nil {
+			flush.Flush()
+		}
 	}))
 	defer srv.Close()
 

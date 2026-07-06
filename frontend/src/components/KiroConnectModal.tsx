@@ -8,7 +8,7 @@ import { useToast } from "./Toast";
 type Method = "builder-id" | "idc" | "import" | "api-key";
 
 
-// KiroConnectModal mirrors 9router's "Connect Kiro" flow: pick an auth method,
+// KiroConnectModal implements the "Connect Kiro" flow: pick an auth method,
 // then either run an AWS SSO OIDC device authorization (Builder ID / IAM
 // Identity Center) or paste a refresh token exported from the Kiro IDE.
 export function KiroConnectModal({ onClose }: { onClose: () => void }) {

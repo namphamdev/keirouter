@@ -9,8 +9,9 @@ import (
 // DeepSeekTool auto-configures DeepSeek TUI (~/.deepseek/config.toml).
 type DeepSeekTool struct{}
 
-func (t *DeepSeekTool) ID() string   { return "deepseek" }
-func (t *DeepSeekTool) Name() string { return "DeepSeek TUI" }
+func (t *DeepSeekTool) ID() string      { return "deepseek" }
+func (t *DeepSeekTool) Name() string    { return "DeepSeek TUI" }
+func (t *DeepSeekTool) Command() string { return "deepseek" }
 
 func (t *DeepSeekTool) configPath(homeDir string) string {
 	return expandHome(homeDir, "~/.deepseek/config.toml")

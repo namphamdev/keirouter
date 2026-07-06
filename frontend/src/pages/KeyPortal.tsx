@@ -2,15 +2,15 @@ import { useState, useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
-  AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  CartesianGrid, PieChart, Pie, Cell,
+  AreaChart, Area, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  CartesianGrid, PieChart, Pie, Cell, ComposedChart, Line,
 } from "recharts";
-import { fetchKeyUsage, fetchKeyUsageById, APIError, type KeyUsageData } from "../lib/api";
+import { fetchKeyUsage, fetchKeyUsageById, APIError, type KeyUsageData, type PortalRecentRequest } from "../lib/api";
 import { useBranding } from "../contexts/BrandingContext";
 import {
   AlertTriangle, CheckCircle2, Activity, ArrowDownRight, ArrowUpRight, DollarSign,
   LogOut, Layers, Key, Zap, Send, ChevronDown, Radio, TrendingUp, Coins, Calendar,
-  Trophy, Infinity as InfinityIcon,
+  Trophy, Infinity as InfinityIcon, Clock, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import { Card, Button, Input, Spinner, ErrorCard, Badge, SegmentedControl } from "../components/ui";
 
@@ -20,6 +20,13 @@ const C_INPUT = "var(--color-chart-1)";
 const C_OUTPUT = "var(--color-chart-2)";
 const C_COST = "var(--color-chart-3)";
 const C_REQ = "var(--color-chart-5)";
+
+const DATE_RANGES = [
+  { value: 7, label: "7D" },
+  { value: 14, label: "14D" },
+  { value: 30, label: "30D" },
+  { value: 90, label: "90D" },
+];
 
 export function KeyPortalPage() {
   const { branding, logoSrc } = useBranding();
@@ -31,6 +38,7 @@ export function KeyPortalPage() {
   const [testPrompt, setTestPrompt] = useState("Say hello in one sentence");
   const [testResponse, setTestResponse] = useState<any>(null);
   const [isTesting, setIsTesting] = useState(false);
+  const [days, setDays] = useState(30);
 
   const authValue = activeId || activeKey;
   const isIdMode = !!activeId;
@@ -50,8 +58,8 @@ export function KeyPortalPage() {
   };
 
   const { data, isLoading, isError, error, dataUpdatedAt } = useQuery({
-    queryKey: ["key-usage", authValue, isIdMode],
-    queryFn: () => (isIdMode ? fetchKeyUsageById(authValue) : fetchKeyUsage(authValue)),
+    queryKey: ["key-usage", authValue, isIdMode, days],
+    queryFn: () => (isIdMode ? fetchKeyUsageById(authValue, days) : fetchKeyUsage(authValue, days)),
     enabled: !!authValue,
     retry: false,
     refetchInterval: 30000,
@@ -161,11 +169,14 @@ export function KeyPortalPage() {
           </div>
         </header>
 
-        {/* ── Overview: Allocations + 30-day KPIs ────────────────────── */}
+        {/* ── Date filter ────────────────────────────────────────────── */}
+        <DateFilter days={days} onChange={setDays} />
+
+        {/* ── Overview: Allocations + KPIs ───────────────────────────── */}
         <OverviewSection d={d} />
 
-        {/* ── Usage Trend (multi-metric) ─────────────────────────────── */}
-        {d.daily && d.daily.length > 0 && <TrendSection daily={d.daily} />}
+        {/* ── Usage Trend (multi-metric, condensed) ──────────────────── */}
+        {d.daily && d.daily.length > 0 && <TrendSection daily={d.daily} days={days} />}
 
         {/* ── Composition + Highlights ───────────────────────────────── */}
         {d.daily && d.daily.length > 0 && <InsightsSection d={d} />}
@@ -206,15 +217,41 @@ export function KeyPortalPage() {
           />
         )}
 
+        {/* ── Recent Requests table ──────────────────────────────────── */}
+        {d.recent && d.recent.length > 0 && <RecentRequestsSection recent={d.recent} days={days} />}
+
         <footer className="pt-2 pb-8 text-center text-xs text-[var(--text-muted)]">
-          Metrics reflect the last 30 days · refreshed automatically every 30 seconds
+          Metrics reflect the last {days} days · refreshed automatically every 30 seconds
         </footer>
       </div>
     </div>
   );
 }
 
-// ─── Overview: budget allocations + 30-day KPI cards ──────────────────────
+// ─── Date Filter ───────────────────────────────────────────────────────────
+function DateFilter({ days, onChange }: { days: number; onChange: (v: number) => void }) {
+  return (
+    <div className="flex items-center justify-center sm:justify-end">
+      <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-1 shadow-sm">
+        {DATE_RANGES.map((r) => (
+          <button
+            key={r.value}
+            onClick={() => onChange(r.value)}
+            className={`rounded-lg px-4 py-2 text-xs font-semibold transition-all ${
+              days === r.value
+                ? "bg-accent-600 text-white shadow-sm"
+                : "text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--bg-subtle)]"
+            }`}
+          >
+            {r.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Overview: budget allocations + KPI cards ──────────────────────────────
 function OverviewSection({ d }: { d: KeyUsageData }) {
   const daily = d.daily ?? [];
   const t = useMemo(() => aggregate(daily), [daily]);
@@ -278,10 +315,10 @@ function OverviewSection({ d }: { d: KeyUsageData }) {
           </Card>
         </div>
 
-        {/* 30-day KPI cards */}
+        {/* KPI cards */}
         <div className="lg:col-span-7">
           <div className="mb-3 flex items-center justify-between px-1">
-            <h2 className="text-xs font-semibold tracking-widest text-[var(--text-muted)] uppercase">Last 30 Days</h2>
+            <h2 className="text-xs font-semibold tracking-widest text-[var(--text-muted)] uppercase">Period Summary</h2>
             <span className="text-xs text-[var(--text-muted)]">{activeDays} active day{activeDays === 1 ? "" : "s"}</span>
           </div>
           <div className="grid grid-cols-2 gap-4">
@@ -305,7 +342,7 @@ function OverviewSection({ d }: { d: KeyUsageData }) {
 // ─── Usage trend chart with metric toggle ─────────────────────────────────
 type Metric = "tokens" | "requests" | "cost";
 
-function TrendSection({ daily }: { daily: NonNullable<KeyUsageData["daily"]> }) {
+function TrendSection({ daily, days }: { daily: NonNullable<KeyUsageData["daily"]>; days: number }) {
   const [metric, setMetric] = useState<Metric>("tokens");
   const chartData = useMemo(() => daily.map((dp) => ({ ...dp, label: dp.date.slice(5) })), [daily]);
   const t = useMemo(() => aggregate(daily), [daily]);
@@ -333,29 +370,44 @@ function TrendSection({ daily }: { daily: NonNullable<KeyUsageData["daily"]> }) 
       <Card className="p-6 md:p-7">
         <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <p className="text-xs font-medium uppercase tracking-widest text-[var(--text-muted)]">30-day total</p>
+            <p className="text-xs font-medium uppercase tracking-widest text-[var(--text-muted)]">{days}-day total</p>
             <p className="mt-1 text-2xl font-display font-semibold tabular-nums tracking-tight text-[var(--text)]">{headline}</p>
           </div>
           {metric === "tokens" && (
             <div className="flex items-center gap-4 text-xs">
               <LegendDot color={C_INPUT} label="Input" />
               <LegendDot color={C_OUTPUT} label="Output" />
+              <LegendDot color={C_REQ} label="Requests" />
+            </div>
+          )}
+          {metric === "requests" && (
+            <div className="flex items-center gap-4 text-xs">
+              <LegendDot color={C_REQ} label="Requests" />
+              <LegendDot color={C_COST} label="Cost" />
+            </div>
+          )}
+          {metric === "cost" && (
+            <div className="flex items-center gap-4 text-xs">
+              <LegendDot color={C_COST} label="Cost" />
+              <LegendDot color={C_REQ} label="Requests" />
             </div>
           )}
         </div>
 
-        <div className="h-[300px] w-full">
+        <div className="h-[260px] w-full">
           <ResponsiveContainer width="100%" height="100%">
             {metric === "requests" ? (
-              <BarChart data={chartData} margin={{ top: 10, right: 8, left: -18, bottom: 0 }}>
+              <ComposedChart data={chartData} margin={{ top: 10, right: 8, left: -18, bottom: 0 }}>
                 <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="4 4" opacity={0.6} />
                 <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} dy={12} minTickGap={24} />
-                <YAxis tick={axisTick} tickLine={false} axisLine={false} tickFormatter={formatNumber} width={56} />
+                <YAxis yAxisId="left" tick={axisTick} tickLine={false} axisLine={false} tickFormatter={formatNumber} width={56} />
+                <YAxis yAxisId="right" orientation="right" tick={axisTick} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} width={52} />
                 <Tooltip cursor={{ fill: "var(--bg-subtle)", opacity: 0.5 }} content={<ChartTooltip metric={metric} />} />
-                <Bar dataKey="requests" fill={C_REQ} radius={[6, 6, 0, 0]} maxBarSize={38} name="Requests" />
-              </BarChart>
+                <Bar yAxisId="left" dataKey="requests" fill={C_REQ} fillOpacity={0.85} radius={[6, 6, 0, 0]} maxBarSize={38} name="Requests" />
+                <Line yAxisId="right" type="monotone" dataKey="cost_usd" stroke={C_COST} strokeWidth={2.5} dot={false} name="Cost" />
+              </ComposedChart>
             ) : metric === "cost" ? (
-              <AreaChart data={chartData} margin={{ top: 10, right: 8, left: -8, bottom: 0 }}>
+              <ComposedChart data={chartData} margin={{ top: 10, right: 8, left: -8, bottom: 0 }}>
                 <defs>
                   <linearGradient id="costFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor={C_COST} stopOpacity={0.3} />
@@ -364,35 +416,185 @@ function TrendSection({ daily }: { daily: NonNullable<KeyUsageData["daily"]> }) 
                 </defs>
                 <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="4 4" opacity={0.6} />
                 <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} dy={12} minTickGap={24} />
-                <YAxis tick={axisTick} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} width={56} />
+                <YAxis yAxisId="left" tick={axisTick} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} width={56} />
+                <YAxis yAxisId="right" orientation="right" tick={axisTick} tickLine={false} axisLine={false} tickFormatter={formatNumber} width={52} />
                 <Tooltip content={<ChartTooltip metric={metric} />} />
-                <Area type="monotone" dataKey="cost_usd" stroke={C_COST} strokeWidth={2.5} fill="url(#costFill)" name="Cost" />
-              </AreaChart>
+                <Area yAxisId="left" type="monotone" dataKey="cost_usd" stroke={C_COST} strokeWidth={2.5} fill="url(#costFill)" name="Cost" />
+                <Line yAxisId="right" type="monotone" dataKey="requests" stroke={C_REQ} strokeWidth={2} strokeDasharray="4 3" dot={false} name="Requests" />
+              </ComposedChart>
             ) : (
-              <AreaChart data={chartData} margin={{ top: 10, right: 8, left: -18, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="inFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={C_INPUT} stopOpacity={0.28} />
-                    <stop offset="95%" stopColor={C_INPUT} stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="outFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={C_OUTPUT} stopOpacity={0.28} />
-                    <stop offset="95%" stopColor={C_OUTPUT} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
+              <ComposedChart data={chartData} margin={{ top: 10, right: 8, left: -18, bottom: 0 }}>
                 <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="4 4" opacity={0.6} />
                 <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} dy={12} minTickGap={24} />
-                <YAxis tick={axisTick} tickLine={false} axisLine={false} tickFormatter={formatTokens} width={56} />
-                <Tooltip content={<ChartTooltip metric={metric} />} />
-                <Area type="monotone" dataKey="prompt_tokens" stackId="1" stroke={C_INPUT} strokeWidth={2.5} fill="url(#inFill)" name="Input" />
-                <Area type="monotone" dataKey="completion_tokens" stackId="1" stroke={C_OUTPUT} strokeWidth={2.5} fill="url(#outFill)" name="Output" />
-              </AreaChart>
+                <YAxis yAxisId="left" tick={axisTick} tickLine={false} axisLine={false} tickFormatter={formatTokens} width={56} />
+                <YAxis yAxisId="right" orientation="right" tick={axisTick} tickLine={false} axisLine={false} tickFormatter={formatNumber} width={52} />
+                <Tooltip cursor={{ fill: "var(--bg-subtle)", opacity: 0.5 }} content={<ChartTooltip metric={metric} />} />
+                <Bar yAxisId="left" dataKey="prompt_tokens" stackId="tok" fill={C_INPUT} fillOpacity={0.85} radius={[0, 0, 0, 0]} maxBarSize={38} name="Input" />
+                <Bar yAxisId="left" dataKey="completion_tokens" stackId="tok" fill={C_OUTPUT} fillOpacity={0.85} radius={[6, 6, 0, 0]} maxBarSize={38} name="Output" />
+                <Line yAxisId="right" type="monotone" dataKey="requests" stroke={C_REQ} strokeWidth={2.5} dot={false} name="Requests" />
+              </ComposedChart>
             )}
           </ResponsiveContainer>
         </div>
       </Card>
     </section>
   );
+}
+
+// ─── Recent Requests table ─────────────────────────────────────────────────
+function RecentRequestsSection({ recent, days: _days }: { recent: PortalRecentRequest[]; days: number }) {
+  const PAGE_SIZE =15;
+  const [page, setPage] = useState(0);
+  const totalPages = Math.max(1, Math.ceil(recent.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages -1);
+  const start = safePage * PAGE_SIZE;
+  const pageItems = recent.slice(start, start + PAGE_SIZE);
+
+  return (
+    <section className="space-y-4">
+      <SectionTitle title="Request Log" icon={<Clock size={17} />} count={recent.length} />
+      <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-[var(--bg-subtle)]/50 border-b border-[var(--border)]">
+              <tr className="text-[11px] uppercase tracking-wide text-[var(--text-muted)]">
+                <th className="px-4 py-3 text-left font-semibold">Model</th>
+                <th className="px-4 py-3 text-right font-semibold">
+                  <span className="inline-flex items-center justify-end gap-1">
+                    <ArrowDownRight size={12} className="text-[var(--color-chart-1)]" /> In
+                  </span>
+                </th>
+                <th className="px-4 py-3 text-right font-semibold">
+                  <span className="inline-flex items-center justify-end gap-1">
+                    <ArrowUpRight size={12} className="text-[var(--color-chart-2)]" /> Out
+                  </span>
+                </th>
+                <th className="px-4 py-3 text-right font-semibold">Cost</th>
+                <th className="px-4 py-3 text-center font-semibold">Optimizations</th>
+                <th className="px-4 py-3 text-right font-semibold">Latency</th>
+                <th className="px-4 py-3 text-right font-semibold">Date</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--border)]">
+              {pageItems.map((r) => {
+                const opts = r.optimizations ?? [];
+                return (
+                  <tr key={r.id} className="group transition-colors hover:bg-[var(--bg-subtle)]/30">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <ProviderIcon provider={r.provider} className="h-8 w-8" />
+                        <div className="flex min-w-0 flex-col">
+                          <span className="font-semibold text-[var(--text)] text-[13px] truncate">{r.model}</span>
+                          <span className="text-[11px] text-[var(--text-muted)] capitalize truncate">{r.provider}</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums font-mono text-[13px] text-[var(--text)]">
+                      <span className="inline-flex items-center justify-end gap-1.5">
+                        <ArrowDownRight size={12} className="text-[var(--color-chart-1)]" />
+                        {formatTokens(r.prompt_tokens)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums font-mono text-[13px] text-[var(--text)]">
+                      <span className="inline-flex items-center justify-end gap-1.5">
+                        <ArrowUpRight size={12} className="text-[var(--color-chart-2)]" />
+                        {formatTokens(r.completion_tokens)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums text-[13px] text-[var(--text-muted)]">${r.cost_usd.toFixed(4)}</td>
+                    <td className="px-4 py-3 text-center">
+                      {opts.length >0 ? (
+                        <div className="flex flex-wrap items-center justify-center gap-1">
+                          {opts.map((opt) => (
+                            <OptBadge key={opt} name={opt} detail={optDetail(r, opt)} />
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-[11px] text-[var(--text-muted)] opacity-40">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums text-[12px] text-[var(--text-muted)]">
+                      {r.latency_ms >0 ? `${r.latency_ms}ms` : r.cache_hit ? "cache" : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <div className="flex flex-col items-end leading-tight">
+                        <span className="text-[12px] font-medium text-[var(--text)] tabular-nums">{formatDateTime(r.created_at)}</span>
+                        <span className="text-[10px] text-[var(--text-muted)] tabular-nums">{relTime(r.created_at)} ago</span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {totalPages >1 && (
+          <div className="flex items-center justify-between border-t border-[var(--border)] px-4 py-3">
+            <span className="text-[11px] text-[var(--text-muted)]">
+              Showing {start +1}–{Math.min(start + PAGE_SIZE, recent.length)} of {recent.length}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setPage((p) => Math.max(0, p -1))}
+                disabled={safePage ===0}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-subtle)] hover:text-[var(--text)] disabled:opacity-40 disabled:hover:bg-[var(--bg-elevated)] disabled:hover:text-[var(--text-muted)]"
+                aria-label="Previous page"
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <span className="px-2 text-[12px] font-medium tabular-nums text-[var(--text)]">
+                {safePage +1} / {totalPages}
+              </span>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages -1, p +1))}
+                disabled={safePage === totalPages -1}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-subtle)] hover:text-[var(--text)] disabled:opacity-40 disabled:hover:bg-[var(--bg-elevated)] disabled:hover:text-[var(--text-muted)]"
+                aria-label="Next page"
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
+        )}
+      </Card>
+    </section>
+  );
+}
+
+function OptBadge({ name, detail }: { name: string; detail?: string }) {
+  const styles: Record<string, string> = {
+    RTK: "bg-teal-500/10 text-teal-600 dark:text-teal-400",
+    Caveman: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
+    Terse: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400",
+    Headroom: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+    Ponytail: "bg-pink-500/10 text-pink-600 dark:text-pink-400",
+  };
+  const style = styles[name] || "bg-[var(--bg-subtle)] text-[var(--text-muted)]";
+  return (
+    <span
+      className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${style}`}
+      title={detail || name}
+    >
+      {name}
+    </span>
+  );
+}
+
+function optDetail(r: PortalRecentRequest, name: string): string {
+  switch (name) {
+    case "RTK":
+      return r.slim_rules ? `RTK rules: ${r.slim_rules}${r.slim_tokens_saved ? ` (${formatTokens(r.slim_tokens_saved)} tokens saved)` : ""}` : "RTK compression";
+    case "Caveman":
+      return "Caveman output compression";
+    case "Terse":
+      return "Terse output compression";
+    case "Headroom":
+      return r.headroom_tokens_saved ? `Headroom saved ${formatTokens(r.headroom_tokens_saved)} tokens` : "Headroom compression";
+    case "Ponytail":
+      return "Ponytail injection";
+    default:
+      return name;
+  }
 }
 
 // ─── Token composition donut + activity highlights ────────────────────────
@@ -452,7 +654,7 @@ function InsightsSection({ d }: { d: KeyUsageData }) {
         <Card className="p-6 md:p-7">
           <div className="grid grid-cols-2 gap-x-6 gap-y-6">
             <Highlight label="Busiest Day" value={busiest && busiest.requests > 0 ? busiest.date.slice(5) : "—"} sub={busiest && busiest.requests > 0 ? `${formatNumber(busiest.requests)} requests` : "no activity"} />
-            <Highlight label="Models Used" value={String(d.models?.length ?? 0)} sub="in last 30 days" />
+            <Highlight label="Models Used" value={String(d.models?.length ?? 0)} sub="in period" />
             <Highlight label="Avg / Request" value={formatTokens(avgPerReq)} sub="tokens" />
             <Highlight label="This Month" value={`$${d.current_period.cost_usd.toFixed(2)}`} sub={`${formatNumber(d.current_period.total_requests)} requests`} />
           </div>
@@ -770,9 +972,13 @@ function LegendDot({ color, label }: { color: string; label: string }) {
   );
 }
 
-function ChartTooltip({ active, payload, label, metric, simple }: any) {
+function ChartTooltip({ active, payload, label, metric: _metric, simple }: any) {
   if (!active || !payload?.length) return null;
-  const fmt = (v: number) => (metric === "cost" ? `$${v.toFixed(4)}` : metric === "requests" ? formatNumber(v) : formatTokens(v));
+  const fmtVal = (key: string, v: number) => {
+    if (key === "requests" || key === "Requests") return formatNumber(v);
+    if (key === "cost_usd" || key === "Cost") return `$${v.toFixed(4)}`;
+    return formatTokens(v);
+  };
   const nameOf = (key: string) => (key === "prompt_tokens" || key === "Input" ? "Input" : key === "completion_tokens" || key === "Output" ? "Output" : key === "requests" ? "Requests" : key === "cost_usd" ? "Cost" : key);
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3.5 py-2.5 shadow-[var(--shadow-pop)]">
@@ -782,7 +988,7 @@ function ChartTooltip({ active, payload, label, metric, simple }: any) {
           <div key={i} className="flex items-center gap-2 text-sm">
             <span className="h-2 w-2 rounded-full" style={{ background: p.color || p.payload?.color }} />
             <span className="text-[var(--text-muted)]">{nameOf(p.name ?? p.dataKey)}</span>
-            <span className="ml-auto font-semibold tabular-nums text-[var(--text)]">{fmt(p.value)}</span>
+            <span className="ml-auto font-semibold tabular-nums text-[var(--text)]">{fmtVal(p.dataKey ?? p.name, p.value)}</span>
           </div>
         ))}
       </div>
@@ -841,4 +1047,24 @@ function relativeTime(ts: number): string {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m ago`;
   return `${Math.floor(m / 60)}h ago`;
+}
+
+function relTime(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "—";
+  const diff = Date.now() - t;
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
+function formatDateTime(iso: string): string {
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return "—";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())} ${pad(t.getHours())}:${pad(t.getMinutes())}`;
 }

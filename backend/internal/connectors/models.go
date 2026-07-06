@@ -2,6 +2,11 @@ package connectors
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 )
@@ -170,9 +175,27 @@ var providerModels = map[string][]ModelSpec{
 	},
 	"byteplus": {m("seed-2-0-pro-260328", "Seed 2.0 Pro"), m("kimi-k2-thinking-251104", "Kimi K2 Thinking"), m("glm-4-7-251222", "GLM 4.7")},
 	"cloudflare-ai": {
-		m("@cf/meta/llama-3.3-70b-instruct-fp8-fast", "Llama 3.3 70B"),
-		m("@cf/moonshotai/kimi-k2.5", "Kimi K2.5"), m("@cf/zai-org/glm-4.7-flash", "GLM 4.7 Flash"),
+		// Llama family
+		m("@cf/meta/llama-3.2-1b-instruct", "Llama 3.2 1B Instruct"),
+		m("@cf/meta/llama-3.2-3b-instruct", "Llama 3.2 3B Instruct"),
+		m("@cf/meta/llama-3.1-8b-instruct-fp8-fast", "Llama 3.1 8B Instruct (Fast)"),
+		m("@cf/meta/llama-3.1-8b-instruct-awq", "Llama 3.1 8B Instruct (AWQ)"),
+		m("@cf/meta/llama-3.1-70b-instruct-fp8-fast", "Llama 3.1 70B Instruct (Fast)"),
+		m("@cf/meta/llama-3.3-70b-instruct-fp8-fast", "Llama 3.3 70B Instruct (Fast)"),
+		// Mistral
+		m("@cf/mistralai/mistral-small-3.1-24b-instruct", "Mistral Small 3.1 24B"),
+		// DeepSeek
+		m("@cf/deepseek-ai/deepseek-r1-distill-qwen-32b", "DeepSeek R1 Distill Qwen 32B"),
+		// Kimi
+		m("@cf/moonshotai/kimi-k2.5", "Kimi K2.5"),
+		// GLM
+		m("@cf/zai-org/glm-4.7-flash", "GLM 4.7 Flash"),
+		// Qwen
+		m("@cf/qwen/qwq-32b", "QwQ 32B"),
+		m("@cf/qwen/qwen2.5-coder-32b-instruct", "Qwen 2.5 Coder 32B"),
+		// Image models
 		k("@cf/black-forest-labs/flux-1-schnell", "FLUX.1 Schnell", core.ServiceImage),
+		k("@cf/stabilityai/stable-diffusion-xl-base-1.0", "Stable Diffusion XL", core.ServiceImage),
 	},
 	"kiro": {
 		m("auto", "Kiro Auto"), m("auto-thinking", "Kiro Auto (Thinking)"),
@@ -205,6 +228,21 @@ var providerModels = map[string][]ModelSpec{
 	"gemini-cli": {
 		m("gemini-3-flash-preview", "Gemini 3 Flash Preview"),
 		m("gemini-3-pro-preview", "Gemini 3 Pro Preview"),
+	},
+	"antigravity": {
+		m("claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)"),
+		m("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+		m("gemini-3.5-flash-low", "Gemini 3.5 Flash (Low)"),
+		m("gemini-3.5-flash-medium", "Gemini 3.5 Flash (Medium)"),
+		m("gemini-3.5-flash-high", "Gemini 3.5 Flash (High)"),
+		m("gemini-3.1-pro-high", "Gemini 3.1 Pro (High)"),
+		m("gemini-3.1-pro-low", "Gemini 3.1 Pro (Low)"),
+		m("gemini-3-pro-preview", "Gemini3.1 Pro"),
+		m("gemini-3.1-flash-lite", "Gemini 3.1 Flash Lite"),
+		m("gemini-2.5-pro", "Gemini 2.5 Pro"),
+		m("gemini-2.5-flash", "Gemini 2.5 Flash"),
+		m("gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite"),
+		m("gpt-oss-120b-medium", "GPT-OSS 120B (Medium)"),
 	},
 	"cursor": {
 		m("default", "Auto (Server Picks)"),
@@ -335,7 +373,7 @@ func ModelsByKind(kind core.ServiceKind) []ProviderModel {
 		if !core.HasServiceKind(spec.ServiceKinds, kind) {
 			continue
 		}
-		for _, mdl := range providerModels[spec.ID] {
+		for _, mdl := range ModelsForProvider(spec.ID) {
 			if mdl.Kind == kind {
 				out = append(out, ProviderModel{Provider: spec.ID, Model: mdl})
 			}
@@ -346,7 +384,7 @@ func ModelsByKind(kind core.ServiceKind) []ProviderModel {
 
 // FindModel locates a model by provider id and model id.
 func FindModel(providerID, modelID string) (ModelSpec, bool) {
-	for _, mdl := range providerModels[providerID] {
+	for _, mdl := range ModelsForProvider(providerID) {
 		if mdl.ID == modelID {
 			return mdl, true
 		}
@@ -380,13 +418,84 @@ func GetLiveModelSource(provider string) LiveModelSource {
 	if src, ok := liveModelSources[provider]; ok {
 		return src
 	}
-	// Dynamic (user-defined) OpenAI-compatible providers are not in the static
-	// registry, so build a discovery source on demand. This lets a custom
-	// provider's /models endpoint populate the catalog just like a built-in one.
-	if p, ok := DynamicProviderByID(provider); ok && p.Dialect == core.DialectOpenAI {
-		return &OpenAICompatibleModelSource{provider: p.ID, defaultBase: p.BaseURL}
+	// Dynamic (user-defined) providers are not in the static registry, so build
+	// a discovery source on demand. This lets a custom provider's /models
+	// endpoint populate the catalog just like a built-in one.
+	if p, ok := DynamicProviderByID(provider); ok {
+		switch p.Dialect {
+		case core.DialectOpenAI:
+			return &OpenAICompatibleModelSource{provider: p.ID, defaultBase: p.BaseURL}
+		case core.DialectAnthropic:
+			return &AnthropicCompatibleModelSource{provider: p.ID, defaultBase: p.BaseURL}
+		}
 	}
 	return nil
+}
+
+// AnthropicCompatibleModelSource implements LiveModelSource for custom
+// anthropic-compatible dynamic providers by fetching GET <base>/v1/models
+// (Anthropic shape: {"data":[{"id":"...","display_name":"..."}]}).
+type AnthropicCompatibleModelSource struct {
+	provider    string
+	defaultBase string
+}
+
+func (s *AnthropicCompatibleModelSource) ListModels(ctx context.Context, creds core.Credentials) ([]ModelSpec, error) {
+	base := s.defaultBase
+	if creds.BaseURL != "" {
+		base = creds.BaseURL
+	}
+	for key, val := range creds.Extra {
+		base = strings.ReplaceAll(base, "{"+key+"}", val)
+	}
+	base = strings.TrimRight(base, "/")
+	base = strings.TrimSuffix(base, "/messages")
+	base = strings.TrimSuffix(base, "/v1")
+	url := strings.TrimRight(base, "/") + "/v1/models"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if k := strings.TrimSpace(creds.APIKey); k != "" {
+		req.Header.Set("x-api-key", k)
+	} else if t := strings.TrimSpace(creds.AccessToken); t != "" {
+		req.Header.Set("Authorization", bearer(t))
+	}
+	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := sharedClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
+		return nil, fmt.Errorf("GET /v1/models returned %d: %s", resp.StatusCode, truncateError(body))
+	}
+
+	var envelope struct {
+		Data []struct {
+			ID          string `json:"id"`
+			DisplayName string `json:"display_name"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return nil, fmt.Errorf("decode /v1/models response: %w", err)
+	}
+	out := make([]ModelSpec, 0, len(envelope.Data))
+	for _, e := range envelope.Data {
+		if e.ID == "" {
+			continue
+		}
+		name := e.DisplayName
+		if name == "" {
+			name = e.ID
+		}
+		out = append(out, ModelSpec{ID: e.ID, Name: name, Kind: core.ServiceLLM})
+	}
+	return out, nil
 }
 
 // QuotaEntry is one upstream quota bucket (e.g. AGENTIC_REQUEST usage).

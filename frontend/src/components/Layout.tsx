@@ -23,6 +23,7 @@ import {
   Key,
   Activity,
   Shield,
+  HeartPulse,
   type LucideIcon,
 } from "lucide-react";
 import { api } from "../lib/api";
@@ -72,6 +73,7 @@ const navGroups: NavGroup[] = [
     heading: "Safety",
     items: [
       { to: "/guardrails", label: "Guardrails", icon: Shield, preload: "/guardrails" },
+      { to: "/provider-health", label: "Provider Health", icon: HeartPulse, preload: "/provider-health" },
     ],
   },
   {
@@ -108,6 +110,7 @@ const TITLE_BY_PATH: Record<string, string> = {
   "/settings": "Settings",
   "/keys": "API Keys",
   "/guardrails": "Guardrails",
+  "/provider-health": "Provider Health",
   "/console": "Console Log",
   "/cli-tools": "CLI Tools",
   "/system": "System",

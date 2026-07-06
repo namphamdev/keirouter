@@ -26,6 +26,9 @@ func (s *Server) handleCLITools(w http.ResponseWriter, r *http.Request) {
 		Installed  bool   `json:"installed"`
 		Configured bool   `json:"configured"`
 		ConfigPath string `json:"config_path"`
+		BinaryPath string `json:"binary_path,omitempty"`
+		Version    string `json:"version,omitempty"`
+		Error      string `json:"error,omitempty"`
 	}
 	statusMap := make(map[string]clitools.Status, len(statuses))
 	for _, st := range statuses {
@@ -38,6 +41,9 @@ func (s *Server) handleCLITools(w http.ResponseWriter, r *http.Request) {
 			tr.Installed = st.Installed
 			tr.Configured = st.Configured
 			tr.ConfigPath = st.ConfigPath
+			tr.BinaryPath = st.BinaryPath
+			tr.Version = st.Version
+			tr.Error = st.Error
 		}
 		tools = append(tools, tr)
 	}

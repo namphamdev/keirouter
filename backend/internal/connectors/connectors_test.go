@@ -333,9 +333,13 @@ func TestGetLiveModelSource_DynamicOpenAIProvider(t *testing.T) {
 	src := GetLiveModelSource(id)
 	require.NotNil(t, src, "dynamic OpenAI-compatible providers should get a live model source")
 
-	// A dynamic Anthropic provider has no OpenAI-style /models discovery.
+	// A dynamic Anthropic provider now gets an Anthropic-compatible model source
+	// (GET /v1/models discovery), mirroring the OpenAI-compatible path.
 	aid := "custom-anthropic-testdisco"
 	RegisterDynamicProvider(DynamicProvider{ID: aid, Dialect: core.DialectAnthropic, BaseURL: "https://example.test"})
 	t.Cleanup(func() { UnregisterDynamicProvider(aid) })
-	require.Nil(t, GetLiveModelSource(aid))
+	asrc := GetLiveModelSource(aid)
+	require.NotNil(t, asrc, "dynamic Anthropic-compatible providers should get a live model source")
+	_, ok := asrc.(*AnthropicCompatibleModelSource)
+	require.True(t, ok, "dynamic Anthropic provider should yield an AnthropicCompatibleModelSource")
 }

@@ -9,8 +9,9 @@ import (
 // DroidTool auto-configures Factory Droid (~/.factory/settings.json).
 type DroidTool struct{}
 
-func (t *DroidTool) ID() string   { return "droid" }
-func (t *DroidTool) Name() string { return "Factory Droid" }
+func (t *DroidTool) ID() string      { return "droid" }
+func (t *DroidTool) Name() string    { return "Factory Droid" }
+func (t *DroidTool) Command() string { return "droid" }
 
 func (t *DroidTool) configPath(homeDir string) string {
 	return expandHome(homeDir, "~/.factory/settings.json")

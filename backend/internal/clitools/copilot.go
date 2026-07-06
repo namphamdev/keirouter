@@ -13,6 +13,9 @@ type CopilotTool struct{}
 func (t *CopilotTool) ID() string   { return "copilot" }
 func (t *CopilotTool) Name() string { return "GitHub Copilot (VS Code)" }
 
+// Command returns "" — Copilot is a VS Code extension, not a standalone CLI.
+func (t *CopilotTool) Command() string { return "" }
+
 func (t *CopilotTool) configPath(homeDir string) string {
 	return platformConfigPath(homeDir, "chatLanguageModels.json")
 }
@@ -23,7 +26,7 @@ func (t *CopilotTool) DetectStatus(homeDir string) (bool, bool, string, error) {
 		return false, false, path, nil
 	}
 	var entries []map[string]any
-	if err := readJSON(path, &entries); err != nil {
+	if err := readJSONC(path, &entries); err != nil {
 		// Might be an object, not array — still installed.
 		return true, false, path, nil
 	}
@@ -56,30 +59,30 @@ func (t *CopilotTool) Configure(homeDir, baseURL, apiKey string, models []string
 	modelEntries := make([]map[string]any, len(models))
 	for i, m := range models {
 		modelEntries[i] = map[string]any{
-			"id":           m,
-			"name":         m,
-			"url":          fmt.Sprintf("%s/v1/chat/completions#models.ai.azure.com", baseURL),
-			"toolCalling":  true,
+			"id":              m,
+			"name":            m,
+			"url":             fmt.Sprintf("%s/v1/chat/completions#models.ai.azure.com", baseURL),
+			"toolCalling":     true,
 			"maxInputTokens":  128000,
 			"maxOutputTokens": 16384,
 		}
 	}
 	if len(modelEntries) == 0 {
 		modelEntries = []map[string]any{{
-			"id":           "gpt-4o",
-			"name":         "gpt-4o",
-			"url":          fmt.Sprintf("%s/v1/chat/completions#models.ai.azure.com", baseURL),
-			"toolCalling":  true,
+			"id":              "gpt-4o",
+			"name":            "gpt-4o",
+			"url":             fmt.Sprintf("%s/v1/chat/completions#models.ai.azure.com", baseURL),
+			"toolCalling":     true,
 			"maxInputTokens":  128000,
 			"maxOutputTokens": 16384,
 		}}
 	}
 
 	entry := map[string]any{
-		"name":    "KeiRouter",
-		"vendor":  "azure",
-		"apiKey":  apiKey,
-		"models":  modelEntries,
+		"name":   "KeiRouter",
+		"vendor": "azure",
+		"apiKey": apiKey,
+		"models": modelEntries,
 	}
 	filtered = append(filtered, entry)
 
