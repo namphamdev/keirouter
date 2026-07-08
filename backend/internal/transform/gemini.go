@@ -39,11 +39,25 @@ type gemContent struct {
 	Parts []gemPart `json:"parts"`
 }
 
+// geminiThoughtSignatureSkip is accepted by Gemini 3 when replaying tool calls
+// that never carried a model-issued signature (e.g. OpenAI client history).
+const geminiThoughtSignatureSkip = "skip_thought_signature_validator"
+
 type gemPart struct {
 	Text             string             `json:"text,omitempty"`
+	Thought          bool               `json:"thought,omitempty"`
+	ThoughtSignature string             `json:"thoughtSignature,omitempty"`
+	ThoughtSignatureSnake string        `json:"thought_signature,omitempty"`
 	FunctionCall     *gemFunctionCall   `json:"functionCall,omitempty"`
 	FunctionResponse *gemFunctionResult `json:"functionResponse,omitempty"`
 	InlineData       *gemInlineData     `json:"inlineData,omitempty"`
+}
+
+func (p gemPart) gemThoughtSignature() string {
+	if p.ThoughtSignature != "" {
+		return p.ThoughtSignature
+	}
+	return p.ThoughtSignatureSnake
 }
 
 type gemInlineData struct {
@@ -111,8 +125,9 @@ func parseGemContent(c gemContent) core.Message {
 			// function name so the matching functionResponse maps to the same
 			// tool-call id (downstream dialects require the pairing).
 			msg.Content = append(msg.Content, core.ContentPart{
-				Type:     core.PartToolCall,
-				ToolCall: &core.ToolCall{ID: geminiCallID(p.FunctionCall.Name), Name: p.FunctionCall.Name, Arguments: p.FunctionCall.Args},
+				Type:      core.PartToolCall,
+				Signature: p.gemThoughtSignature(),
+				ToolCall:  &core.ToolCall{ID: geminiCallID(p.FunctionCall.Name), Name: p.FunctionCall.Name, Arguments: p.FunctionCall.Args},
 			})
 		case p.FunctionResponse != nil:
 			// Pair the result back to the derived call id by name.
@@ -129,7 +144,11 @@ func parseGemContent(c gemContent) core.Message {
 				Media: &core.MediaPayload{MIMEType: p.InlineData.MIMEType, Data: p.InlineData.Data},
 			})
 		case p.Text != "":
-			msg.Content = append(msg.Content, core.ContentPart{Type: core.PartText, Text: p.Text})
+			if p.Thought {
+				msg.Content = append(msg.Content, core.ContentPart{Type: core.PartThinking, Text: p.Text, Signature: p.gemThoughtSignature()})
+			} else {
+				msg.Content = append(msg.Content, core.ContentPart{Type: core.PartText, Text: p.Text, Signature: p.gemThoughtSignature()})
+			}
 		}
 	}
 	return msg
@@ -218,15 +237,35 @@ func renderGemContent(m core.Message, callIDToName map[string]string) gemContent
 		role = "model"
 	}
 	c := gemContent{Role: role}
+	var toolCallIdx int
 	for _, p := range m.Content {
 		switch p.Type {
 		case core.PartText:
-			c.Parts = append(c.Parts, gemPart{Text: p.Text})
+			part := gemPart{Text: p.Text}
+			if sig := p.Signature; sig != "" && role == "model" {
+				part.ThoughtSignature = sig
+			}
+			c.Parts = append(c.Parts, part)
+		case core.PartThinking:
+			part := gemPart{Text: p.Text, Thought: true}
+			if sig := p.Signature; sig != "" {
+				part.ThoughtSignature = sig
+			}
+			c.Parts = append(c.Parts, part)
 		case core.PartToolCall:
-			c.Parts = append(c.Parts, gemPart{FunctionCall: &gemFunctionCall{
+			part := gemPart{FunctionCall: &gemFunctionCall{
 				Name: sanitizeGeminiName(p.ToolCall.Name),
 				Args: normalizeGeminiArgs(p.ToolCall.Arguments),
-			}})
+			}}
+			sig := p.Signature
+			if sig == "" && toolCallIdx == 0 {
+				sig = geminiThoughtSignatureSkip
+			}
+			if sig != "" && toolCallIdx == 0 {
+				part.ThoughtSignature = sig
+			}
+			toolCallIdx++
+			c.Parts = append(c.Parts, part)
 		case core.PartToolResult:
 			// Recover the function name from the call id; Gemini requires the
 			// response name to match the originating functionCall name.

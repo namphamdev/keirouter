@@ -63,6 +63,22 @@ type oaiToolCall struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
 	} `json:"function"`
+	ExtraContent *oaiToolCallExtra `json:"extra_content,omitempty"`
+}
+
+type oaiToolCallExtra struct {
+	Google *oaiGoogleThought `json:"google,omitempty"`
+}
+
+type oaiGoogleThought struct {
+	ThoughtSignature string `json:"thought_signature,omitempty"`
+}
+
+func oaiThoughtSignature(tc oaiToolCall) string {
+	if tc.ExtraContent == nil || tc.ExtraContent.Google == nil {
+		return ""
+	}
+	return tc.ExtraContent.Google.ThoughtSignature
 }
 
 type oaiTool struct {
@@ -160,7 +176,8 @@ func parseOAIMessage(m oaiMessage) (msg core.Message, isSystem bool, sysText str
 	// Assistant tool calls.
 	for _, tc := range m.ToolCalls {
 		msg.Content = append(msg.Content, core.ContentPart{
-			Type: core.PartToolCall,
+			Type:      core.PartToolCall,
+			Signature: oaiThoughtSignature(tc),
 			ToolCall: &core.ToolCall{
 				ID:        tc.ID,
 				Name:      tc.Function.Name,
@@ -733,6 +750,9 @@ func renderOAIMessage(m core.Message) oaiMessage {
 			tc.Type = "function"
 			tc.Function.Name = p.ToolCall.Name
 			tc.Function.Arguments = ensureToolArgumentsJSONString(p.ToolCall.Arguments)
+			if sig := p.Signature; sig != "" {
+				tc.ExtraContent = &oaiToolCallExtra{Google: &oaiGoogleThought{ThoughtSignature: sig}}
+			}
 			out.ToolCalls = append(out.ToolCalls, tc)
 		case core.PartToolResult:
 			// Tool results are handled by renderOAIMessages; if we reach
@@ -850,7 +870,8 @@ func (OpenAICodec) buildResponse(raw oaiResponse, model string) (*core.ChatRespo
 	}
 	for _, tc := range choice.Message.ToolCalls {
 		msg.Content = append(msg.Content, core.ContentPart{
-			Type: core.PartToolCall,
+			Type:      core.PartToolCall,
+			Signature: oaiThoughtSignature(tc),
 			ToolCall: &core.ToolCall{
 				ID:        tc.ID,
 				Name:      tc.Function.Name,
@@ -907,14 +928,20 @@ func renderOAIChoice(resp *core.ChatResponse) map[string]any {
 		case core.PartText:
 			text.WriteString(p.Text)
 		case core.PartToolCall:
-			toolCalls = append(toolCalls, map[string]any{
+			tc := map[string]any{
 				"id":   p.ToolCall.ID,
 				"type": "function",
 				"function": map[string]string{
 					"name":      p.ToolCall.Name,
 					"arguments": string(p.ToolCall.Arguments),
 				},
-			})
+			}
+			if sig := p.Signature; sig != "" {
+				tc["extra_content"] = map[string]any{
+					"google": map[string]string{"thought_signature": sig},
+				}
+			}
+			toolCalls = append(toolCalls, tc)
 		}
 	}
 	if text.Len() > 0 {

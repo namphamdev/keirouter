@@ -54,6 +54,7 @@ func (GeminiCodec) ParseStreamLine(line []byte, _ string) ([]core.StreamChunk, e
 						Name:      p.FunctionCall.Name,
 						Arguments: p.FunctionCall.Args,
 					},
+					Signature: p.gemThoughtSignature(),
 				})
 			case p.Text != "":
 				chunks = append(chunks, core.StreamChunk{Type: core.ChunkText, Delta: p.Text})
@@ -84,7 +85,7 @@ func (GeminiCodec) ParseStreamLine(line []byte, _ string) ([]core.StreamChunk, e
 // RenderStreamChunk encodes a canonical chunk as a Gemini SSE event. Gemini
 // streams each fragment as a standalone GenerateContentResponse, so text,
 // tool-call, finish, and usage chunks each become one "data:" line.
-func (GeminiCodec) RenderStreamChunk(chunk core.StreamChunk, _ *StreamState) ([][]byte, error) {
+func (GeminiCodec) RenderStreamChunk(chunk core.StreamChunk, st *StreamState) ([][]byte, error) {
 	switch chunk.Type {
 	case core.ChunkText:
 		return [][]byte{gemEvent(map[string]any{
@@ -105,16 +106,23 @@ func (GeminiCodec) RenderStreamChunk(chunk core.StreamChunk, _ *StreamState) ([]
 		if len(args) == 0 {
 			args = json.RawMessage("{}")
 		}
+		part := map[string]any{
+			"functionCall": map[string]any{
+				"name": chunk.ToolCall.Name,
+				"args": args,
+			},
+		}
+		if sig := chunk.Signature; sig != "" && (st == nil || st.ToolIndex == 0) {
+			part["thoughtSignature"] = sig
+		}
+		if st != nil {
+			st.ToolIndex++
+		}
 		return [][]byte{gemEvent(map[string]any{
 			"candidates": []map[string]any{{
 				"content": map[string]any{
-					"role": "model",
-					"parts": []map[string]any{{
-						"functionCall": map[string]any{
-							"name": chunk.ToolCall.Name,
-							"args": args,
-						},
-					}},
+					"role":  "model",
+					"parts": []map[string]any{part},
 				},
 				"index": 0,
 			}},
