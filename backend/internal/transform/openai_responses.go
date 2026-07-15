@@ -293,6 +293,10 @@ func mapRespRole(role string) core.Role {
 		return core.RoleSystem
 	case "tool":
 		return core.RoleTool
+	case "developer":
+		// OpenAI Responses API uses "developer" role for GPT-5/Codex system prompts.
+		// Treat as developer role which is semantically equivalent to system.
+		return core.RoleDeveloper
 	default:
 		return core.RoleUser
 	}
@@ -472,6 +476,9 @@ type respUnary struct {
 		InputTokensDetails struct {
 			CachedTokens int `json:"cached_tokens"`
 		} `json:"input_tokens_details"`
+		OutputTokensDetails struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"output_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -524,6 +531,8 @@ func (OpenAIResponsesCodec) ParseResponse(body []byte, model string) (*core.Chat
 			CompletionTokens: raw.Usage.OutputTokens,
 			TotalTokens:      raw.Usage.InputTokens + raw.Usage.OutputTokens,
 			CachedTokens:     cached,
+			ReasoningTokens:  raw.Usage.OutputTokensDetails.ReasoningTokens,
+			Source:           core.UsageSourceProvider,
 		}
 	}
 	return resp, nil

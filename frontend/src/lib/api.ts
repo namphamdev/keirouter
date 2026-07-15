@@ -340,33 +340,94 @@ export interface UsageSummary {
   since: string;
 }
 
+export type UsageTerminalStatus = "success" | "cache_hit" | "blocked" | "failed" | "cancelled";
+export type UsageSource = "provider" | "estimated" | "cache" | "legacy" | "none";
+export type PricingStatus = "priced" | "estimated" | "free" | "missing" | "partial" | "legacy" | "none" | "mixed";
+
 export interface ProviderUsage {
   provider: string;
   display_name: string;
   color: string;
   icon: string;
   total_requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  success_rate: number;
   prompt_tokens: number;
   completion_tokens: number;
+  cached_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  total_tokens: number;
   cost_usd: number;
+  saved_cost_usd: number;
+  avoided_cost_usd: number;
+  avg_latency_ms: number;
+  avg_ttft_ms: number;
+  pricing_eligible_requests: number;
+  unpriced_requests: number;
+  estimated_requests: number;
+  estimated_usage_requests: number;
+  legacy_usage_requests: number;
+  backfilled_requests: number;
+	pricing_request_coverage: number | null;
   share_pct: number;
+  token_share_pct: number;
 }
 
 export interface RecentActivity {
   id: string;
+  request_id: string;
   provider: string;
+  provider_name: string;
+  provider_color: string;
+  provider_icon: string;
   model: string;
+  status: UsageTerminalStatus;
+  error_kind: string;
+  usage_source: UsageSource;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
   tokens: number;
   cost_usd: number;
+  input_cost_usd: number;
+  cached_cost_usd: number;
+  cache_write_cost_usd: number;
+  output_cost_usd: number;
+  reasoning_cost_usd: number;
+  saved_cost_usd: number;
+  avoided_cost_usd: number;
+  pricing_status: PricingStatus;
+  pricing_source: string;
+  pricing_key: string;
+  pricing_match_kind: string;
+  pricing_source_url: string;
+  pricing_as_of: string | null;
+  pricing_backfilled: boolean;
+  input_rate_per_m: number;
+  cached_rate_per_m: number;
+  cache_write_rate_per_m: number;
+  output_rate_per_m: number;
+  reasoning_rate_per_m: number;
   cache_hit: boolean;
   latency_ms: number;
+  upstream_latency_ms: number;
+  end_to_end_latency_ms: number;
+  ttft_ms: number;
+  slim_bytes_saved: number;
+  slim_tokens_saved: number;
+  slim_rules: string;
+  slim_active: boolean;
+  caveman_active: boolean;
+  terse_active: boolean;
+  headroom_tokens_saved: number;
+  headroom_bytes_saved: number;
+  headroom_active: boolean;
+  ponytail_active: boolean;
   created_at: string;
-  ttft_ms?: number;
-  slim_bytes_saved?: number;
-  slim_tokens_saved?: number;
-  slim_rules?: string;
-  caveman_active?: boolean;
-  terse_active?: boolean;
 }
 
 export interface RuleSaving {
@@ -379,69 +440,140 @@ export interface RuleSaving {
 export interface ClientSaving {
   client: string;
   requests: number;
+  optimized_requests: number;
   bytes_saved: number;
   tokens_saved: number;
-  usd_saved: number;
+  slim_tokens_saved: number;
   caveman_requests: number;
   terse_requests: number;
-  // Headroom/Ponytail per-client savings. Optional for backward-compat with
-  // payloads recorded before these savers existed; treat missing as 0.
-  headroom_tokens_saved?: number;
-  ponytail_requests?: number;
+  headroom_tokens_saved: number;
+  ponytail_requests: number;
+  saved_cost_usd: number;
+  avoided_cost_usd: number;
+  usd_saved: number;
 }
 
 export interface TokenSavings {
   slim_bytes_saved: number;
   slim_tokens_saved: number;
+  headroom_tokens_saved: number;
+  total_tokens_saved: number;
+  saved_tokens_per_request: number;
+  saved_tokens_per_optimized_request: number;
+  optimized_requests: number;
   caveman_requests: number;
   terse_requests: number;
-  usd_saved?: number;
-  usd_saved_estimate?: boolean;
-  // Headroom/Ponytail summary savings. Optional for backward-compat with
-  // payloads recorded before these savers existed; treat missing as 0.
-  headroom_tokens_saved?: number;
-  ponytail_requests?: number;
-  headroom_requests?: number;
+  headroom_requests: number;
+  ponytail_requests: number;
+  saved_cost_usd: number;
+  avoided_cost_usd: number;
+  usd_saved: number;
+  usd_saved_estimate: boolean;
   rules: RuleSaving[];
-  by_client?: ClientSaving[];
+  by_client: ClientSaving[];
 }
 
 export interface ModelUsage {
   provider: string;
   provider_name: string;
+  provider_color: string;
+  provider_icon: string;
   model: string;
   total_requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  success_rate: number;
   prompt_tokens: number;
   completion_tokens: number;
+  cached_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  total_tokens: number;
   cost_usd: number;
-  input_per_m?: number;
-  output_per_m?: number;
-  cached_input_per_m?: number;
+  saved_cost_usd: number;
+  avoided_cost_usd: number;
+  avg_latency_ms: number;
+  avg_ttft_ms: number;
+  pricing_eligible_requests: number;
+	unpriced_requests: number;
+	missing_pricing_requests: number;
+	legacy_pricing_requests: number;
+  estimated_requests: number;
+  estimated_usage_requests: number;
+  legacy_usage_requests: number;
+  backfilled_requests: number;
+	pricing_request_coverage: number | null;
+  pricing_status: PricingStatus;
+  pricing_mixed: boolean;
+  pricing_source: string;
+  pricing_key: string;
+  input_per_m: number;
+  cached_input_per_m: number;
+  cache_write_per_m: number;
+  output_per_m: number;
+  reasoning_per_m: number;
 }
 
 export interface SeriesPoint {
   label: string;
+  start: string;
   count: number;
+  requests: number;
+  failures: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cost_usd: number;
+}
+
+export interface UsageInsightsSummary {
+  total_requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cached_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_per_request_usd: number;
+  tokens_per_request: number;
+  cache_hits: number;
+  success_rate: number;
+  avg_latency_ms: number;
+  avg_ttft_ms: number;
+  pricing_eligible_requests: number;
+  priced_requests: number;
+  unpriced_requests: number;
+  unpriced_tokens: number;
+  estimated_requests: number;
+  estimated_usage_requests: number;
+  estimated_usage_tokens: number;
+  legacy_usage_requests: number;
+  legacy_usage_tokens: number;
+  backfilled_requests: number;
+	pricing_request_coverage: number | null;
+	pricing_token_coverage: number | null;
+  since: string;
 }
 
 export interface UsageInsights {
-  summary: {
-    total_requests: number;
-    prompt_tokens: number;
-    completion_tokens: number;
-    cached_tokens: number;
-    cost_usd: number;
-    cache_hits: number;
-    success_rate: number;
-    avg_latency_ms: number;
-    avg_ttft_ms: number;
-    since: string;
-  };
+  period: string;
+  since: string;
+  generated_at: string;
+  summary: UsageInsightsSummary;
   savings: TokenSavings;
   providers: ProviderUsage[];
   recent: RecentActivity[];
   series: SeriesPoint[];
   busiest: string;
+}
+
+export interface ModelUsageResponse {
+  period: string;
+  since: string;
+  generated_at: string;
+  models: ModelUsage[];
 }
 
 export interface UpstreamQuota {
@@ -452,6 +584,49 @@ export interface UpstreamQuota {
   reset_at?: string;
 }
 
+export interface CodexCreditInfo {
+  redeem_request_id?: string;
+  status: string;
+  granted_at?: string;
+  expires_at?: string;
+}
+
+export interface CodexResetCredits {
+  available_count: number;
+  credits: CodexCreditInfo[];
+}
+
+export interface CodexConsumeResult {
+  ok: boolean;
+  no_credit: boolean;
+  status: number;
+  code?: string;
+  windows_reset?: number;
+  message?: string;
+}
+
+export interface CodexUsageData {
+  plan_type: string;
+  allowed: boolean;
+  limit_reached: boolean;
+  primary_used_percent: number;
+  primary_reset_at: number;
+  primary_window_seconds: number;
+  secondary_used_percent: number;
+  secondary_reset_at: number;
+  secondary_window_seconds: number;
+  credits_balance: string;
+  has_credits: boolean;
+  unlimited: boolean;
+  reset_credits_available: number;
+}
+
+export interface CodexUsageDetails {
+  usage_data?: CodexUsageData;
+  reset_credits?: CodexResetCredits;
+  error?: string;
+}
+
 export interface QuotaAccount {
   id: string;
   provider: string;
@@ -460,7 +635,9 @@ export interface QuotaAccount {
   auth_kind: string;
   priority: number;
   status: string; // active | paused | needs_attention
-  usage_type: string; // token | credit
+  usage_type: string; // compatibility field; not a paid/free classification
+  quota_supported?: boolean;
+  quota_state?: "reported" | "pending" | "paused" | "unavailable" | "error" | "usage_only";
   total_requests: number;
   prompt_tokens: number;
   completion_tokens: number;
@@ -493,7 +670,7 @@ export interface ProxyPool {
   no_proxy: string;
   strict: boolean;
   is_active: boolean;
-  test_status: string; // unknown | active | error
+  test_status: string; // unknown | testing | active | error
   last_tested?: string;
   last_error?: string;
 }
@@ -786,6 +963,19 @@ export interface SQLiteRestoreResult {
   safety_backup: string;
 }
 
+export interface ForeignImportResult {
+  source: string;
+  imported: number;
+  skipped: number;
+  accounts: number;
+  custom_providers: number;
+  api_keys: number;
+  chains: number;
+  aliases: number;
+  proxy_pools: number;
+  errors?: string[];
+}
+
 class APIError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -1016,7 +1206,7 @@ export const api = {
   updateCustomProvider: (id: string, patch: { display_name?: string; alias?: string; base_url?: string }) =>
     request<CustomProvider>("PATCH", `/custom-providers/${id}`, patch),
   deleteCustomProvider: (id: string) =>
-    request<{ id: string; deleted: boolean }>("DELETE", `/custom-providers/${id}`),
+    request<{ id: string; deleted: boolean; accounts_disabled?: number }>("DELETE", `/custom-providers/${id}`),
 
   importModels: (id: string) =>
     request<{ provider_id: string; imported: number; skipped: number; total: number }>(
@@ -1097,6 +1287,12 @@ export const api = {
     request<{ provider: string; supported: boolean; plan_name?: string; message?: string; quotas?: UpstreamQuota[] }>(
       "GET", `/accounts/${id}/quota`,
     ),
+  codexResetCredits: (id: string) =>
+    request<CodexResetCredits>("GET", `/accounts/${id}/codex-reset-credits`),
+  codexConsumeCredit: (id: string, redeemRequestId: string) =>
+    request<CodexConsumeResult>("POST", `/accounts/${id}/codex-consume-credit`, { redeem_request_id: redeemRequestId }),
+  codexUsageDetails: (id: string) =>
+    request<CodexUsageDetails>("GET", `/accounts/${id}/codex-usage-details`),
 
   listChains: () => request<{ chains: Chain[] }>("GET", "/chains"),
   createChain: (input: { name: string; strategy?: string; fallback_provider?: string; fallback_model?: string; steps: { provider: string; model: string }[] }) =>
@@ -1117,7 +1313,7 @@ export const api = {
   usageInsights: (period: string) =>
     request<UsageInsights>("GET", `/usage/insights?period=${period}&tz=${browserTZ()}`),
   modelUsage: (period: string) =>
-    request<{ models: ModelUsage[] }>("GET", `/usage/models?period=${period}&tz=${browserTZ()}`),
+    request<ModelUsageResponse>("GET", `/usage/models?period=${period}&tz=${browserTZ()}`),
 
   quota: (period: string) =>
     request<{ accounts: QuotaAccount[]; since: string }>("GET", `/quota?period=${period}&tz=${browserTZ()}`),
@@ -1136,6 +1332,8 @@ export const api = {
   listProxyPools: () => request<{ pools: ProxyPool[] }>("GET", "/proxy-pools"),
   createProxyPool: (input: { name: string; type?: string; proxy_url: string; no_proxy?: string; strict?: boolean; is_active?: boolean }) =>
     request<{ id: string }>("POST", "/proxy-pools", input),
+  deployCloudflareRelay: (input: { account_id: string; api_token: string; project_name?: string }) =>
+    request<{ id: string; name: string; deploy_url: string; test_status: string }>("POST", "/proxy-pools/cloudflare-deploy", input),
   updateProxyPool: (id: string, patch: { name?: string; proxy_url?: string; no_proxy?: string; strict?: boolean; is_active?: boolean }) =>
     request<void>("PATCH", `/proxy-pools/${id}`, patch),
   deleteProxyPool: (id: string) => request<void>("DELETE", `/proxy-pools/${id}`),
@@ -1195,6 +1393,11 @@ export const api = {
   importDatabase: (payload: Record<string, unknown>, passphrase?: string) =>
     request<{ imported: number }>("POST", "/settings/database", passphrase ? { ...payload, passphrase } : payload),
 
+  // Foreign config import: convert a 9router or OmniRoute backup JSON into
+  // KeiRouter records (accounts re-sealed, api keys re-hashed, combos → chains).
+  importForeignConfig: (source: "9router" | "omniroute", config: Record<string, unknown>) =>
+    request<ForeignImportResult>("POST", "/settings/database/import-foreign", { source, config }),
+
   sqliteStatus: () => request<SQLiteStatus>("GET", "/settings/sqlite"),
   backupSQLite: () => requestBlob("GET", "/settings/sqlite/backup"),
   restoreSQLite: (file: File) => {
@@ -1209,7 +1412,7 @@ export const api = {
 
   // Proxy pool test.
   testProxyPool: (id: string) =>
-    request<{ status: string; last_tested?: string }>("POST", `/proxy-pools/${id}/test`),
+    request<{ status: string; last_tested?: string; elapsed_ms?: number; error?: string }>("POST", `/proxy-pools/${id}/test`),
 
   // Per-provider custom quota check script.
   getQuotaScript: (providerId: string) =>
@@ -1261,6 +1464,8 @@ export const api = {
       refresh_token: refreshToken,
       label,
     }),
+  kiroImportCLIProxy: (json: string) =>
+    request<{ id: string; provider: string; email?: string }>("POST", "/kiro/import-cli-proxy", { json }),
 
 
   // Qoder connect flow (PKCE device-token poll). Mounted under /qoder (not
@@ -1284,6 +1489,14 @@ export const api = {
     request<DeviceCode>("POST", "/codebuddy/auth-start", {}),
   codebuddyAuthPoll: (deviceCode: string, label?: string) =>
     request<OAuthPollResult>("POST", "/codebuddy/auth-poll", { device_code: deviceCode, label }),
+
+  // Kimchi connect flow (browser-callback auth). Mounted under /kimchi.
+  kimchiAuthStart: () =>
+    request<DeviceCode>("POST", "/kimchi/auth-start", {}),
+  kimchiAuthPoll: (deviceCode: string, label?: string) =>
+    request<OAuthPollResult>("POST", "/kimchi/auth-poll", { device_code: deviceCode, label }),
+  kimchiCallbackSubmit: (state: string, token: string) =>
+    request<{ status: string }>("POST", "/kimchi/callback-submit", { state, token }),
 
   // Cursor connect flow (import token from Cursor IDE). Mounted under /cursor.
   cursorImport: (token: string, label?: string) =>
@@ -1442,6 +1655,8 @@ export interface HealthSummary {
   disabled: number;
   fallbacks: number;
   avg_p95_latency_ms: number;
+  telemetry_dropped: number;
+  telemetry_dropped_scope: "process_lifetime";
 }
 
 export interface HealthProviderRow {
@@ -1460,7 +1675,16 @@ export interface HealthProviderRow {
   recommendation?: string;
 }
 
+export interface HealthOverviewWindow {
+  kind: "rolling_current";
+  duration_seconds: number;
+  requested_range: string;
+  generated_at: string;
+  since?: string;
+}
+
 export interface HealthOverview {
+  window: HealthOverviewWindow;
   summary: HealthSummary;
   providers: HealthProviderRow[];
 }

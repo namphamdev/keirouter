@@ -24,6 +24,16 @@ func (s *Server) mediaOptions(r *http.Request, model string) (pipeline.MediaOpti
 	if err != nil {
 		return pipeline.MediaOptions{}, err
 	}
+	if len(resolved.Targets) > 0 {
+		filtered, ferr := s.filterAllowedTargets(r.Context(), key.ID, resolved.Targets)
+		if ferr != nil {
+			return pipeline.MediaOptions{}, ferr
+		}
+		if len(filtered) == 0 {
+			return pipeline.MediaOptions{}, accessDeniedError{model: model}
+		}
+		resolved.Targets = filtered
+	}
 	effectiveLimits, err := s.effectiveLimits(r.Context(), key)
 	if err != nil {
 		return pipeline.MediaOptions{}, err
@@ -53,6 +63,10 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 
 // writeMediaError maps a pipeline/provider error (or bad-model error) to HTTP.
 func (s *Server) writeMediaError(w http.ResponseWriter, err error) {
+	if denied, ok := err.(accessDeniedError); ok {
+		writeError(w, http.StatusForbidden, denied.Error())
+		return
+	}
 	var bad badModelError
 	if asBadModel(err, &bad) {
 		writeError(w, http.StatusBadRequest, bad.Error())
@@ -337,4 +351,10 @@ func asBadModel(err error, target *badModelError) bool {
 		return true
 	}
 	return false
+}
+
+type accessDeniedError struct{ model string }
+
+func (e accessDeniedError) Error() string {
+	return "access denied: this API key is not permitted to use model " + e.model
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -75,6 +76,44 @@ func (r *HealthRepo) IsUnhealthy(ctx context.Context, accountID, model string) (
 		}
 	}
 	return false, rows.Err()
+}
+
+// UnhealthyAccounts returns the set of account IDs (from accountIDs) marked
+// unhealthy for model or '__all__'. Batches per-target health checks into a
+// single query instead of one IsUnhealthy query per account.
+func (r *HealthRepo) UnhealthyAccounts(ctx context.Context, accountIDs []string, model string) (map[string]bool, error) {
+	out := make(map[string]bool)
+	if len(accountIDs) == 0 {
+		return out, nil
+	}
+
+	placeholders := make([]string, len(accountIDs))
+	args := make([]any, 0, len(accountIDs)+1)
+	for i, id := range accountIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	args = append(args, model)
+
+	q := r.db.rebind(`SELECT DISTINCT account_id FROM account_health
+		WHERE account_id IN (` + strings.Join(placeholders, ",") + `)
+		  AND model IN (?, '__all__')
+		  AND status = 'unhealthy'`)
+
+	rows, err := r.db.sql.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: unhealthy accounts: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
 }
 
 // MarkHealthy sets an account/model pair to healthy when real traffic succeeds,

@@ -77,6 +77,55 @@ func (c *OpenAICompatible) headers(creds core.Credentials) map[string]string {
 		return mergeHeaders(h, creds.Headers)
 	}
 
+	// CodeBuddy requires CLI headers on every request.
+	if c.id == "codebuddy" {
+		tok := creds.AccessToken
+		if tok == "" {
+			tok = creds.APIKey
+		}
+		if tok != "" {
+			h["Authorization"] = bearer(tok)
+		}
+		h["User-Agent"] = "CLI/2.108.1 CodeBuddy/2.108.1"
+		h["X-Product"] = "SaaS"
+		h["X-IDE-Type"] = "CLI"
+		h["X-IDE-Name"] = "CLI"
+		h["X-Requested-With"] = "XMLHttpRequest"
+		h["x-codebuddy-request"] = "1"
+		return mergeHeaders(h, creds.Headers)
+	}
+
+	// AgentRouter restricts upstream access to a known set of CLI/IDE tools
+	// (Claude Code CLI, Cline, Roo Code, Kilo Code, Qwen Code, OpenCode, etc.).
+	// Impersonate Claude Code CLI so outbound requests pass the endpoint
+	// allowlist. Auth mirrors the default Bearer path below.
+	if c.id == "agentrouter" {
+		switch {
+		case creds.AccessToken != "":
+			h["Authorization"] = bearer(creds.AccessToken)
+		case creds.APIKey != "":
+			h["Authorization"] = bearer(creds.APIKey)
+		}
+		h["User-Agent"] = "claude-cli/1.0.95 (external, cli)"
+		h["x-app"] = "cli"
+		h["anthropic-version"] = "2023-06-01"
+		h["anthropic-beta"] = "fine-grained-tool-streaming-2025-05-14"
+		return mergeHeaders(h, creds.Headers)
+	}
+
+	// Kimchi requires a custom User-Agent.
+	if c.id == "kimchi" {
+		tok := creds.AccessToken
+		if tok == "" {
+			tok = creds.APIKey
+		}
+		if tok != "" {
+			h["Authorization"] = bearer(tok)
+		}
+		h["User-Agent"] = "kimchi/0.1.50"
+		return mergeHeaders(h, creds.Headers)
+	}
+
 	switch {
 	case creds.AccessToken != "":
 		h["Authorization"] = bearer(creds.AccessToken)
@@ -119,7 +168,7 @@ func providerRequiresStreaming(providerID string) bool {
 	// Add providers here that require streaming-only requests.
 	// These providers return 400 "Stream must be set to true" when
 	// a non-streaming request is sent.
-	case "xiaomi-mimo", "xiaomi-tokenplan", "mimo-free":
+	case "xiaomi-mimo", "xiaomi-tokenplan", "mimo-free", "codebuddy":
 		return true
 	default:
 		return false

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,7 +53,7 @@ func sinceForPeriod(period, tz string) time.Time {
 // adminUsageInsights returns the rich payload that powers the Usage page: the
 // per-provider routing breakdown, a bucketed activity-over-time series, recent
 // activity rows, and headline metrics (success rate, average latency).
-func (s *Server) adminUsageInsights(w http.ResponseWriter, r *http.Request) {
+func (s *Server) adminUsageInsightsLegacy(w http.ResponseWriter, r *http.Request) {
 	period := r.URL.Query().Get("period")
 	tz := r.URL.Query().Get("tz")
 	cacheKey := "insights|" + period + "|" + tz
@@ -399,10 +401,9 @@ func (s *Server) adminQuotaUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var wg sync.WaitGroup
-	var mu sync.Mutex
 	out := make([]map[string]any, 0, len(accs))
 
-	for i, a := range accs {
+	for _, a := range accs {
 		u := usageByID[a.ID]
 		status := "active"
 		if a.Disabled {
@@ -419,9 +420,16 @@ func (s *Server) adminQuotaUsage(w http.ResponseWriter, r *http.Request) {
 			outputPerM = spec.OutputPerM
 			providerNotice = spec.Notice
 		}
-		usageType := "token"
-		if connectors.GetQuotaSource(a.Provider) != nil {
+		quotaSource := connectors.GetQuotaSource(a.Provider)
+		quotaSupported := quotaSource != nil
+		quotaState := "usage_only"
+		usageType := "token" // Kept for API compatibility; this is not a paid/free classification.
+		if quotaSupported {
 			usageType = "credit"
+			quotaState = "pending"
+			if a.Disabled {
+				quotaState = "paused"
+			}
 		}
 		entry := map[string]any{
 			"id":                 a.ID,
@@ -432,6 +440,8 @@ func (s *Server) adminQuotaUsage(w http.ResponseWriter, r *http.Request) {
 			"priority":           a.Priority,
 			"status":             status,
 			"usage_type":         usageType,
+			"quota_supported":    quotaSupported,
+			"quota_state":        quotaState,
 			"total_requests":     u.TotalRequests,
 			"prompt_tokens":      u.PromptTokens,
 			"completion_tokens":  u.CompletionTokens,
@@ -448,10 +458,19 @@ func (s *Server) adminQuotaUsage(w http.ResponseWriter, r *http.Request) {
 		out = append(out, entry)
 
 		// Fetch upstream quota for providers that support it (e.g. Kiro) concurrently.
-		if qs := connectors.GetQuotaSource(a.Provider); qs != nil && !a.Disabled {
-			if creds, err := s.vault.Open(a); err == nil {
+		if quotaSource != nil && !a.Disabled {
+			// Refresh OAuth access tokens before probing so expired tokens
+			// don't silently suppress the quota/credits detail box. Mirrors
+			// the refresh-then-probe pattern in validateAccountCredentials.
+			quotaAcc := a
+			if s.refresher != nil {
+				if refreshed, rerr := s.refresher.EnsureFresh(ctx, a); rerr == nil {
+					quotaAcc = refreshed
+				}
+			}
+			if creds, err := s.vault.Open(quotaAcc); err == nil {
 				wg.Add(1)
-				go func(idx int, qs connectors.QuotaSource, creds core.Credentials) {
+				go func(target map[string]any, qs connectors.QuotaSource, creds core.Credentials) {
 					defer wg.Done()
 					quotaCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 					quota, qerr := qs.FetchQuota(quotaCtx, creds)
@@ -468,15 +487,22 @@ func (s *Server) adminQuotaUsage(w http.ResponseWriter, r *http.Request) {
 							})
 						}
 
-						mu.Lock()
-						out[idx]["plan_name"] = quota.PlanName
-						out[idx]["message"] = quota.Message
+						target["plan_name"] = quota.PlanName
+						target["message"] = quota.Message
 						if len(quotas) > 0 {
-							out[idx]["upstream_quotas"] = quotas
+							target["quota_state"] = "reported"
+							target["upstream_quotas"] = quotas
+						} else {
+							target["quota_state"] = "unavailable"
 						}
-						mu.Unlock()
+					} else {
+						target["quota_state"] = "error"
+						target["message"] = "Upstream quota could not be refreshed."
 					}
-				}(i, qs, creds)
+				}(entry, quotaSource, creds)
+			} else {
+				entry["quota_state"] = "error"
+				entry["message"] = "Credentials could not be opened for quota refresh."
 			}
 		}
 	}
@@ -596,19 +622,17 @@ func (s *Server) adminCreateProxyPool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SSRF Protection: Validate proxy URL before use
-	if err := httputil.ValidateProxyURL(body.ProxyURL); err != nil {
-		s.log.Warn("blocked suspicious proxy URL", "url", body.ProxyURL, "error", err)
-		writeError(w, http.StatusBadRequest, "invalid proxy_url: URL blocked by security policy")
-		return
-	}
-
 	poolType := body.Type
 	if poolType == "" {
 		poolType = "http"
 	}
 	if !validProxyPoolTypes[poolType] {
 		writeError(w, http.StatusBadRequest, "invalid pool type: must be http, vercel, cloudflare, or deno")
+		return
+	}
+	if err := validateProxyPoolURL(poolType, body.ProxyURL); err != nil {
+		s.log.Warn("blocked invalid proxy URL", "url", body.ProxyURL, "type", poolType, "error", err)
+		writeError(w, http.StatusBadRequest, "invalid proxy_url: "+err.Error())
 		return
 	}
 	active := true
@@ -652,9 +676,18 @@ func (s *Server) adminUpdateProxyPool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Name != nil {
-		pool.Name = *body.Name
+		name := strings.TrimSpace(*body.Name)
+		if name == "" {
+			writeError(w, http.StatusBadRequest, "name cannot be empty")
+			return
+		}
+		pool.Name = name
 	}
 	if body.ProxyURL != nil {
+		if err := validateProxyPoolURL(pool.Type, *body.ProxyURL); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid proxy_url: "+err.Error())
+			return
+		}
 		pool.ProxyURL = *body.ProxyURL
 	}
 	if body.NoProxy != nil {
@@ -672,6 +705,23 @@ func (s *Server) adminUpdateProxyPool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func validateProxyPoolURL(poolType, rawURL string) error {
+	if strings.TrimSpace(rawURL) == "" {
+		return fmt.Errorf("URL is required")
+	}
+	if err := httputil.ValidateProxyURL(rawURL); err != nil {
+		return fmt.Errorf("URL blocked by security policy")
+	}
+	if poolType == "http" {
+		return nil
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("relay URL must use http or https")
+	}
+	return nil
 }
 
 func (s *Server) adminDeleteProxyPool(w http.ResponseWriter, r *http.Request) {
@@ -714,7 +764,7 @@ func (s *Server) adminTestProxyPool(w http.ResponseWriter, r *http.Request) {
 
 	pool.TestStatus = result.status
 	pool.LastError = result.lastError
-	// Preserve current is_active — don't force-enable on test pass.
+	pool.IsActive = result.status == "active"
 	_ = s.pools.Update(r.Context(), pool)
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -726,9 +776,10 @@ func (s *Server) adminTestProxyPool(w http.ResponseWriter, r *http.Request) {
 }
 
 type proxyTestResult struct {
-	status    string
-	lastError string
-	elapsedMS int64
+	status     string
+	lastError  string
+	elapsedMS  int64
+	httpStatus int
 }
 
 // testProxyPoolConnectivity performs a real connectivity check against a proxy
@@ -764,9 +815,9 @@ func testHTTPPool(proxyURL string, timeout time.Duration) proxyTestResult {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return proxyTestResult{status: "error", lastError: fmt.Sprintf("proxy returned HTTP %d", resp.StatusCode), elapsedMS: elapsed}
+		return proxyTestResult{status: "error", lastError: fmt.Sprintf("proxy returned HTTP %d", resp.StatusCode), elapsedMS: elapsed, httpStatus: resp.StatusCode}
 	}
-	return proxyTestResult{status: "active", elapsedMS: elapsed}
+	return proxyTestResult{status: "active", elapsedMS: elapsed, httpStatus: resp.StatusCode}
 }
 
 func testRelayPool(relayURL string, timeout time.Duration) proxyTestResult {
@@ -776,18 +827,39 @@ func testRelayPool(relayURL string, timeout time.Duration) proxyTestResult {
 	if err != nil {
 		return proxyTestResult{status: "error", lastError: err.Error()}
 	}
-	req.Header.Set("x-relay-target", "https://httpbin.org")
-	req.Header.Set("x-relay-path", "/get")
+	req.Header.Set("x-relay-target", "https://echo.free.beeceptor.com")
+	req.Header.Set("x-relay-path", "/")
+	probeID := uuid.NewString()
+	req.Header.Set("x-keirouter-relay-probe", probeID)
 	resp, err := client.Do(req)
 	elapsed := time.Since(start).Milliseconds()
 	if err != nil {
 		return proxyTestResult{status: "error", lastError: err.Error(), elapsedMS: elapsed}
 	}
 	defer resp.Body.Close()
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 400 {
-		return proxyTestResult{status: "error", lastError: fmt.Sprintf("relay returned HTTP %d", resp.StatusCode), elapsedMS: elapsed}
+		return proxyTestResult{status: "error", lastError: fmt.Sprintf("relay returned HTTP %d", resp.StatusCode), elapsedMS: elapsed, httpStatus: resp.StatusCode}
 	}
-	return proxyTestResult{status: "active", elapsedMS: elapsed}
+	if readErr != nil {
+		return proxyTestResult{status: "error", lastError: "could not read relay probe response", elapsedMS: elapsed, httpStatus: resp.StatusCode}
+	}
+	var echoed struct {
+		Headers map[string]any `json:"headers"`
+	}
+	if json.Unmarshal(raw, &echoed) != nil || !relayProbeHeaderMatches(echoed.Headers, probeID) {
+		return proxyTestResult{status: "error", lastError: "relay response did not confirm request forwarding", elapsedMS: elapsed, httpStatus: resp.StatusCode}
+	}
+	return proxyTestResult{status: "active", elapsedMS: elapsed, httpStatus: resp.StatusCode}
+}
+
+func relayProbeHeaderMatches(headers map[string]any, probeID string) bool {
+	for key, value := range headers {
+		if strings.EqualFold(key, "x-keirouter-relay-probe") && fmt.Sprint(value) == probeID {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- skills -----------------------------------------------------------------

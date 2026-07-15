@@ -2,9 +2,33 @@ package pipeline
 
 import (
 	"testing"
+	"time"
 
 	"github.com/mydisha/keirouter/backend/internal/core"
 )
+
+func TestShouldRetryStreamRateLimit(t *testing.T) {
+	tests := []struct {
+		name    string
+		error   *core.ProviderError
+		retries int
+		want    bool
+	}{
+		{name: "transient other provider", error: &core.ProviderError{Kind: core.ErrRateLimit, Provider: "openai"}, want: true},
+		{name: "kiro account limit", error: &core.ProviderError{Kind: core.ErrRateLimit, Provider: "kiro"}, want: false},
+		{name: "explicit reset", error: &core.ProviderError{Kind: core.ErrRateLimit, Provider: "openai", RetryAfter: time.Minute}, want: false},
+		{name: "retry budget exhausted", error: &core.ProviderError{Kind: core.ErrRateLimit, Provider: "openai"}, retries: maxRateLimitRetries, want: false},
+		{name: "not a rate limit", error: &core.ProviderError{Kind: core.ErrUpstream, Provider: "openai"}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldRetryStreamRateLimit(tt.error, tt.retries); got != tt.want {
+				t.Fatalf("shouldRetryStreamRateLimit() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestExtractUsageFromStream_OpenAI(t *testing.T) {
 	// OpenAI format: usage in the last chunk before [DONE].
@@ -49,6 +73,29 @@ data: {"type":"message_stop"}
 	}
 	if usage.CompletionTokens != 15 {
 		t.Errorf("CompletionTokens = %d, want 15", usage.CompletionTokens)
+	}
+}
+
+func TestExtractUsageFromStream_AnthropicIncludesCachedInput(t *testing.T) {
+	raw := []byte(`event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":100,"output_tokens":0,"cache_creation_input_tokens":25,"cache_read_input_tokens":900}}}
+
+event: message_delta
+data: {"type":"message_delta","usage":{"output_tokens":15}}
+`)
+
+	usage := extractUsageFromStream(raw)
+	if usage.PromptTokens != 1025 {
+		t.Errorf("PromptTokens = %d, want 1025", usage.PromptTokens)
+	}
+	if usage.CachedTokens != 900 {
+		t.Errorf("CachedTokens = %d, want 900", usage.CachedTokens)
+	}
+	if usage.CacheWriteTokens != 25 {
+		t.Errorf("CacheWriteTokens = %d, want 25", usage.CacheWriteTokens)
+	}
+	if usage.TotalTokens != 1040 {
+		t.Errorf("TotalTokens = %d, want 1040", usage.TotalTokens)
 	}
 }
 

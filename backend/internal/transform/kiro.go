@@ -105,7 +105,32 @@ func resolveKiroModel(model string) (upstream string, agentic, thinking bool) {
 		thinking = true
 		upstream = strings.TrimSuffix(upstream, kiroThinkingSuffix)
 	}
+	// Normalize dash-formatted version ids ("claude-sonnet-4-5" → "claude-sonnet-4.5").
+	// Registry ids use dots for versions but some clients send dashes instead.
+	upstream = normalizeKiroVersionDashes(upstream)
 	return upstream, agentic, thinking
+}
+
+// normalizeKiroVersionDashes converts hyphens between digits to dots in a model
+// id, so "claude-sonnet-4-5" becomes "claude-sonnet-4.5". Only digit-digit
+// hyphens are touched, so word/suffix hyphens stay intact ("-thinking",
+// "-agentic", "qwen3-coder-next").
+func normalizeKiroVersionDashes(model string) string {
+	var b strings.Builder
+	b.Grow(len(model))
+	for i := 0; i < len(model); i++ {
+		c := model[i]
+		if c == '-' && i > 0 && i < len(model)-1 {
+			prev := model[i-1]
+			next := model[i+1]
+			if prev >= '0' && prev <= '9' && next >= '0' && next <= '9' {
+				b.WriteByte('.')
+				continue
+			}
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 // stripKiroBracketSuffix removes a trailing bracketed annotation like "[1m]"

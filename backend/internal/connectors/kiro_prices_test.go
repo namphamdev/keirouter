@@ -18,17 +18,21 @@ func TestKiroModelPrices_Coverage(t *testing.T) {
 	}
 }
 
-// TestKiroModelPrices_NewClaudeVersions verifies the Sonnet/Opus 4.6–4.8
+// TestKiroModelPrices_NewClaudeVersions verifies the Sonnet/Opus 4.5–4.8
 // variants (and their synthetic suffixes) resolve to the expected retail rates.
 func TestKiroModelPrices_NewClaudeVersions(t *testing.T) {
 	cases := []struct {
 		model              string
 		wantInput, wantOut float64
 	}{
+		{"claude-sonnet-5", 3, 15},
+		{"claude-sonnet-5-thinking-agentic", 3, 15},
 		{"claude-sonnet-4.6", 3, 15},
 		{"claude-sonnet-4.6-thinking-agentic", 3, 15},
 		{"claude-sonnet-4.7", 3, 15},
 		{"claude-sonnet-4.8", 3, 15},
+		{"claude-opus-4.5", 15, 75},
+		{"claude-opus-4.5-thinking", 15, 75},
 		{"claude-opus-4.6", 15, 75},
 		{"claude-opus-4.7-thinking", 15, 75},
 		{"claude-opus-4.8-thinking-agentic", 15, 75},

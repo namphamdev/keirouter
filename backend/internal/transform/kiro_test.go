@@ -1212,3 +1212,24 @@ func TestKiro_RenderRequest_ToolUseMatchesDedupedSpecName(t *testing.T) {
 		t.Fatal("expected an assistant toolUse in history")
 	}
 }
+
+func TestNormalizeKiroVersionDashes(t *testing.T) {
+	cases := []struct {
+		input, want string
+	}{
+		{"claude-sonnet-4-5", "claude-sonnet-4.5"},
+		{"claude-opus-4-7-thinking", "claude-opus-4.7-thinking"},
+		{"claude-sonnet-4-5-thinking-agentic", "claude-sonnet-4.5-thinking-agentic"},
+		{"claude-sonnet-4.5", "claude-sonnet-4.5"},
+		{"qwen3-coder-next", "qwen3-coder-next"},
+		{"deepseek-3-2", "deepseek-3.2"},
+		{"auto", "auto"},
+		{"claude-sonnet-5", "claude-sonnet-5"},
+	}
+	for _, tc := range cases {
+		got := normalizeKiroVersionDashes(tc.input)
+		if got != tc.want {
+			t.Errorf("normalizeKiroVersionDashes(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}

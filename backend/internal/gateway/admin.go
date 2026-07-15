@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -51,6 +52,9 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Post("/accounts/{id}/test", s.adminTestAccount)
 	r.Get("/accounts/{id}/quota", s.adminAccountQuota)
 	r.Post("/accounts/{id}/check-quota", s.adminCheckQuotaScript)
+	r.Get("/accounts/{id}/codex-reset-credits", s.adminCodexResetCredits)
+	r.Post("/accounts/{id}/codex-consume-credit", s.adminCodexConsumeCredit)
+	r.Get("/accounts/{id}/codex-usage-details", s.adminCodexUsageDetails)
 
 	r.Get("/chains", s.adminListChains)
 	r.Post("/chains", s.adminCreateChain)
@@ -71,7 +75,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 
 	r.Get("/usage", s.adminUsageSummary)
 	r.Get("/usage/insights", s.adminUsageInsights)
-	r.Get("/usage/models", s.adminModelUsage)
+	r.Get("/usage/models", s.adminModelUsageAccurate)
 	r.Get("/usage/stream", s.adminUsageStream)
 	r.Get("/quota", s.adminQuotaUsage)
 	r.Get("/health/accounts", s.adminListAccountHealth)
@@ -83,6 +87,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 
 	r.Get("/proxy-pools", s.adminListProxyPools)
 	r.Post("/proxy-pools", s.adminCreateProxyPool)
+	r.Post("/proxy-pools/cloudflare-deploy", s.adminDeployCloudflareRelay)
 	r.Patch("/proxy-pools/{id}", s.adminUpdateProxyPool)
 	r.Delete("/proxy-pools/{id}", s.adminDeleteProxyPool)
 	r.Post("/proxy-pools/{id}/test", s.adminTestProxyPool)
@@ -107,6 +112,7 @@ func (s *Server) mountAdmin(r chi.Router) {
 	r.Post("/settings/access", s.adminUpdateAccessSettings)
 	r.Get("/settings/database", s.adminExportDatabase)
 	r.Post("/settings/database", s.adminImportDatabase)
+	r.Post("/settings/database/import-foreign", s.adminImportForeignConfig)
 	r.Get("/settings/sqlite", s.adminSQLiteStatus)
 	r.Get("/settings/sqlite/backup", s.adminSQLiteBackup)
 	r.Post("/settings/sqlite/restore", s.adminSQLiteRestore)
@@ -173,7 +179,7 @@ func (s *Server) adminListProviders(w http.ResponseWriter, r *http.Request) {
 			"color":         p.Color,
 			"website":       p.Website,
 			"api_key_url":   p.APIKeyURL,
-			"icon":          "/providers/" + p.ID + ".png",
+			"icon":          "/providers/" + providerIconID(p.ID) + ".png",
 			"deprecated":    p.Deprecated,
 			"hidden":        p.Hidden,
 			"pinned":        p.Pinned,
@@ -203,6 +209,19 @@ func (s *Server) adminListProviders(w http.ResponseWriter, r *http.Request) {
 		out = append(out, entry)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"providers": out})
+}
+
+// providerIconID returns the provider ID used for the icon filename. Dynamic
+// (user-created) custom providers inherit the logo of their base type so they
+// show the OpenAI/Anthropic icon instead of a broken image or initials.
+func providerIconID(id string) string {
+	if strings.HasPrefix(id, connectors.CustomOpenAIPrefix) {
+		return "custom-openai"
+	}
+	if strings.HasPrefix(id, connectors.CustomAnthropicPrefix) {
+		return "custom-anthropic"
+	}
+	return id
 }
 
 // webProvider reports whether a provider is served by the web search/fetch
@@ -663,6 +682,10 @@ func (s *Server) adminCreateAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "vault not configured")
 		return
 	}
+	if err := s.validateProxyPoolID(r.Context(), body.ProxyPoolID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	authKind := accountAuthKind(spec, body.APIKey)
 	if authKind != store.AuthNone && strings.TrimSpace(body.APIKey) == "" {
 		writeError(w, http.StatusBadRequest, "api_key is required")
@@ -714,7 +737,7 @@ func (s *Server) adminCreateAccount(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt: now,
 	}
 	if body.ProxyPoolID != "" {
-		acc.ProxyPoolID = body.ProxyPoolID
+		acc.ProxyPoolID = strings.TrimSpace(body.ProxyPoolID)
 	}
 	if err := s.vault.Seal(&acc, vault.NewSecret{APIKey: body.APIKey, Metadata: meta}); err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "vault seal failed"))
@@ -803,6 +826,10 @@ func (s *Server) adminBulkCreateAccounts(w http.ResponseWriter, r *http.Request)
 	}
 	if len(body.Items) > bulkMaxItems {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("too many items: %d (max %d)", len(body.Items), bulkMaxItems))
+		return
+	}
+	if err := s.validateProxyPoolID(r.Context(), body.ProxyPoolID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -906,7 +933,7 @@ func (s *Server) adminBulkCreateAccounts(w http.ResponseWriter, r *http.Request)
 				UpdatedAt: now,
 			}
 			if body.ProxyPoolID != "" {
-				acc.ProxyPoolID = body.ProxyPoolID
+				acc.ProxyPoolID = strings.TrimSpace(body.ProxyPoolID)
 			}
 			if err := s.vault.Seal(&acc, vault.NewSecret{APIKey: key, Metadata: meta}); err != nil {
 				results[i].Status = "error"
@@ -1057,9 +1084,10 @@ func (s *Server) adminUpdateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Label    *string `json:"label"`
-		Priority *int    `json:"priority"`
-		Disabled *bool   `json:"disabled"`
+		Label       *string `json:"label"`
+		Priority    *int    `json:"priority"`
+		Disabled    *bool   `json:"disabled"`
+		ProxyPoolID *string `json:"proxy_pool_id"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -1073,6 +1101,14 @@ func (s *Server) adminUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	if body.Disabled != nil {
 		acc.Disabled = *body.Disabled
 	}
+	if body.ProxyPoolID != nil {
+		poolID := strings.TrimSpace(*body.ProxyPoolID)
+		if err := s.validateProxyPoolID(r.Context(), poolID); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		acc.ProxyPoolID = poolID
+	}
 	if err := s.accounts.Update(r.Context(), acc); err != nil {
 		writeError(w, http.StatusInternalServerError, sanitizeError(s.log, err, "internal server error"))
 		return
@@ -1080,7 +1116,22 @@ func (s *Server) adminUpdateAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": acc.ID, "provider": acc.Provider, "label": acc.Label,
 		"priority": acc.Priority, "disabled": acc.Disabled,
+		"proxy_pool_id": acc.ProxyPoolID,
 	})
+}
+
+func (s *Server) validateProxyPoolID(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	if s.pools == nil {
+		return fmt.Errorf("proxy pools not configured")
+	}
+	if _, err := s.pools.Get(ctx, id); err != nil {
+		return fmt.Errorf("proxy pool not found")
+	}
+	return nil
 }
 
 func (s *Server) adminTestAccount(w http.ResponseWriter, r *http.Request) {
@@ -1171,6 +1222,459 @@ func (s *Server) adminAccountQuota(w http.ResponseWriter, r *http.Request) {
 		"message":   quota.Message,
 		"quotas":    quotas,
 	})
+}
+
+// adminCodexResetCredits fetches available Codex rate-limit reset credits and
+// their expiry details from the ChatGPT backend API. Only valid for Codex
+// (OpenAI) accounts with OAuth credentials.
+func (s *Server) adminCodexResetCredits(w http.ResponseWriter, r *http.Request) {
+	acc, err := s.accounts.Get(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "account not found")
+		return
+	}
+	if acc.Provider != "codex" {
+		writeError(w, http.StatusBadRequest, "only supported for codex accounts")
+		return
+	}
+	if s.vault == nil {
+		writeError(w, http.StatusInternalServerError, "vault not configured")
+		return
+	}
+
+	creds, err := s.vault.Open(acc)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not decrypt credentials")
+		return
+	}
+	if creds.AccessToken == "" {
+		writeError(w, http.StatusBadRequest, "no access token available; re-authorize the connection")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	result, ferr := fetchCodexResetCredits(ctx, creds.AccessToken, creds.Extra)
+	if ferr != nil {
+		writeError(w, http.StatusBadGateway, ferr.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// adminCodexConsumeCredit consumes one Codex rate-limit reset credit. This is
+// irreversible — it permanently spends 1 credit to reset the user's rate limit.
+func (s *Server) adminCodexConsumeCredit(w http.ResponseWriter, r *http.Request) {
+	acc, err := s.accounts.Get(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "account not found")
+		return
+	}
+	if acc.Provider != "codex" {
+		writeError(w, http.StatusBadRequest, "only supported for codex accounts")
+		return
+	}
+	if s.vault == nil {
+		writeError(w, http.StatusInternalServerError, "vault not configured")
+		return
+	}
+
+	var body struct {
+		RedeemRequestID string `json:"redeem_request_id"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if body.RedeemRequestID == "" {
+		writeError(w, http.StatusBadRequest, "redeem_request_id is required")
+		return
+	}
+
+	creds, err := s.vault.Open(acc)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not decrypt credentials")
+		return
+	}
+	if creds.AccessToken == "" {
+		writeError(w, http.StatusBadRequest, "no access token available; re-authorize the connection")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	result, cerr := consumeCodexResetCredit(ctx, creds.AccessToken, body.RedeemRequestID)
+	if cerr != nil {
+		writeError(w, http.StatusBadGateway, cerr.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ---- Codex reset credits helpers --------------------------------------------
+
+const (
+	codexResetCreditsURL        = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+	codexResetCreditsConsumeURL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
+	codexUsageURL               = "https://chatgpt.com/backend-api/wham/usage"
+)
+
+// codexAccountID extracts the ChatGPT account ID from provider metadata.
+func codexAccountID(extra map[string]string) string {
+	if extra == nil {
+		return ""
+	}
+	for _, key := range []string{"workspaceId", "accountId", "chatgptAccountId"} {
+		if v := extra[key]; v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// codexCreditInfo represents a single reset credit with status and expiry.
+type codexCreditInfo struct {
+	RedeemRequestID string `json:"redeem_request_id,omitempty"`
+	Status          string `json:"status"`
+	GrantedAt       string `json:"granted_at,omitempty"`
+	ExpiresAt       string `json:"expires_at,omitempty"`
+}
+
+// codexUsageDetails represents Codex usage information including rate limits and reset credits.
+type codexUsageDetails struct {
+	UsageData    *codexUsageData        `json:"usage_data,omitempty"`
+	ResetCredits *codexResetCreditsData `json:"reset_credits,omitempty"`
+	Error        string                 `json:"error,omitempty"`
+}
+
+type codexUsageData struct {
+	PlanType               string `json:"plan_type"`
+	Allowed                bool   `json:"allowed"`
+	LimitReached           bool   `json:"limit_reached"`
+	PrimaryUsedPercent     int    `json:"primary_used_percent"`
+	PrimaryResetAt         int64  `json:"primary_reset_at"`
+	PrimaryWindowSeconds   int64  `json:"primary_window_seconds"`
+	SecondaryUsedPercent   int    `json:"secondary_used_percent"`
+	SecondaryResetAt       int64  `json:"secondary_reset_at"`
+	SecondaryWindowSeconds int64  `json:"secondary_window_seconds"`
+	CreditsBalance         string `json:"credits_balance"`
+	HasCredits             bool   `json:"has_credits"`
+	Unlimited              bool   `json:"unlimited"`
+	ResetCreditsAvailable  int    `json:"reset_credits_available"`
+}
+
+type codexResetCreditsData struct {
+	AvailableCount int               `json:"available_count"`
+	Credits        []codexCreditInfo `json:"credits"`
+}
+
+// adminCodexUsageDetails fetches both usage data and reset credits for a Codex account.
+func (s *Server) adminCodexUsageDetails(w http.ResponseWriter, r *http.Request) {
+	acc, err := s.accounts.Get(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "account not found")
+		return
+	}
+	if acc.Provider != "codex" {
+		writeError(w, http.StatusBadRequest, "only supported for codex accounts")
+		return
+	}
+	if s.vault == nil {
+		writeError(w, http.StatusInternalServerError, "vault not configured")
+		return
+	}
+
+	creds, err := s.vault.Open(acc)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not decrypt credentials")
+		return
+	}
+	if creds.AccessToken == "" {
+		writeError(w, http.StatusBadRequest, "no access token available; re-authorize the connection")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	// Fetch usage data
+	usageData, usageErr := fetchCodexUsage(ctx, creds.AccessToken, creds.Extra)
+
+	// Fetch reset credits
+	resetCredits, resetErr := fetchCodexResetCredits(ctx, creds.AccessToken, creds.Extra)
+
+	result := codexUsageDetails{}
+
+	if usageErr == nil && usageData != nil {
+		result.UsageData = usageData
+	} else {
+		result.Error = "Failed to fetch usage data"
+		if usageErr != nil {
+			result.Error = usageErr.Error()
+		}
+	}
+
+	if resetErr == nil {
+		result.ResetCredits = &codexResetCreditsData{
+			AvailableCount: resetCredits.AvailableCount,
+			Credits:        resetCredits.Credits,
+		}
+	} else {
+		if result.Error != "" {
+			result.Error += "; Failed to fetch reset credits"
+		} else {
+			result.Error = "Failed to fetch reset credits"
+		}
+		if resetErr != nil {
+			result.Error += ": " + resetErr.Error()
+		}
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// fetchCodexUsage retrieves Codex usage data from the ChatGPT backend API.
+// The wham/usage endpoint returns rate limits as percentage-based windows
+// (primary = 5h rolling, secondary = weekly), plus credits and reset credits.
+func fetchCodexUsage(ctx context.Context, accessToken string, extra map[string]string) (*codexUsageData, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, codexUsageURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("OpenAI-Beta", "codex-1")
+	req.Header.Set("originator", "codex_cli_rs")
+	req.Header.Set("User-Agent", "codex-cli-rs/0.1.0")
+	if accountID := codexAccountID(extra); accountID != "" {
+		req.Header.Set("ChatGPT-Account-ID", accountID)
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("read response: %w", readErr)
+	}
+
+	if resp.StatusCode >= 400 {
+		var errData struct {
+			Message string `json:"message"`
+			Error   string `json:"error"`
+			Detail  string `json:"detail"`
+		}
+		_ = json.Unmarshal(bodyBytes, &errData)
+		msg := errData.Message
+		if msg == "" {
+			msg = errData.Error
+		}
+		if msg == "" {
+			msg = errData.Detail
+		}
+		if msg == "" {
+			msg = fmt.Sprintf("Codex usage API unavailable (%d): %s", resp.StatusCode, string(bodyBytes))
+		}
+		return nil, fmt.Errorf("%s", msg)
+	}
+
+	var raw struct {
+		PlanType  string `json:"plan_type"`
+		RateLimit struct {
+			Allowed       bool `json:"allowed"`
+			LimitReached  bool `json:"limit_reached"`
+			PrimaryWindow struct {
+				UsedPercent        int   `json:"used_percent"`
+				LimitWindowSeconds int64 `json:"limit_window_seconds"`
+				ResetAfterSeconds  int64 `json:"reset_after_seconds"`
+				ResetAt            int64 `json:"reset_at"`
+			} `json:"primary_window"`
+			SecondaryWindow struct {
+				UsedPercent        int   `json:"used_percent"`
+				LimitWindowSeconds int64 `json:"limit_window_seconds"`
+				ResetAfterSeconds  int64 `json:"reset_after_seconds"`
+				ResetAt            int64 `json:"reset_at"`
+			} `json:"secondary_window"`
+		} `json:"rate_limit"`
+		Credits struct {
+			HasCredits bool   `json:"has_credits"`
+			Unlimited  bool   `json:"unlimited"`
+			Balance    string `json:"balance"`
+		} `json:"credits"`
+		RateLimitResetCredits struct {
+			AvailableCount int `json:"available_count"`
+		} `json:"rate_limit_reset_credits"`
+	}
+	if err := json.Unmarshal(bodyBytes, &raw); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	return &codexUsageData{
+		PlanType:               raw.PlanType,
+		Allowed:                raw.RateLimit.Allowed,
+		LimitReached:           raw.RateLimit.LimitReached,
+		PrimaryUsedPercent:     raw.RateLimit.PrimaryWindow.UsedPercent,
+		PrimaryResetAt:         raw.RateLimit.PrimaryWindow.ResetAt,
+		PrimaryWindowSeconds:   raw.RateLimit.PrimaryWindow.LimitWindowSeconds,
+		SecondaryUsedPercent:   raw.RateLimit.SecondaryWindow.UsedPercent,
+		SecondaryResetAt:       raw.RateLimit.SecondaryWindow.ResetAt,
+		SecondaryWindowSeconds: raw.RateLimit.SecondaryWindow.LimitWindowSeconds,
+		CreditsBalance:         raw.Credits.Balance,
+		HasCredits:             raw.Credits.HasCredits,
+		Unlimited:              raw.Credits.Unlimited,
+		ResetCreditsAvailable:  raw.RateLimitResetCredits.AvailableCount,
+	}, nil
+}
+
+// fetchCodexResetCredits retrieves available Codex rate-limit reset credits.
+func fetchCodexResetCredits(ctx context.Context, accessToken string, extra map[string]string) (codexResetCreditsData, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, codexResetCreditsURL, nil)
+	if err != nil {
+		return codexResetCreditsData{}, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("OpenAI-Beta", "codex-1")
+	req.Header.Set("originator", "codex_cli_rs")
+	if accountID := codexAccountID(extra); accountID != "" {
+		req.Header.Set("ChatGPT-Account-ID", accountID)
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return codexResetCreditsData{}, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		AvailableCount  *int `json:"available_count"`
+		AvailableCount2 *int `json:"availableCount"`
+		Credits         []struct {
+			RedeemRequestID  string `json:"redeem_request_id"`
+			RedeemRequestID2 string `json:"redeemRequestId"`
+			Status           string `json:"status"`
+			GrantedAt        any    `json:"granted_at"`
+			GrantedAt2       any    `json:"grantedAt"`
+			ExpiresAt        any    `json:"expires_at"`
+			ExpiresAt2       any    `json:"expiresAt"`
+		} `json:"credits"`
+		Message string `json:"message"`
+		Error   string `json:"error"`
+		Detail  string `json:"detail"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		if resp.StatusCode >= 400 {
+			msg := data.Message
+			if msg == "" {
+				msg = data.Error
+			}
+			if msg == "" {
+				msg = data.Detail
+			}
+			if msg == "" {
+				msg = fmt.Sprintf("Codex reset credits API unavailable (%d)", resp.StatusCode)
+			}
+			return codexResetCreditsData{}, fmt.Errorf("%s", msg)
+		}
+		return codexResetCreditsData{}, fmt.Errorf("decode response: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		msg := data.Message
+		if msg == "" {
+			msg = data.Error
+		}
+		if msg == "" {
+			msg = data.Detail
+		}
+		if msg == "" {
+			msg = fmt.Sprintf("Codex reset credits API unavailable (%d)", resp.StatusCode)
+		}
+		return codexResetCreditsData{}, fmt.Errorf("%s", msg)
+	}
+
+	available := 0
+	if data.AvailableCount != nil {
+		available = *data.AvailableCount
+	} else if data.AvailableCount2 != nil {
+		available = *data.AvailableCount2
+	}
+
+	credits := make([]codexCreditInfo, 0, len(data.Credits))
+	for _, c := range data.Credits {
+		info := codexCreditInfo{
+			RedeemRequestID: c.RedeemRequestID,
+			Status:          defaultStr(c.Status, "unknown"),
+		}
+		if info.RedeemRequestID == "" && c.RedeemRequestID2 != "" {
+			info.RedeemRequestID = c.RedeemRequestID2
+		}
+		if t, ok := c.GrantedAt.(string); ok && t != "" {
+			info.GrantedAt = t
+		} else if t, ok := c.GrantedAt2.(string); ok && t != "" {
+			info.GrantedAt = t
+		}
+		if t, ok := c.ExpiresAt.(string); ok && t != "" {
+			info.ExpiresAt = t
+		} else if t, ok := c.ExpiresAt2.(string); ok && t != "" {
+			info.ExpiresAt = t
+		}
+		credits = append(credits, info)
+	}
+
+	return codexResetCreditsData{
+		AvailableCount: available,
+		Credits:        credits,
+	}, nil
+}
+
+// consumeCodexResetCredit consumes one Codex rate-limit reset credit.
+func consumeCodexResetCredit(ctx context.Context, accessToken, redeemRequestID string) (map[string]any, error) {
+	payload, _ := json.Marshal(map[string]string{
+		"redeem_request_id": redeemRequestID,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, codexResetCreditsConsumeURL,
+		bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		Code         string `json:"code"`
+		WindowsReset int    `json:"windows_reset"`
+		Message      string `json:"message"`
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if len(body) > 0 {
+		_ = json.Unmarshal(body, &data)
+	}
+
+	ok := resp.StatusCode < 400 && (data.Code == "reset" || data.WindowsReset > 0)
+	noCredit := resp.StatusCode < 400 && data.Code == "no_credit"
+
+	return map[string]any{
+		"ok":            ok,
+		"no_credit":     noCredit,
+		"status":        resp.StatusCode,
+		"code":          data.Code,
+		"windows_reset": data.WindowsReset,
+		"message":       data.Message,
+	}, nil
 }
 
 // ---- chains -----------------------------------------------------------------
@@ -2190,7 +2694,8 @@ func (s *Server) adminExportDatabase(w http.ResponseWriter, r *http.Request) {
 	poolsOut := make([]map[string]any, 0, len(pools))
 	for _, p := range pools {
 		poolsOut = append(poolsOut, map[string]any{
-			"name": p.Name, "proxy_url": p.ProxyURL, "no_proxy": p.NoProxy,
+			"id": p.ID, "name": p.Name, "type": p.Type,
+			"proxy_url": p.ProxyURL, "no_proxy": p.NoProxy,
 			"strict": p.Strict, "is_active": p.IsActive,
 		})
 	}
@@ -2371,23 +2876,25 @@ func (s *Server) adminImportDatabase(w http.ResponseWriter, r *http.Request) {
 	// Import proxy pools.
 	if raw, ok := payload["proxy_pools"]; ok {
 		var pools []struct {
+			ID       string `json:"id"`
 			Name     string `json:"name"`
+			Type     string `json:"type"`
 			ProxyURL string `json:"proxy_url"`
 			NoProxy  string `json:"no_proxy"`
 			Strict   bool   `json:"strict"`
-			IsActive bool   `json:"is_active"`
+			IsActive *bool  `json:"is_active"`
 		}
 		if err := json.Unmarshal(raw, &pools); err == nil {
 			for _, p := range pools {
 				now := time.Now()
 				pool := store.ProxyPool{
-					ID:         uuid.NewString(),
+					ID:         defaultStr(p.ID, uuid.NewString()),
 					Name:       p.Name,
-					Type:       "http",
+					Type:       defaultStr(p.Type, "http"),
 					ProxyURL:   p.ProxyURL,
 					NoProxy:    p.NoProxy,
 					Strict:     p.Strict,
-					IsActive:   defaultBool(p.IsActive, true),
+					IsActive:   p.IsActive == nil || *p.IsActive,
 					TestStatus: "unknown",
 					CreatedAt:  now,
 					UpdatedAt:  now,

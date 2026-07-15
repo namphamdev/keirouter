@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, Sparkles } from "lucide-react";
+import { Plus, Pencil, Trash2, Sparkles, AlertTriangle, Loader2, CheckCircle, Search, Copy } from "lucide-react";
 
 import { api, type CustomModel, type CustomModelInput, type Provider } from "../lib/api";
 import { Card, CardHeader, Button, Input, Field, Select, Badge, Modal, EmptyState } from "./ui";
@@ -24,6 +24,32 @@ export function CustomModelsSection({ provider }: { provider: Provider }) {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<CustomModel | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<CustomModel | null>(null);
+
+  const models = customModels.data?.models ?? [];
+
+  // Search + pagination
+  const [searchQuery, setSearchQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const PER_PAGE = 12;
+
+  const filteredModels = useMemo(() => {
+    if (!searchQuery.trim()) return models;
+    const q = searchQuery.toLowerCase();
+    return models.filter(m =>
+      m.id.toLowerCase().includes(q) ||
+      (m.name && m.name.toLowerCase().includes(q)) ||
+      (m.kind && m.kind.toLowerCase().includes(q))
+    );
+  }, [models, searchQuery]);
+
+  useEffect(() => { setPage(1); }, [searchQuery]);
+
+  const totalPages = Math.ceil(filteredModels.length / PER_PAGE);
+  const paginatedModels = filteredModels.slice(
+    (page - 1) * PER_PAGE,
+    page * PER_PAGE,
+  );
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["custom-models", providerId] });
@@ -57,12 +83,11 @@ export function CustomModelsSection({ provider }: { provider: Provider }) {
     mutationFn: (dbId: string) => api.deleteCustomModel(providerId, dbId),
     onSuccess: () => {
       invalidate();
+      setDeleteTarget(null);
       toast.success("Model removed", "The custom model was deleted.");
     },
     onError: (e: Error) => toast.error("Couldn't remove model", e.message),
   });
-
-  const models = customModels.data?.models ?? [];
 
   const openAdd = () => {
     setEditing(null);
@@ -76,13 +101,12 @@ export function CustomModelsSection({ provider }: { provider: Provider }) {
   return (
     <Card>
       <CardHeader
-        title="Custom Models"
-        description="Models you register yourself, beyond the predefined catalog. Use Fetch from /models to import the upstream listing, or add entries manually."
+        title="Custom model registry"
+        description="Add fine-tunes and private upstream models that are not included in the provider catalog."
         action={
-
-          <Button variant="ghost" className="h-8 px-3 text-xs" onClick={openAdd}>
-            <Plus className="h-3.5 w-3.5" />
-            Add model
+          <Button variant="secondary" onClick={openAdd}>
+            <Plus className="h-4 w-4" />
+            Add custom model
           </Button>
         }
       />
@@ -90,54 +114,72 @@ export function CustomModelsSection({ provider }: { provider: Provider }) {
       {models.length === 0 ? (
         <div className="border-t border-[var(--border)] px-6 py-10">
           <EmptyState
-            title="No custom models yet"
-            hint="Add a model id (e.g. my-finetune-v1) to make it routable as ${alias}/<model>."
+            title="No custom models registered"
+            hint={`Add a model ID to route it as ${provider.alias || provider.id}/<model>.`}
           />
         </div>
       ) : (
-        <div className="divide-y divide-[var(--border)] border-t border-[var(--border)]">
-          {models.map((m) => (
-            <div key={m.db_id} className="flex items-center gap-3 px-6 py-3">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-100 text-accent-700 dark:bg-accent-800/40 dark:text-accent-200">
-                <Sparkles className="h-4 w-4" />
+        <>
+          {models.length > 0 && (
+            <div className="flex flex-col gap-3 border-t border-[var(--border)] bg-[var(--bg-subtle)] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+              <div className="relative w-full sm:max-w-md">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
+                <Input
+                  aria-label="Search custom models"
+                  placeholder="Search custom models…"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  className="pl-10"
+                />
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <code className="truncate font-mono text-xs text-[var(--text)]" title={`${provider.alias || provider.id}/${m.id}`}>
-                    {provider.alias || provider.id}/{m.id}
-                  </code>
-                  <Badge tone="accent">custom</Badge>
-                  {m.kind && m.kind !== "llm" && <Badge tone="neutral">{m.kind}</Badge>}
-                </div>
-                <div className="mt-0.5 flex items-center gap-3 text-[10px] text-[var(--text-muted)]">
-                  {m.name && m.name !== m.id && <span className="truncate">{m.name}</span>}
-                  {m.context_window > 0 && <span>{m.context_window.toLocaleString()} ctx</span>}
-                  {(m.input_per_m > 0 || m.output_per_m > 0) && (
-                    <span>
-                      ${m.input_per_m}/${m.output_per_m} per M
-                    </span>
-                  )}
-                </div>
-              </div>
-              <button
-                className="flex h-7 w-7 items-center justify-center rounded text-[var(--text-muted)] transition-colors hover:bg-ink-100 hover:text-[var(--text)] dark:hover:bg-ink-800"
-                title="Edit model"
-                onClick={() => openEdit(m)}
-              >
-                <Pencil className="h-3.5 w-3.5" />
-              </button>
-              <button
-                className="flex h-7 w-7 items-center justify-center rounded text-[var(--text-muted)] transition-colors hover:bg-[color:var(--color-danger)]/10 hover:text-[color:var(--color-danger)]"
-                title="Remove model"
-                onClick={() => {
-                  if (confirm(`Remove custom model "${m.id}"?`)) deleteMut.mutate(m.db_id);
-                }}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
+              <span className="text-sm text-[var(--text-muted)]">
+                {filteredModels.length} of {models.length} {models.length === 1 ? "model" : "models"}
+              </span>
             </div>
-          ))}
-        </div>
+          )}
+          {filteredModels.length === 0 ? (
+            <div className="px-6 py-12 text-center text-sm text-[var(--text-muted)] border-t border-[var(--border)]">
+              No custom models found matching "{searchQuery}"
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 border-t border-[var(--border)] bg-[var(--bg-subtle)] p-4 sm:grid-cols-2 sm:p-5 xl:grid-cols-3">
+              {paginatedModels.map((m) => (
+                <CustomModelCell
+                  key={m.db_id}
+                  model={m}
+                  provider={provider}
+                  onEdit={() => openEdit(m)}
+                  onDelete={() => setDeleteTarget(m)}
+                />
+              ))}
+            </div>
+          )}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between rounded-b-2xl border-t border-[var(--border)] bg-[var(--bg-subtle)] px-6 py-3">
+              <span className="text-xs text-[var(--text-muted)]">
+                Showing {(page - 1) * PER_PAGE + 1} to {Math.min(page * PER_PAGE, filteredModels.length)} of {filteredModels.length} models
+              </span>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  className="h-8 px-2 text-xs"
+                  disabled={page === 1}
+                  onClick={() => setPage((p) => p - 1)}
+                >
+                  Previous
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="h-8 px-2 text-xs"
+                  disabled={page === totalPages}
+                  onClick={() => setPage((p) => p + 1)}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       <CustomModelModal
@@ -156,7 +198,131 @@ export function CustomModelsSection({ provider }: { provider: Provider }) {
           }
         }}
       />
+
+      {/* Delete confirmation dialog */}
+      <Modal
+        open={!!deleteTarget}
+        onClose={() => { if (!deleteMut.isPending) setDeleteTarget(null); }}
+        title={`Remove custom model "${deleteTarget?.id}"?`}
+        subtitle="This model will no longer be routable."
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4 px-6 py-5">
+          <div className="flex items-start gap-3 rounded-xl border border-[color:var(--color-danger)]/30 bg-[color:var(--color-danger)]/10 px-3.5 py-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[color:var(--color-danger)]" strokeWidth={2} />
+            <div className="text-sm leading-snug text-[color:var(--color-danger)]">
+              The model will be unregistered from this provider.
+              <span className="font-semibold"> This action cannot be undone.</span>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              onClick={() => setDeleteTarget(null)}
+              disabled={deleteMut.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => deleteTarget && deleteMut.mutate(deleteTarget.db_id)}
+              disabled={deleteMut.isPending}
+            >
+              {deleteMut.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5" />
+              )}
+              Remove model
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </Card>
+  );
+}
+
+// CustomModelCell renders a single custom model in a hairline grid cell,
+// matching the style of the catalog model list.
+function CustomModelCell({
+  model: m,
+  provider,
+  onEdit,
+  onDelete,
+}: {
+  model: CustomModel;
+  provider: Provider;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const fullModel = `${provider.alias || provider.id}/${m.id}`;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(fullModel);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <article className="group flex min-h-44 flex-col rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--border-strong)] hover:shadow-[var(--shadow-card)]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-100 text-accent-700 dark:bg-accent-800/40 dark:text-accent-200">
+            <Sparkles className="h-4 w-4" />
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge tone="accent">Custom</Badge>
+            <Badge tone="neutral">{m.kind || "Model"}</Badge>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onEdit}
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-subtle)] hover:text-[var(--text)] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50"
+            title="Edit model"
+            aria-label={`Edit ${m.name || m.id}`}
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[color:var(--color-danger)]/10 hover:text-[color:var(--color-danger)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-danger)]/40"
+            title="Remove model"
+            aria-label={`Remove ${m.name || m.id}`}
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-5 min-w-0 flex-1">
+        <h3 className="truncate text-sm font-semibold" title={m.name || m.id}>{m.name || m.id}</h3>
+        <code className="mt-2 block truncate rounded-lg bg-[var(--bg-subtle)] px-2.5 py-2 font-mono text-xs text-[var(--text-muted)]" title={fullModel}>
+          {fullModel}
+        </code>
+      </div>
+
+      <div className="mt-4 flex items-center gap-2 border-t border-[var(--border)] pt-3">
+        {m.context_window > 0 && (
+          <span className="text-xs text-[var(--text-muted)]">{m.context_window.toLocaleString()} context</span>
+        )}
+        {(m.input_per_m > 0 || m.output_per_m > 0) && (
+          <span className="text-xs text-[var(--text-muted)]">${m.input_per_m}/${m.output_per_m} per M</span>
+        )}
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="ml-auto flex h-9 w-9 items-center justify-center rounded-lg text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-subtle)] hover:text-[var(--text)] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400/50"
+          title="Copy model path"
+          aria-label={`Copy model path ${fullModel}`}
+        >
+          {copied ? <CheckCircle className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
+        </button>
+      </div>
+    </article>
   );
 }
 

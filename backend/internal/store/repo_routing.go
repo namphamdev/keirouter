@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -72,6 +73,45 @@ func (r *RoutingRepo) IsModelCooldownActive(ctx context.Context, accountID, mode
 		}
 	}
 	return false, rows.Err()
+}
+
+// ActiveCooldowns returns the set of account IDs (from accountIDs) that have an
+// active model-level cooldown for model or '__all__' at the current time. It
+// batches what would otherwise be one IsModelCooldownActive query per account
+// into a single query per target.
+func (r *RoutingRepo) ActiveCooldowns(ctx context.Context, accountIDs []string, model string) (map[string]bool, error) {
+	out := make(map[string]bool)
+	if len(accountIDs) == 0 {
+		return out, nil
+	}
+
+	placeholders := make([]string, len(accountIDs))
+	args := make([]any, 0, len(accountIDs)+3)
+	for i, id := range accountIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	args = append(args, model, "__all__", formatTime(time.Now()))
+
+	q := r.db.rebind(`SELECT DISTINCT account_id FROM model_cooldowns
+		WHERE account_id IN (` + strings.Join(placeholders, ",") + `)
+		  AND model IN (?, ?)
+		  AND cooldown_until > ?`)
+
+	rows, err := r.db.sql.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: active model cooldowns: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
 }
 
 // ExpireModelCooldowns removes all expired model cooldowns (garbage collection).

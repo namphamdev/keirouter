@@ -119,7 +119,7 @@ function Overview() {
         title="Provider Health"
         description="Monitor the health of every AI provider connected to KeiRouter. See which are failing or slow, why, which routing chains are affected, and what to do next."
         action={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <SegmentedControl value={range} onChange={setRange} options={RANGES} />
             <button
               onClick={() => overview.refetch()}

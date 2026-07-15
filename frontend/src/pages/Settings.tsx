@@ -6,7 +6,7 @@ import {
   Gauge, Eye, EyeOff, KeyRound, Download, Upload, ShieldCheck, Info,
   Palette, Shield,
 } from "lucide-react";
-import { api, type EndpointSettings, type BrandingSettings, type HeadroomTestResult } from "../lib/api";
+import { api, type EndpointSettings, type BrandingSettings, type HeadroomTestResult, type ForeignImportResult } from "../lib/api";
 import { ChangelogMarkdown } from "../components/ChangelogMarkdown";
 import { PALETTES, getPaletteScales } from "../lib/palettes";
 import { applyShadeScale, generateShades } from "../lib/color-utils";
@@ -19,14 +19,15 @@ import {
 } from "../components/ui";
 
 // ── Tab definitions ─────────────────────────────────────────────────
-type SettingsTab = "saving" | "routing" | "network" | "branding" | "system";
+type SettingsTab = "saving" | "routing" | "network" | "branding" | "import-export" | "system";
 
 const settingsTabs = [
   { value: "saving" as const, label: "Token Saving", icon: Zap },
   { value: "routing" as const, label: "Routing", icon: Route },
   { value: "network" as const, label: "Network", icon: Gauge },
   { value: "branding" as const, label: "Branding", icon: Palette },
-  { value: "system" as const, label: "System", icon: Database },
+  { value: "import-export" as const, label: "Import / Export", icon: Database },
+  { value: "system" as const, label: "System", icon: ArrowUpCircle },
 ];
 
 function useHashTab(defaultTab: SettingsTab): [SettingsTab, (t: SettingsTab) => void] {
@@ -152,6 +153,7 @@ export function SettingsPage() {
             {tab === "routing" && <RoutingTab local={local} update={update} />}
             {tab === "network" && <NetworkTab local={local} update={update} />}
             {tab === "branding" && <BrandingTab />}
+            {tab === "import-export" && <ImportExportTab />}
             {tab === "system" && <SystemTab />}
           </div>
 
@@ -1138,11 +1140,20 @@ function BrandingTab() {
   );
 }
 
+// ── Import / Export Tab ─────────────────────────────────────────────
+function ImportExportTab() {
+  return (
+    <div className="space-y-4">
+      <ForeignImportSettings />
+      <DatabaseSettings />
+    </div>
+  );
+}
+
 // ── System Tab ──────────────────────────────────────────────────────
 function SystemTab() {
   return (
     <div className="space-y-4">
-      <DatabaseSettings />
       <UpdatesSettings />
     </div>
   );
@@ -1206,6 +1217,165 @@ function strengthOf(pass: string): { label: string; tone: "muted" | "weak" | "ok
   if (score <= 2) return { label: "Weak — short or simple", tone: "weak", pct: 33 };
   if (score <= 3) return { label: "OK — could be stronger", tone: "ok", pct: 66 };
   return { label: "Strong", tone: "strong", pct: 100 };
+}
+
+function ForeignImportSettings() {
+  const toast = useToast();
+  const import9rRef = useRef<HTMLInputElement>(null);
+  const importOmniRef = useRef<HTMLInputElement>(null);
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<ForeignImportResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const runImport = async (source: "9router" | "omniroute", file: File) => {
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const raw = await file.text();
+      const config = JSON.parse(raw);
+      const res = await api.importForeignConfig(source, config);
+      setResult(res);
+      const parts: string[] = [];
+      if (res.accounts) parts.push(`${res.accounts} account${res.accounts === 1 ? "" : "s"}`);
+      if (res.custom_providers) parts.push(`${res.custom_providers} provider${res.custom_providers === 1 ? "" : "s"}`);
+      if (res.api_keys) parts.push(`${res.api_keys} key${res.api_keys === 1 ? "" : "s"}`);
+      if (res.chains) parts.push(`${res.chains} chain${res.chains === 1 ? "" : "s"}`);
+      if (res.aliases) parts.push(`${res.aliases} alias${res.aliases === 1 ? "" : "es"}`);
+      if (res.proxy_pools) parts.push(`${res.proxy_pools} pool${res.proxy_pools === 1 ? "" : "s"}`);
+      const summary = parts.length ? parts.join(", ") : "nothing";
+      toast.success(
+        `${source === "9router" ? "9router" : "OmniRoute"} import complete`,
+        `${res.imported} record${res.imported === 1 ? "" : "s"} imported (${summary}).${res.skipped ? ` ${res.skipped} skipped.` : ""}`,
+      );
+    } catch (e) {
+      setError((e as Error).message || "Import failed.");
+      toast.error("Import failed", (e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handle9rFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) void runImport("9router", file);
+    if (import9rRef.current) import9rRef.current.value = "";
+  };
+
+  const handleOmniFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) void runImport("omniroute", file);
+    if (importOmniRef.current) importOmniRef.current.value = "";
+  };
+
+  return (
+    <Card>
+      <SectionHeader
+        title="Import from other routers"
+        description="Migrate providers, keys, and routing chains from a 9router or OmniRoute backup. Imports are additive — existing data is kept."
+        icon={Upload}
+      />
+      <div className="grid gap-4 border-t border-[var(--border)] px-6 py-4 sm:grid-cols-2">
+        {/* 9router */}
+        <div className="flex flex-col gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-accent-100 text-xs font-bold text-accent-700 dark:bg-accent-900/40 dark:text-accent-200">
+              9R
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-[var(--text)]">9router backup</p>
+              <p className="text-[11px] text-[var(--text-muted)]">Full credential transfer</p>
+            </div>
+          </div>
+          <p className="text-xs leading-relaxed text-[var(--text-muted)]">
+            Imports provider connections (API keys &amp; OAuth tokens re-sealed), custom provider nodes, API keys
+            (re-hashed — same key string keeps working), combos (→ chains), proxy pools, and model aliases.
+          </p>
+          <Button variant="ghost" onClick={() => import9rRef.current?.click()} disabled={loading} className="w-full">
+            <Upload className="h-4 w-4" />
+            Select 9router backup JSON
+          </Button>
+          <input
+            ref={import9rRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={handle9rFile}
+          />
+        </div>
+
+        {/* OmniRoute */}
+        <div className="flex flex-col gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-secondary-100 text-xs font-bold text-secondary-700 dark:bg-secondary-900/40 dark:text-secondary-200">
+              OR
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-[var(--text)]">OmniRoute backup</p>
+              <p className="text-[11px] text-[var(--text-muted)]">Structural import (creds redacted)</p>
+            </div>
+          </div>
+          <p className="text-xs leading-relaxed text-[var(--text-muted)]">
+            OmniRoute JSON exports redact credentials, so accounts are imported as disabled stubs — re-authenticate after
+            import. Custom provider nodes, combos (→ chains), proxy pools, and aliases transfer fully. API keys must be
+            re-created.
+          </p>
+          <Button variant="ghost" onClick={() => importOmniRef.current?.click()} disabled={loading} className="w-full">
+            <Upload className="h-4 w-4" />
+            Select OmniRoute backup JSON
+          </Button>
+          <input
+            ref={importOmniRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={handleOmniFile}
+          />
+        </div>
+      </div>
+
+      {error && (
+        <div className="border-t border-[var(--border)] px-6 pb-4">
+          <ErrorBanner message={error} />
+        </div>
+      )}
+
+      {result && (
+        <div className="space-y-3 border-t border-[var(--border)] px-6 py-4">
+          <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs">
+            <Stat label="Accounts" value={result.accounts} />
+            <Stat label="Custom providers" value={result.custom_providers} />
+            <Stat label="API keys" value={result.api_keys} />
+            <Stat label="Chains" value={result.chains} />
+            <Stat label="Aliases" value={result.aliases} />
+            <Stat label="Proxy pools" value={result.proxy_pools} />
+            <Stat label="Skipped" value={result.skipped} muted />
+          </div>
+          {result.errors && result.errors.length > 0 && (
+            <details className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2">
+              <summary className="cursor-pointer text-xs font-medium text-[var(--text-muted)]">
+                {result.errors.length} warning{result.errors.length === 1 ? "" : "s"}
+              </summary>
+              <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-[11px] text-[var(--text-muted)]">
+                {result.errors.map((e, i) => (
+                  <li key={i} className="font-mono break-all">{e}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function Stat({ label, value, muted }: { label: string; value: number; muted?: boolean }) {
+  return (
+    <div>
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">{label}</span>{" "}
+      <span className={`font-mono text-sm ${muted ? "text-[var(--text-muted)]" : "text-[var(--text)]"}`}>{value}</span>
+    </div>
+  );
 }
 
 function DatabaseSettings() {

@@ -463,6 +463,12 @@ func renderOAIRequestForProvider(req *core.ChatRequest, providerID string, scope
 	if isDeepSeekTarget(providerID, req.Model) {
 		applyDeepSeekRequestFixes(out, req, providerID)
 	}
+	if providerID == "codebuddy" {
+		applyCodebuddyRequestFixes(out, req)
+	}
+	if providerID == "kimchi" {
+		stripReasoningContent(out)
+	}
 	return json.Marshal(out)
 }
 
@@ -528,6 +534,27 @@ func applyDeepSeekRequestFixes(out *oaiRequest, req *core.ChatRequest, providerI
 	applyDeepSeekThinking(out, req, providerID)
 	normalizeDeepSeekToolMessages(out.Messages)
 	out.Messages = fillMissingDeepSeekToolResponses(out.Messages)
+}
+
+// applyCodebuddyRequestFixes handles CodeBuddy-specific reasoning_effort
+// semantics. CodeBuddy only surfaces model reasoning when the request carries
+// OpenAI-style reasoning_effort + reasoning_summary:"auto". When reasoning is
+// "none"/"off" the fields are omitted entirely.
+func applyCodebuddyRequestFixes(out *oaiRequest, req *core.ChatRequest) {
+	if req.Reasoning == nil {
+		return
+	}
+	effort := strings.ToLower(req.Reasoning.Effort)
+	if effort == "none" || effort == "off" {
+		out.ReasoningEffort = ""
+		return
+	}
+	if out.ReasoningEffort != "" {
+		if out.ExtraBody == nil {
+			out.ExtraBody = map[string]any{}
+		}
+		out.ExtraBody["reasoning_summary"] = "auto"
+	}
 }
 
 func applyDeepSeekThinking(out *oaiRequest, req *core.ChatRequest, providerID string) {
@@ -660,6 +687,30 @@ func deepSeekToolCallIDs(msg oaiMessage) []string {
 		}
 	}
 	return ids
+}
+
+// reasoningPlaceholderMaxLen is the threshold below which reasoning_content is
+// treated as a placeholder and left intact. The injected placeholder is a single
+// space (" "); stripping it would re-trigger upstream complaints about missing
+// reasoning_content on the next turn. Real chain-of-thought blocks exceed this
+// length and are stripped to bound multi-turn input token growth.
+const reasoningPlaceholderMaxLen = 8
+
+// stripReasoningContent removes echoed reasoning_content from assistant messages
+// in the outgoing request. Clients replay the full reasoning block from prior
+// turns, which inflates input tokens on multi-turn conversations. Only real
+// reasoning (length > reasoningPlaceholderMaxLen) is stripped; the minimal
+// placeholder injected for upstream validation is preserved.
+func stripReasoningContent(out *oaiRequest) {
+	for i := range out.Messages {
+		msg := &out.Messages[i]
+		if msg.Role != string(core.RoleAssistant) {
+			continue
+		}
+		if len(msg.ReasoningContent) > reasoningPlaceholderMaxLen {
+			msg.ReasoningContent = ""
+		}
+	}
 }
 
 func hasDeepSeekToolResult(msg oaiMessage, id string) bool {
@@ -819,6 +870,9 @@ type oaiUsage struct {
 	PromptTokensDetails *struct {
 		CachedTokens int `json:"cached_tokens"`
 	} `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details,omitempty"`
 }
 
 func (c OpenAICodec) ParseResponse(body []byte, model string) (*core.ChatResponse, error) {
@@ -887,15 +941,20 @@ func (OpenAICodec) buildResponse(raw oaiResponse, model string) (*core.ChatRespo
 		FinishReason: mapOAIFinish(choice.FinishReason),
 	}
 	if raw.Usage != nil {
-		var cached int
+		var cached, reasoning int
 		if raw.Usage.PromptTokensDetails != nil {
 			cached = raw.Usage.PromptTokensDetails.CachedTokens
+		}
+		if raw.Usage.CompletionTokensDetails != nil {
+			reasoning = raw.Usage.CompletionTokensDetails.ReasoningTokens
 		}
 		resp.Usage = core.Usage{
 			PromptTokens:     raw.Usage.PromptTokens,
 			CompletionTokens: raw.Usage.CompletionTokens,
 			TotalTokens:      raw.Usage.TotalTokens,
 			CachedTokens:     cached,
+			ReasoningTokens:  reasoning,
+			Source:           core.UsageSourceProvider,
 		}
 	}
 	return resp, nil

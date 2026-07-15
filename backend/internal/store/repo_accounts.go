@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -74,6 +75,41 @@ func (r *AccountRepo) ListByProvider(ctx context.Context, tenantID, provider str
 		WHERE tenant_id = ? AND provider = ? AND disabled = 0
 		ORDER BY priority ASC, created_at ASC`)
 	return r.queryList(ctx, q, tenantID, provider)
+}
+
+// ListByProviders returns enabled accounts for multiple providers in one query.
+// Providers are de-duplicated before building the IN clause so fallback chains
+// with several models on the same provider do not add redundant placeholders.
+func (r *AccountRepo) ListByProviders(ctx context.Context, tenantID string, providers []string) ([]Account, error) {
+	unique := make([]string, 0, len(providers))
+	seen := make(map[string]struct{}, len(providers))
+	for _, provider := range providers {
+		if provider == "" {
+			continue
+		}
+		if _, ok := seen[provider]; ok {
+			continue
+		}
+		seen[provider] = struct{}{}
+		unique = append(unique, provider)
+	}
+	if len(unique) == 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(unique))
+	args := make([]any, 0, len(unique)+1)
+	args = append(args, tenantID)
+	for i, provider := range unique {
+		placeholders[i] = "?"
+		args = append(args, provider)
+	}
+
+	q := r.db.rebind(`SELECT ` + accountColumns + `
+		FROM accounts
+		WHERE tenant_id = ? AND provider IN (` + strings.Join(placeholders, ", ") + `) AND disabled = 0
+		ORDER BY provider ASC, priority ASC, created_at ASC`)
+	return r.queryList(ctx, q, args...)
 }
 
 // ListByTenant returns all accounts for a tenant.
@@ -147,6 +183,22 @@ func (r *AccountRepo) ClearProviderCooldowns(ctx context.Context, tenantID, prov
 }
 
 // Delete removes an account.
+// DisableByProvider marks every account bound to the given provider as
+// disabled and clears any active cooldown. It is used when a custom provider
+// is deleted so leftover credentials cannot be selected for routing and the
+// dashboard reflects the severed connection. Returns the number of accounts
+// touched. Already-disabled accounts are included so the count reflects total
+// rows matched, but only previously-enabled ones change state.
+func (r *AccountRepo) DisableByProvider(ctx context.Context, tenantID, provider string) (int64, error) {
+	q := r.db.rebind(`UPDATE accounts SET disabled = 1, cooldown_until = NULL WHERE tenant_id = ? AND provider = ?`)
+	res, err := r.db.sql.ExecContext(ctx, q, tenantID, provider)
+	if err != nil {
+		return 0, fmt.Errorf("store: disable accounts by provider: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 func (r *AccountRepo) Delete(ctx context.Context, id string) error {
 	q := r.db.rebind(`DELETE FROM accounts WHERE id = ?`)
 	_, err := r.db.sql.ExecContext(ctx, q, id)

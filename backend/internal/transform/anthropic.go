@@ -44,6 +44,10 @@ type antBlock struct {
 	Content   json.RawMessage `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
 	Source    *antImageSource `json:"source,omitempty"`
+	// Signature is the cryptographic proof tag for thinking blocks that must be
+	// echoed back to the upstream on the next turn. Only the originating provider's
+	// signatures are valid; foreign ones (from combo-mixed models) are rejected.
+	Signature string `json:"signature,omitempty"`
 }
 
 type antImageSource struct {
@@ -92,7 +96,34 @@ func (AnthropicCodec) ParseRequest(body []byte) (*core.ChatRequest, error) {
 	for _, m := range raw.Messages {
 		req.Messages = append(req.Messages, parseAntMessage(m))
 	}
+
+	// Parse thinking configuration from the raw body (before unmarshaling)
+	req.Reasoning = parseAntThinkingFromBytes(body)
+
 	return req, nil
+}
+
+// parseAntThinkingFromBytes extracts thinking configuration from raw JSON bytes.
+// This is called before the antRequest struct is unmarshaled to capture the
+// thinking field which is not part of the antRequest struct.
+func parseAntThinkingFromBytes(body []byte) *core.ReasoningConfig {
+	var thinkingWrapper struct {
+		Thinking *struct {
+			Type         string `json:"type"`
+			BudgetTokens int    `json:"budget_tokens,omitempty"`
+		} `json:"thinking"`
+	}
+	if err := json.Unmarshal(body, &thinkingWrapper); err == nil && thinkingWrapper.Thinking != nil {
+		cfg := &core.ReasoningConfig{}
+		if thinkingWrapper.Thinking.Type == "enabled" {
+			cfg.Effort = "high"
+			if thinkingWrapper.Thinking.BudgetTokens > 0 {
+				cfg.MaxTokens = thinkingWrapper.Thinking.BudgetTokens
+			}
+		}
+		return cfg
+	}
+	return nil
 }
 
 func decodeAntSystem(raw json.RawMessage) string {
@@ -201,11 +232,34 @@ func mapAntRole(role string) core.Role {
 
 // ---- request rendering ------------------------------------------------------
 
+// antDefaultMaxOutput is the conservative output ceiling for Claude models.
+const antDefaultMaxOutput = 64000
+
 func (AnthropicCodec) RenderRequest(req *core.ChatRequest) ([]byte, error) {
 	maxTokens := 4096
 	if req.MaxTokens != nil && *req.MaxTokens > 0 {
 		maxTokens = *req.MaxTokens
 	}
+
+	// Reconcile max_tokens against thinking budget. Anthropic requires
+	// max_tokens strictly greater than budget_tokens (else 400). Prefer raising
+	// max_tokens to preserve the requested thinking depth; if the budget alone
+	// meets/exceeds the ceiling, cap output and shrink the budget so some tokens
+	// remain for the answer.
+	ceiling := antDefaultMaxOutput
+	if req.Reasoning != nil && req.Reasoning.MaxTokens > 0 {
+		budgetTokens := req.Reasoning.MaxTokens
+		if budgetTokens >= maxTokens {
+			// Raise max_tokens to preserve thinking depth (up to ceiling)
+			maxTokens = min(budgetTokens+1024, ceiling)
+			if budgetTokens >= maxTokens {
+				// Budget exceeds ceiling; shrink budget so 1024 tokens remain for answer
+				// Note: We don't mutate req.Reasoning, the reconciliation happens at render time
+				budgetTokens = max(1024, maxTokens-1024)
+			}
+		}
+	}
+
 	out := antRequest{
 		Model:     req.Model,
 		MaxTokens: maxTokens,
@@ -262,6 +316,9 @@ func renderAntBlocks(m core.Message) []antBlock {
 	for _, p := range m.Content {
 		switch p.Type {
 		case core.PartText:
+			if p.Text == "" {
+				continue
+			}
 			blocks = append(blocks, antBlock{Type: "text", Text: p.Text})
 		case core.PartThinking:
 			blocks = append(blocks, antBlock{Type: "thinking", Text: p.Text})
@@ -297,7 +354,7 @@ func renderAntBlocks(m core.Message) []antBlock {
 		}
 	}
 	if len(blocks) == 0 {
-		blocks = append(blocks, antBlock{Type: "text", Text: ""})
+		blocks = append(blocks, antBlock{Type: "text", Text: " "})
 	}
 	return blocks
 }
@@ -382,11 +439,13 @@ func (AnthropicCodec) ParseResponse(body []byte, model string) (*core.ChatRespon
 		Message:      msg,
 		FinishReason: mapAntStop(raw.StopReason),
 		Usage: core.Usage{
-			PromptTokens:     raw.Usage.InputTokens,
+			PromptTokens:     raw.Usage.InputTokens + raw.Usage.CacheReadInputTokens + raw.Usage.CacheCreationInputTokens,
 			CompletionTokens: raw.Usage.OutputTokens,
-			TotalTokens:      raw.Usage.InputTokens + raw.Usage.OutputTokens,
+			TotalTokens: raw.Usage.InputTokens + raw.Usage.CacheReadInputTokens +
+				raw.Usage.CacheCreationInputTokens + raw.Usage.OutputTokens,
 			CachedTokens:     raw.Usage.CacheReadInputTokens,
 			CacheWriteTokens: raw.Usage.CacheCreationInputTokens,
+			Source:           core.UsageSourceProvider,
 		},
 	}, nil
 }

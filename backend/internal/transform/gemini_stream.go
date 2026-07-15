@@ -24,6 +24,7 @@ type gemStreamChunk struct {
 	UsageMetadata *struct {
 		PromptTokenCount        int `json:"promptTokenCount"`
 		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
 		TotalTokenCount         int `json:"totalTokenCount"`
 		CachedContentTokenCount int `json:"cachedContentTokenCount"`
 	} `json:"usageMetadata"`
@@ -44,11 +45,12 @@ func (GeminiCodec) ParseStreamLine(line []byte, _ string) ([]core.StreamChunk, e
 	var chunks []core.StreamChunk
 	if len(raw.Candidates) > 0 {
 		cand := raw.Candidates[0]
-		for _, p := range cand.Content.Parts {
+		for partIdx, p := range cand.Content.Parts {
 			switch {
 			case p.FunctionCall != nil:
 				chunks = append(chunks, core.StreamChunk{
-					Type: core.ChunkToolCall,
+					Type:  core.ChunkToolCall,
+					Index: partIdx,
 					ToolCall: &core.ToolCall{
 						ID:        geminiCallID(p.FunctionCall.Name),
 						Name:      p.FunctionCall.Name,
@@ -69,13 +71,19 @@ func (GeminiCodec) ParseStreamLine(line []byte, _ string) ([]core.StreamChunk, e
 	}
 
 	if raw.UsageMetadata != nil {
+		completionTokens := raw.UsageMetadata.CandidatesTokenCount + raw.UsageMetadata.ThoughtsTokenCount
+		if completionTokens == 0 && raw.UsageMetadata.TotalTokenCount > raw.UsageMetadata.PromptTokenCount {
+			completionTokens = raw.UsageMetadata.TotalTokenCount - raw.UsageMetadata.PromptTokenCount
+		}
 		chunks = append(chunks, core.StreamChunk{
 			Type: core.ChunkUsage,
 			Usage: &core.Usage{
 				PromptTokens:     raw.UsageMetadata.PromptTokenCount,
-				CompletionTokens: raw.UsageMetadata.CandidatesTokenCount,
+				CompletionTokens: completionTokens,
 				TotalTokens:      raw.UsageMetadata.TotalTokenCount,
 				CachedTokens:     raw.UsageMetadata.CachedContentTokenCount,
+				ReasoningTokens:  raw.UsageMetadata.ThoughtsTokenCount,
+				Source:           core.UsageSourceProvider,
 			},
 		})
 	}

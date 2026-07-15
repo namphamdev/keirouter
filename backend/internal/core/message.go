@@ -17,6 +17,9 @@ const (
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
 	RoleTool      Role = "tool"
+	// RoleDeveloper is the OpenAI Responses API's "developer" role for GPT-5/Codex
+	// system-level prompts. Treated as system internally.
+	RoleDeveloper Role = "developer"
 )
 
 // PartType discriminates the kind of content carried by a ContentPart.
