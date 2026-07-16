@@ -1388,6 +1388,11 @@ function AccountRow({
             <p className="break-words text-[11px] leading-relaxed text-red-600/90 dark:text-red-400/90">
               {quotaScriptOutput.error}
             </p>
+          ) : typeof quotaScriptOutput.output === "string" ? (
+            <div
+              className="overflow-x-auto rounded bg-[var(--bg)] p-2 text-[11px] leading-relaxed text-[var(--text)] [&_a]:text-accent-600 [&_a]:underline [&_code]:rounded [&_code]:bg-[var(--bg-subtle)] [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_pre]:overflow-x-auto [&_pre]:font-mono [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-[var(--border)] [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-[var(--border)] [&_th]:px-2 [&_th]:py-1 [&_th]:text-left"
+              dangerouslySetInnerHTML={{ __html: quotaScriptOutput.output }}
+            />
           ) : (
             <pre className="overflow-x-auto rounded bg-[var(--bg)] p-2 font-mono text-[11px] leading-relaxed text-[var(--text)]">
               {JSON.stringify(quotaScriptOutput.output, null, 2)}
