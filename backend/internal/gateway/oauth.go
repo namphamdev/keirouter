@@ -476,11 +476,11 @@ func (s *Server) clearStaleProviderCooldowns(ctx context.Context, tenantID, prov
 
 // oauthLabel derives a human label for an OAuth account.
 func oauthLabel(provider string, tokens *oauth.Tokens) string {
-	if tokens.DisplayName != "" {
-		return tokens.DisplayName
-	}
 	if tokens.Email != "" {
 		return tokens.Email
+	}
+	if tokens.DisplayName != "" {
+		return tokens.DisplayName
 	}
 	return provider + " (oauth)"
 }
