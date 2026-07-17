@@ -16,9 +16,11 @@ const (
 )
 
 // KeepAlive runs a background loop that proactively refreshes near-expiry
-// OAuth access tokens. It prevents request-time latency from just-in-time
-// refresh and detects expired refresh tokens early so the dashboard can show
-// a "Reconnect" prompt.
+// OAuth access tokens, including accounts that are currently disabled.
+// Disabled accounts are still refreshed so re-enabling them later (for
+// example after weekly quota reset) does not require a full re-login.
+// It also prevents request-time latency from just-in-time refresh and detects
+// expired refresh tokens early so the dashboard can show a "Reconnect" prompt.
 type KeepAlive struct {
 	interval time.Duration
 	tokenMgr *TokenManager
@@ -68,7 +70,8 @@ func (k *KeepAlive) Run(ctx context.Context) {
 }
 
 // refreshAll lists all OAuth accounts for the tenant and refreshes those that
-// are near expiry. Failures are logged but do not stop the loop.
+// are near expiry. Disabled accounts are included so tokens stay warm while
+// they are parked (e.g. quota rest). Failures are logged but do not stop the loop.
 func (k *KeepAlive) refreshAll(ctx context.Context) {
 	accs, err := k.accounts.ListByTenant(ctx, k.tenantID)
 	if err != nil {
@@ -79,9 +82,6 @@ func (k *KeepAlive) refreshAll(ctx context.Context) {
 	var refreshed, skipped, failed, reconnect int
 	for _, acc := range accs {
 		if acc.AuthKind != store.AuthOAuth {
-			continue
-		}
-		if acc.Disabled {
 			continue
 		}
 		// Already flagged for reconnection; skip until the user re-authenticates.
@@ -101,6 +101,7 @@ func (k *KeepAlive) refreshAll(ctx context.Context) {
 			k.log.Warn("oauth keepalive: refresh failed",
 				"account", acc.ID,
 				"provider", acc.Provider,
+				"disabled", acc.Disabled,
 				"err", err,
 			)
 			continue
@@ -109,6 +110,7 @@ func (k *KeepAlive) refreshAll(ctx context.Context) {
 		k.log.Debug("oauth keepalive: refreshed",
 			"account", acc.ID,
 			"provider", acc.Provider,
+			"disabled", acc.Disabled,
 		)
 	}
 
