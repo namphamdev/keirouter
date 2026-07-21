@@ -29,7 +29,7 @@ func TestSpecByAlias(t *testing.T) {
 func TestSpecsByKind(t *testing.T) {
 	cases := map[core.ServiceKind][]string{
 		core.ServiceImage:  {"nanobanana", "fal-ai", "stability-ai"},
-		core.ServiceSTT:    {"deepgram", "assemblyai", "groq"},
+		core.ServiceSTT:    {"deepgram", "assemblyai", "groq", "xai"},
 		core.ServiceTTS:    {"elevenlabs", "inworld"},
 		core.ServiceSearch: {"tavily", "brave-search", "serper", "exa"},
 		core.ServiceFetch:  {"firecrawl", "exa", "tavily"},

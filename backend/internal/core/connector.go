@@ -102,6 +102,41 @@ type TranscriptionConnector interface {
 	Transcribe(ctx context.Context, req *TranscriptionRequest, creds Credentials) (*TranscriptionResponse, error)
 }
 
+// StreamMessageType is the frame type on a bidirectional media stream
+// (WebSocket text vs binary).
+type StreamMessageType int
+
+const (
+	// StreamMessageText is a UTF-8 JSON/text frame.
+	StreamMessageText StreamMessageType = iota
+	// StreamMessageBinary is a raw binary frame (e.g. PCM audio).
+	StreamMessageBinary
+)
+
+// StreamConn is a bidirectional stream used for realtime media (e.g. STT
+// WebSocket). Implementations must be safe for one concurrent reader and one
+// concurrent writer; Close is safe from either side.
+type StreamConn interface {
+	Read(ctx context.Context) (StreamMessageType, []byte, error)
+	Write(ctx context.Context, typ StreamMessageType, data []byte) error
+	// Close terminates the stream. code/reason are advisory for protocols that
+	// support close frames (WebSocket); empty reason is fine.
+	Close(code int, reason string) error
+}
+
+// StreamingTranscriptionRequest configures a realtime speech-to-text session.
+// Params mirror upstream query parameters (language, sample_rate, keyterm, …).
+type StreamingTranscriptionRequest struct {
+	Model  string
+	Params map[string][]string
+}
+
+// StreamingTranscriptionConnector is implemented by providers that stream
+// speech-to-text over a bidirectional connection (typically WebSocket).
+type StreamingTranscriptionConnector interface {
+	DialTranscriptionStream(ctx context.Context, req *StreamingTranscriptionRequest, creds Credentials) (StreamConn, error)
+}
+
 // SpeechConnector is implemented by providers that synthesize speech
 // (text-to-speech).
 type SpeechConnector interface {

@@ -286,7 +286,7 @@ func apiKeyProviders() []ProviderSpec {
 			InputPerM: 0.59, OutputPerM: 0.79},
 		{ID: "xai", DisplayName: "xAI (Grok)", Alias: "xai", Dialect: core.DialectOpenAI,
 			BaseURL: "https://api.x.ai/v1", AuthKind: "api_key", AuthModes: []string{"oauth", "api_key"},
-			ServiceKinds: llm(core.ServiceSearch, core.ServiceImage), Color: "#1DA1F2", Website: "https://x.ai",
+			ServiceKinds: llm(core.ServiceSearch, core.ServiceImage, core.ServiceSTT), Color: "#1DA1F2", Website: "https://x.ai",
 			APIKeyURL: "https://console.x.ai"},
 		{ID: "mistral", DisplayName: "Mistral", Alias: "mistral", Dialect: core.DialectOpenAI,
 			BaseURL: "https://api.mistral.ai/v1", AuthKind: "api_key", ServiceKinds: llm(core.ServiceEmbedding),

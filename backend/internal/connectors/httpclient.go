@@ -323,17 +323,13 @@ type multipartField struct{ Name, Value string }
 
 // doMultipart performs a multipart/form-data POST with a single file part plus
 // extra text fields, returning the JSON response body. Used by speech-to-text.
+// Text fields are written before the file part: xAI requires the file to be the
+// last field in the multipart body, and OpenAI-compatible STT endpoints accept
+// either order.
 func doMultipart(ctx context.Context, provider, model, url, fileField, filename string, fileData []byte, fields []multipartField, headers map[string]string) ([]byte, error) {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 
-	fw, err := mw.CreateFormFile(fileField, filename)
-	if err != nil {
-		return nil, &core.ProviderError{Kind: core.ErrInternal, Provider: provider, Model: model, Message: err.Error(), Cause: err}
-	}
-	if _, err := fw.Write(fileData); err != nil {
-		return nil, &core.ProviderError{Kind: core.ErrInternal, Provider: provider, Model: model, Message: err.Error(), Cause: err}
-	}
 	for _, f := range fields {
 		if f.Value == "" {
 			continue
@@ -341,6 +337,13 @@ func doMultipart(ctx context.Context, provider, model, url, fileField, filename 
 		if err := mw.WriteField(f.Name, f.Value); err != nil {
 			return nil, &core.ProviderError{Kind: core.ErrInternal, Provider: provider, Model: model, Message: err.Error(), Cause: err}
 		}
+	}
+	fw, err := mw.CreateFormFile(fileField, filename)
+	if err != nil {
+		return nil, &core.ProviderError{Kind: core.ErrInternal, Provider: provider, Model: model, Message: err.Error(), Cause: err}
+	}
+	if _, err := fw.Write(fileData); err != nil {
+		return nil, &core.ProviderError{Kind: core.ErrInternal, Provider: provider, Model: model, Message: err.Error(), Cause: err}
 	}
 	if err := mw.Close(); err != nil {
 		return nil, &core.ProviderError{Kind: core.ErrInternal, Provider: provider, Model: model, Message: err.Error(), Cause: err}

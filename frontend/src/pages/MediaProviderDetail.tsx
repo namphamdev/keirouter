@@ -30,14 +30,17 @@ export function MediaProviderDetailPage() {
   const providers = useQuery({ queryKey: ["providers"], queryFn: () => api.providers() });
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: () => api.listAccounts() });
   const models = useQuery({
-    queryKey: ["provider-models", id],
-    queryFn: () => api.providerModels(id!),
+    queryKey: ["provider-models", id, kind],
+    queryFn: () => api.providerModels(id!, kind),
     enabled: !!id,
     staleTime: 60_000,
   });
 
   const provider = providers.data?.providers.find((p) => p.id === id);
+  // Accounts are provider-scoped (not service-kind scoped). An xAI key added
+  // under AI Providers is the same credential used here for STT/image/etc.
   const myAccounts = (accounts.data?.accounts ?? []).filter((a) => a.provider === id);
+  const sharesAIProviderAccounts = (provider?.service_kinds ?? []).includes("llm");
 
   const [label, setLabel] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -197,8 +200,25 @@ export function MediaProviderDetailPage() {
 
       {/* Accounts */}
       <Card>
-        <SectionHeader title="Accounts" description="Provider credentials for this service." icon={KeyRound} />
+        <SectionHeader
+          title="Accounts"
+          description={
+            sharesAIProviderAccounts
+              ? "Shared with AI Providers — the same credentials power chat and this media capability."
+              : "Provider credentials for this service."
+          }
+          icon={KeyRound}
+        />
         <div className="space-y-3 px-6 pb-6">
+          {sharesAIProviderAccounts && (
+            <p className="text-xs text-[var(--text-muted)]">
+              Accounts listed here are the same as{" "}
+              <Link to={`/providers/${provider.id}`} className="font-medium text-accent-600 hover:underline dark:text-accent-400">
+                AI Providers → {provider.display_name}
+              </Link>
+              . Connect once; reuse everywhere.
+            </p>
+          )}
           {myAccounts.length > 0 && (
             <div className="space-y-2">
               {myAccounts.map((a) => (

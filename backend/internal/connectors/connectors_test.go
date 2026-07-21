@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -318,6 +319,44 @@ func TestOpenAICompatible_ValidateNoAuthTrustsModels200(t *testing.T) {
 	c := NewOpenAICompatible("local-gw", srv.URL)
 	require.NoError(t, c.Validate(context.Background(), core.Credentials{}))
 	require.False(t, *chatProbed, "no-auth accounts should not issue a chat probe")
+}
+
+func TestOpenAICompatible_TranscribeXAI(t *testing.T) {
+	// xAI STT uses POST /v1/stt (not OpenAI /audio/transcriptions), omits the
+	// model field, maps language → format=true, and prompt → keyterm. The file
+	// part must be last in the multipart body.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/stt", r.URL.Path)
+		require.Equal(t, "Bearer xai-test", r.Header.Get("Authorization"))
+		require.NoError(t, r.ParseMultipartForm(1<<20))
+		require.Equal(t, []string{"en"}, r.MultipartForm.Value["language"])
+		require.Equal(t, []string{"true"}, r.MultipartForm.Value["format"])
+		require.Equal(t, []string{"KeiRouter"}, r.MultipartForm.Value["keyterm"])
+		require.Empty(t, r.MultipartForm.Value["model"])
+		file, hdr, err := r.FormFile("file")
+		require.NoError(t, err)
+		defer file.Close()
+		require.Equal(t, "clip.wav", hdr.Filename)
+		body, err := io.ReadAll(file)
+		require.NoError(t, err)
+		require.Equal(t, []byte("pcm-bytes"), body)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"text":"hello from xai","language":"en","duration":1.25}`)
+	}))
+	defer srv.Close()
+
+	c := NewOpenAICompatible("xai", srv.URL)
+	resp, err := c.Transcribe(context.Background(), &core.TranscriptionRequest{
+		Model:    "grok-stt",
+		Audio:    []byte("pcm-bytes"),
+		Filename: "clip.wav",
+		Language: "en",
+		Prompt:   "KeiRouter",
+	}, core.Credentials{APIKey: "xai-test"})
+	require.NoError(t, err)
+	require.Equal(t, "hello from xai", resp.Text)
+	require.Equal(t, "en", resp.Language)
+	require.Equal(t, 1.25, resp.Duration)
 }
 
 func TestOpenAICompatibleModelSource_ListModelsPublicNoCreds(t *testing.T) {

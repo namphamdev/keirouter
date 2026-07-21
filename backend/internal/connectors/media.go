@@ -74,29 +74,48 @@ type oaiTranscriptionResponse struct {
 	Duration float64 `json:"duration"`
 }
 
-// Transcribe converts audio to text via the OpenAI transcriptions endpoint.
+// Transcribe converts audio to text via the provider transcriptions endpoint.
+// OpenAI-compatible providers use POST /audio/transcriptions. xAI uses its own
+// POST /stt shape (no model field; optional language + format ITN flag).
 func (c *OpenAICompatible) Transcribe(ctx context.Context, req *core.TranscriptionRequest, creds core.Credentials) (*core.TranscriptionResponse, error) {
 	filename := req.Filename
 	if filename == "" {
 		filename = "audio.mp3"
 	}
-	fields := []multipartField{
-		{Name: "model", Value: req.Model},
-		{Name: "language", Value: req.Language},
-		{Name: "prompt", Value: req.Prompt},
-		{Name: "response_format", Value: req.ResponseFormat},
-	}
-	if req.Temperature != nil {
-		fields = append(fields, multipartField{Name: "temperature", Value: strconv.FormatFloat(*req.Temperature, 'f', -1, 64)})
+
+	var fields []multipartField
+	path := "audio/transcriptions"
+	if c.id == "xai" {
+		// xAI STT: POST /v1/stt. The upstream has a single speech model and does
+		// not accept a model form field. language enables text formatting when
+		// format=true; Prompt is mapped to a single keyterm bias term.
+		path = "stt"
+		fields = []multipartField{{Name: "language", Value: req.Language}}
+		if req.Language != "" {
+			fields = append(fields, multipartField{Name: "format", Value: "true"})
+		}
+		if req.Prompt != "" {
+			fields = append(fields, multipartField{Name: "keyterm", Value: req.Prompt})
+		}
+	} else {
+		fields = []multipartField{
+			{Name: "model", Value: req.Model},
+			{Name: "language", Value: req.Language},
+			{Name: "prompt", Value: req.Prompt},
+			{Name: "response_format", Value: req.ResponseFormat},
+		}
+		if req.Temperature != nil {
+			fields = append(fields, multipartField{Name: "temperature", Value: strconv.FormatFloat(*req.Temperature, 'f', -1, 64)})
+		}
 	}
 
-	url := joinURL(c.baseURL(creds), "audio/transcriptions")
+	url := joinURL(c.baseURL(creds), path)
 	respBody, err := doMultipart(ctx, c.id, req.Model, url, "file", filename, req.Audio, fields, c.headers(creds))
 	if err != nil {
 		return nil, err
 	}
 
-	// response_format=text returns a bare string, not JSON.
+	// response_format=text returns a bare string, not JSON (OpenAI-compatible only).
 	if req.ResponseFormat == "text" {
 		return &core.TranscriptionResponse{Text: string(respBody)}, nil
 	}

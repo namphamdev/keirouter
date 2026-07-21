@@ -167,6 +167,42 @@ func (p *Pipeline) Transcribe(ctx context.Context, req *core.TranscriptionReques
 	return nil, "", orInternal(lastErr)
 }
 
+// DialTranscriptionStream opens a realtime STT stream with fallback. The caller
+// owns the returned connection and must Close it. Limit release runs when dial
+// returns (success or failure); an open stream is not held against concurrency
+// slots for its full lifetime.
+func (p *Pipeline) DialTranscriptionStream(ctx context.Context, req *core.StreamingTranscriptionRequest, opts MediaOptions) (core.StreamConn, string, error) {
+	attempts, err := p.mediaAttempts(ctx, opts)
+	if err != nil {
+		return nil, "", err
+	}
+	release, err := p.acquireMediaLimit(ctx, opts, 1)
+	if err != nil {
+		return nil, "", err
+	}
+	defer release(0)
+	var lastErr error
+	for _, a := range attempts {
+		conn, ok := a.Conn.(core.StreamingTranscriptionConnector)
+		if !ok {
+			lastErr = unsupported(a.Target.Provider, "realtime transcription")
+			continue
+		}
+		r := *req
+		r.Model = a.Target.Model
+		stream, callErr := conn.DialTranscriptionStream(ctx, &r, a.Creds)
+		if callErr != nil {
+			if !p.noteMediaFailure(ctx, a, callErr) {
+				return nil, "", callErr
+			}
+			lastErr = callErr
+			continue
+		}
+		return stream, a.Target.Provider, nil
+	}
+	return nil, "", orInternal(lastErr)
+}
+
 // Synthesize runs a text-to-speech request with fallback.
 func (p *Pipeline) Synthesize(ctx context.Context, req *core.SpeechRequest, opts MediaOptions) (*core.SpeechResponse, string, error) {
 	attempts, err := p.mediaAttempts(ctx, opts)

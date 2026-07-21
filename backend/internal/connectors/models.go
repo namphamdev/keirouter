@@ -102,6 +102,9 @@ var providerModels = map[string][]ModelSpec{
 		m("grok-4", "Grok 4"), m("grok-4-fast-reasoning", "Grok 4 Fast Reasoning"),
 		m("grok-code-fast-1", "Grok Code Fast"), m("grok-3", "Grok 3"),
 		k("grok-2-image-1212", "Grok 2 Image", core.ServiceImage),
+		// xAI STT is a single endpoint (POST /v1/stt) with no model field; this
+		// id is the KeiRouter routing handle (xai/grok-stt).
+		k("grok-stt", "Grok Speech to Text", core.ServiceSTT),
 	},
 	"mistral": {
 		m("mistral-large-latest", "Mistral Large 3"), m("codestral-latest", "Codestral"),

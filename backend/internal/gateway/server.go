@@ -224,7 +224,12 @@ func (s *Server) routes() chi.Router {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: s.cfg.Server.CORSOrigins,
 		AllowedMethods: []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"Authorization", "Content-Type", "x-api-key", "X-KeiRouter-Affinity", "X-Conversation-ID", "X-Thread-ID", "X-Session-ID", "OpenAI-Conversation-ID"},
+		AllowedHeaders: []string{
+			"Authorization", "Content-Type", "x-api-key",
+			"X-KeiRouter-Affinity", "X-Conversation-ID", "X-Thread-ID", "X-Session-ID", "OpenAI-Conversation-ID",
+			// WebSocket handshake headers (realtime STT).
+			"Sec-WebSocket-Key", "Sec-WebSocket-Version", "Sec-WebSocket-Protocol", "Sec-WebSocket-Extensions", "Upgrade", "Connection",
+		},
 	}))
 
 	// Health check (unauthenticated).
@@ -247,6 +252,7 @@ func (s *Server) routes() chi.Router {
 				"/v1/images/generations",
 				"/v1/audio/speech",
 				"/v1/audio/transcriptions",
+				"/v1/audio/transcriptions/stream",
 				"/v1/search",
 				"/v1/web/fetch",
 			},
@@ -291,6 +297,10 @@ func (s *Server) routes() chi.Router {
 		r.Post("/v1/images/generations", s.handleImageGeneration)
 		r.Post("/v1/audio/speech", s.handleAudioSpeech)
 		r.Post("/v1/audio/transcriptions", s.handleAudioTranscription)
+		// Realtime STT WebSocket (xAI streaming STT today). Query param model=
+		// selects the provider (e.g. xai/grok-stt); remaining query params are
+		// forwarded upstream. Browser clients still send Authorization.
+		r.Get("/v1/audio/transcriptions/stream", s.handleAudioTranscriptionStream)
 		r.Post("/v1/search", s.handleWebSearch)
 		r.Post("/v1/web/fetch", s.handleWebFetch)
 
